@@ -2589,7 +2589,11 @@ window.__ModuleLoader__.load({
 
     /** Map an official market row to the entry shape the UI consumes. */
     function officialToEntry(r, kind) {
-      const name = r.agent_name ?? r.name ?? r.id ?? ''
+      const name = r.agent_name ?? r.name ?? r.id ?? r.skill_id ?? ''
+      if (r.icon && typeof r.icon === 'string' && r.icon.startsWith('/')) {
+        // official registry avatars are root-relative paths into the COS bucket
+        r = { ...r, icon: 'https://acc-1258344699.cos.accelerate.myqcloud.com/workbuddy/expert-marketplace' + r.icon }
+      }
       return {
         kind,
         name,
@@ -2620,6 +2624,13 @@ window.__ModuleLoader__.load({
         // Official market first (logged-in gives the full 5.8k/9.1k catalogue);
         // the mirror remains the fallback and the package source.
         try {
+          if (kind === 'expert') {
+            // The official registry (no login needed) carries the zh/en copy,
+            // tags, quick prompts and persona files for 428 experts.
+            const r = await api(`/official-experts?limit=40&q=${encodeURIComponent(query)}`)
+            const rows = (r.rows ?? []).map(row => officialToEntry(row, kind))
+            if (rows.length) return rows
+          }
           const r = await api(`/market-list?kind=${kind}&pageSize=40&q=${encodeURIComponent(query)}`)
           if (r.source === 'official' && (r.rows ?? []).length) return r.rows.map(row => officialToEntry(row, kind))
           if (r.source === 'official' && !r.rows?.length) return []
@@ -2827,6 +2838,11 @@ window.__ModuleLoader__.load({
       ), [sessionId, revision])
       const searchState = useAsync(async () => {
         try {
+          if (kind === 'expert') {
+            const r = await api(`/official-experts?limit=60&q=${encodeURIComponent(query)}`)
+            const rows = (r.rows ?? []).map(row => officialToEntry(row, kind))
+            if (rows.length) return rows
+          }
           const r = await api(`/market-list?kind=${kind}&pageSize=60&q=${encodeURIComponent(query)}`)
           if (r.source === 'official') return (r.rows ?? []).map(row => officialToEntry(row, kind))
         } catch { /* mirror fallback */ }
@@ -3159,6 +3175,12 @@ window.__ModuleLoader__.load({
       ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
         name: 'settings.plugins.tab', id: 'workbuddy-hub', order: 80,
         label: () => 'WorkBuddy 市场',
+      }, SettingsTab))
+      // A standalone settings SECTION guarantees a first-class nav entry even
+      // where another plugin owns the plugins.tab strip.
+      ctx.slots.inject('settings.section', () => ctx.slots.register({
+        name: 'settings.section', id: 'workbuddy-hub', order: 85,
+        label: () => '专家·技能·连接器',
       }, SettingsTab))
     }
 

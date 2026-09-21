@@ -23,7 +23,15 @@ export async function listExperts({ query = '', categoryId, limit = 60 } = {}) {
   if (categoryId && categoryId !== 'all') rows = rows.filter(e => e.categoryId === categoryId)
   if (q) rows = rows.filter(e =>
     JSON.stringify([e.displayName, e.profession, e.description, e.tags, e.id]).toLowerCase().includes(q))
-  return { total: rows.length, rows: rows.slice(0, limit).map(normalise) }
+  // Same field names as the market API rows, so one browser mapping handles both.
+  const shaped = rows.slice(0, limit).map(normalise).map(e => ({
+    ...e,
+    agent_name: e.name,
+    display_name_zh: e.displayName,
+    profession_zh: e.subtitle,
+    description_zh: e.description,
+  }))
+  return { total: rows.length, rows: shaped }
 }
 
 export async function categories() {
@@ -40,6 +48,7 @@ function normalise(e) {
     description: zh(e.description) || '',
     tags: (e.tags ?? []).map(t => t.zh ?? t.en ?? t).slice(0, 3),
     avatar: e.avatar ? `${REGISTRY}${e.avatar}` : '',
+    icon: e.avatar ? `${REGISTRY}${e.avatar}` : '',
     quickPrompts: (e.quickPrompts ?? []).map(q => q.zh ?? q.en).filter(Boolean),
     categoryId: e.categoryId,
     expertType: e.expertType,
