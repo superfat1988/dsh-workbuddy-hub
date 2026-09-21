@@ -29,10 +29,11 @@
     "index.js",
     "client.js",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "test-client.mjs"
   ],
   "scripts": {
-    "test": "node --check index.js && node --check client.js && node test.mjs",
+    "test": "node --check index.js && node --check client.js && node test-client.mjs",
     "pack:check": "npm pack --dry-run"
   },
   "license": "MIT"
