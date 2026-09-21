@@ -2435,9 +2435,11 @@ window.__ModuleLoader__.load({
       return state
     }
 
-    const iconUrl = entry => (entry.hasIcon || entry.iconPath)
-      ? `${API}/icon?kind=${entry.kind}&name=${encodeURIComponent(entry.name)}`
-      : ''
+    const iconUrl = entry => entry.icon
+      ? entry.icon // official CDN URL (experts/skills from the official market)
+      : (entry.hasIcon || entry.iconPath)
+        ? `${API}/icon?kind=${entry.kind}&name=${encodeURIComponent(entry.name)}`
+        : ''
     const zh = entry => entry.displayName || entry.name
 
     /** 召唤确认弹窗：WorkBuddy 在真正召唤前先让用户确认，并可顺手写下任务。 */
@@ -2585,6 +2587,23 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** Map an official market row to the entry shape the UI consumes. */
+    function officialToEntry(r, kind) {
+      const name = r.agent_name ?? r.name ?? r.id ?? ''
+      return {
+        kind,
+        name,
+        displayName: r.display_name_zh || r.display_name_en || r.displayName || name,
+        subtitle: r.profession_zh || r.profession_en || r.subtitle || '',
+        description: r.description_zh || r.description || '',
+        icon: r.icon || '',
+        tags: (r.tags ?? []).map(t => (typeof t === 'string' ? t : t.zh || t.en)).filter(Boolean).slice(0, 3),
+        hasMcpJson: kind === 'connector' && Boolean(r.mcp),
+        hasCliJson: false,
+        official: true,
+      }
+    }
+
     function MarketMenu({ sessionId, onClose, onOpenPanel }) {
       const [authorising, setAuthorising] = useState(null)
       const [summoning, setSummoning] = useState(null)
@@ -2598,9 +2617,16 @@ window.__ModuleLoader__.load({
         sessionId ? (await api(`/mounted?sessionId=${encodeURIComponent(sessionId)}`)).keys || [] : []
       ), [sessionId, revision])
       const searchState = useAsync(async () => {
+        // Official market first (logged-in gives the full 5.8k/9.1k catalogue);
+        // the mirror remains the fallback and the package source.
+        try {
+          const r = await api(`/market-list?kind=${kind}&pageSize=40&q=${encodeURIComponent(query)}`)
+          if (r.source === 'official' && (r.rows ?? []).length) return r.rows.map(row => officialToEntry(row, kind))
+          if (r.source === 'official' && !r.rows?.length) return []
+        } catch { /* fall through to the mirror */ }
         await api('/catalog')
         const result = await api(`/search?q=${encodeURIComponent(query)}&kind=${kind}s&limit=40`)
-        return result.hits || []
+        return (result.hits || []).map(e => ({ ...e, official: false }))
       }, [kind, query, revision])
       const inputRef = useRef(null)
 
@@ -2800,6 +2826,10 @@ window.__ModuleLoader__.load({
         sessionId ? (await api(`/mounted?sessionId=${encodeURIComponent(sessionId)}`)).keys || [] : []
       ), [sessionId, revision])
       const searchState = useAsync(async () => {
+        try {
+          const r = await api(`/market-list?kind=${kind}&pageSize=60&q=${encodeURIComponent(query)}`)
+          if (r.source === 'official') return (r.rows ?? []).map(row => officialToEntry(row, kind))
+        } catch { /* mirror fallback */ }
         await api('/catalog')
         const result = await api(`/search?q=${encodeURIComponent(query)}&kind=${kind}s&limit=60`)
         return result.hits || []

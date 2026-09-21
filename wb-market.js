@@ -130,3 +130,11 @@ export async function marketCategories(kind, stateDir) {
   if (status !== 200 || json?.code !== 0) return []
   return json.data?.items ?? []
 }
+
+/** Full records for the given skill ids (includes download_url). */
+export async function skillDetails(ids, stateDir) {
+  const token = await bearer(stateDir)
+  const { status, json } = await call('POST', '/v2/operation-platform/market/skill/get-by-ids', { token, body: { skill_ids: ids } })
+  if (status !== 200 || json?.code !== 0) throw new Error(`skill get-by-ids failed: HTTP ${status} code=${json?.code}`)
+  return json.data?.skills ?? []
+}

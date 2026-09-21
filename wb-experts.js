@@ -104,3 +104,14 @@ export async function installExpert(entry, destDir, prefix) {
     flags: [], source: 'official-registry',
   }
 }
+
+/** Install an official skill package (zip with <name>/SKILL.md) into the store. */
+export async function installSkillPackage(pkg) {
+  // pkg: { name, displayName, description, downloadUrl }
+  const res = await fetch(pkg.downloadUrl)
+  if (!res.ok) throw new Error(`skill package HTTP ${res.status}`)
+  const buf = Buffer.from(await res.arrayBuffer())
+  if (buf.length > 8 * 1024 * 1024) throw new Error('skill package too large')
+  if (!(buf[0] === 0x50 && buf[1] === 0x4b)) throw new Error('skill package is not a zip')
+  return { buf, size: buf.length }
+}

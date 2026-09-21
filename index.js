@@ -16,9 +16,11 @@
  * user (install ≠ enable), so a failed connector never leaves a stale child.
  */
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, dirname } from 'node:path'
 import { loginStart, loginPoll, loadAuth, saveAuth, marketList, marketCategories } from './wb-market.js'
 import { listExperts, categories as officialCategories, installExpert } from './wb-experts.js'
+import { skillDetails } from './wb-market.js'
+import { unzip } from './wb-unzip.js'
 import {
   existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
   symlinkSync, unlinkSync, lstatSync, statSync,
@@ -412,7 +414,7 @@ export function apply(ctx, config = {}) {
   const mirrorRepo = cfg.mirrorRepo || 'superfat1988/workbuddyskills'
   const mirrorBranch = cfg.mirrorBranch || 'main'
   const skillPrefix = cfg.skillPrefix || 'workbuddy-'
-  const P = storePaths(cfg)
+      const P = storePaths(cfg)
   for (const d of [P.root, P.store, P.skills, P.experts, P.connectors, P.meta, P.icons]) {
     mkdirSync(d, { recursive: true })
   }
@@ -863,7 +865,7 @@ export function apply(ctx, config = {}) {
         json(res, 400, { error: 'invalid kind or name' }); return true
       }
       if (!sessionId) { json(res, 400, { error: 'sessionId required' }); return true }
-      const key = `${kind}/${entryName}`
+      const key = `${kind}/${officialMeta?.name ?? entryName}`
       const list = route === 'POST /mount'
         ? mountEntry(P, sessionId, key)
         : unmountEntry(P, sessionId, key)
@@ -881,7 +883,56 @@ export function apply(ctx, config = {}) {
       // Experts prefer the official registry (same catalogue/copy the official
       // client shows); the mirror is the fallback for anything not published there.
       let files, dest, report, officialMeta = null
-      if (kind === 'expert' && body.source !== 'mirror') {
+      if (kind === 'skill' && body.source === 'official') {
+        // Official skill: the install request carries the human name, so resolve
+        // name → skill_id first, then fetch the record with its download_url.
+        try {
+          const { rows } = await marketList('skill', { page: 1, pageSize: 10, query: entryName }, P.state)
+          const hit = rows.find(r => r.name === entryName)
+            ?? rows.find(r => (r.display_name_zh || r.display_name_en) === entryName)
+            ?? rows[0]
+          if (!hit?.skill_id) throw new Error(`official skill not found: ${entryName}`)
+          const details = await skillDetails([hit.skill_id], P.state)
+          const rec = details.find(x => x.skill_id === hit.skill_id) ?? details[0]
+          if (!rec?.download_url) throw new Error('official skill has no package')
+          const res = await fetch(rec.download_url)
+          if (!res.ok) throw new Error(`skill package HTTP ${res.status}`)
+          const buf = Buffer.from(await res.arrayBuffer())
+          if (buf.length > 8 * 1024 * 1024) throw new Error('skill package too large')
+          if (!(buf[0] === 0x50 && buf[1] === 0x4b)) throw new Error('skill package is not a zip')
+          const entries = unzip(buf).filter(e => !e.name.endsWith('/'))
+          const safeName = /^([\w.-]+)\//.exec(entries[0]?.name ?? '')
+          const root = safeName ? safeName[1] : entryName
+          if (!/^[\w.-]+$/.test(root)) throw new Error('unsafe package layout')
+          dest = join(P.skills, root)
+          mkdirSync(dest, { recursive: true })
+          let count = 0, total = 0
+          const flags = []
+          for (const e of entries) {
+            const rel = e.name.startsWith(root + '/') ? e.name.slice(root.length + 1) : e.name
+            if (!rel || rel.includes('..')) continue
+            const target = join(dest, rel)
+            if (!target.startsWith(dest)) continue
+            mkdirSync(dirname(target), { recursive: true })
+            writeFileSync(target, e.data)
+            count++; total += e.data.length
+            flags.push(...scanFlags(e.data.toString('utf8').slice(0, 20000), rel))
+          }
+          officialMeta = {
+            kind: 'skill', name: root, dest,
+            displayName: rec.display_name_zh || rec.display_name_en || root,
+            description: rec.description_zh || rec.description || rec.description_en || '',
+            files: count, bytes: total, flags: [...new Set(flags)],
+            source: 'official', officialId: rec.skill_id,
+            icon: rec.icon,
+          }
+        files = entries
+        report = { files: count, bytes: total, flags: officialMeta.flags }
+        } catch (error) {
+          json(res, 502, { error: `official skill install failed: ${error.message}` })
+          return true
+        }
+      } else if (kind === 'expert' && body.source !== 'mirror') {
         try {
           officialMeta = await installExpert(entryName, P.experts, skillPrefix)
           dest = officialMeta.dest
@@ -903,10 +954,10 @@ export function apply(ctx, config = {}) {
       // Persist the catalog's localized label so UI never shows the raw dir id.
       const cache = loadJson(P.catalogCache, null)
       const meta = officialMeta
-        ? { displayName: officialMeta.displayName, description: officialMeta.description, tags: officialMeta.tags }
+        ? { displayName: officialMeta.displayName, description: officialMeta.description, tags: officialMeta.tags, icon: officialMeta.icon }
         : cache?.index?.[`${kind}s`]?.find(e => e.name === entryName)
       const record = {
-        kind, name: entryName, dest,
+        kind, name: officialMeta?.name ?? entryName, dest,
         displayName: meta?.displayName || entryName,
         description: meta?.description || '',
         installedAt: new Date().toISOString(),
@@ -915,7 +966,7 @@ export function apply(ctx, config = {}) {
         enabled: kind === 'connector' ? Boolean(previous?.enabled) : undefined,
       }
       if (kind === 'skill') {
-        try { linkSkill(P, skillPrefix, entryName); record.linked = true } catch (error) {
+        try { linkSkill(P, skillPrefix, officialMeta?.name ?? entryName); record.linked = true } catch (error) {
           report.flags.push(`symlink failed: ${error.message}`)
         }
       }
@@ -931,6 +982,12 @@ export function apply(ctx, config = {}) {
         const cli = readCliMeta(dest)
         if (cli !== null) record.cli = cli
         record.mcp = existsSync(join(dest, 'mcp.json'))
+      }
+      if (officialMeta) {
+        record.source = 'official'
+        record.officialId = officialMeta.officialId ?? null
+        if (officialMeta.icon) record.icon = officialMeta.icon
+        record.official = true
       }
       registry.installed[key] = record
       saveJson(P.registry, registry)
