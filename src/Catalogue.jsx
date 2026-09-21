@@ -3,6 +3,7 @@ import { hub } from './hub.js'
 import { WbIcon } from './icons.js'
 import './official-skill.css'
 import './official-connector.css'
+import './official-skeleton.css'
 
 const KINDS = [
   { id: 'expert', label: '专家', icon: 'person' },
@@ -185,7 +186,7 @@ export default function Catalogue({
   /* ---------- 技能页骨架 ---------- */
   const skillGrid = (
     <div className="skills-grid">
-      {loading && <div className="wbh-state">正在读取市场目录…</div>}
+      {loading && skeletonCards}
       {!loading && failed && <div className="wbh-state">读取失败：{failed}</div>}
       {!loading && !failed && rows.length === 0 && (
         <div className="wbh-state"><p>暂无技能</p></div>
@@ -321,7 +322,7 @@ export default function Catalogue({
   /* ---------- picker 弹窗骨架 ---------- */
   const pickerGrid = (
     <div className={kind === 'expert' ? 'ec-expert-grid' : 'skills-grid'}>
-      {loading && <div className="wbh-state">正在读取…</div>}
+      {loading && skeletonCards}
       {!loading && failed && <div className="wbh-state">读取失败：{failed}</div>}
       {rows.map(entry => kind === 'expert'
         ? <ExpertCard key={`${entry.kind}/${entry.name}`} entry={entry} kindLabel={kindMeta.label}
