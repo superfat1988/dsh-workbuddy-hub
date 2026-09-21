@@ -1,4 +1,41 @@
 /* src/marketplace.css */
+:root {
+  --wb-avatar-bg-accent: #a6d5da;
+  --wb-bg-active: rgba(0,0,0,.08);
+  --wb-bg-card: #ffffff;
+  --wb-bg-card-hover: #f7f7f7;
+  --wb-bg-elevated: #3c3c3c;
+  --wb-bg-hover: rgba(0,0,0,.05);
+  --wb-bg-inset-strong: #f2f2f2;
+  --wb-bg-pill-active: rgba(0,0,0,.75);
+  --wb-bg-tertiary: #f5f5f5;
+  --wb-border-card: rgba(0,0,0,.08);
+  --wb-border-card-static: #f2f2f2;
+  --wb-border-default: rgba(0,0,0,.08);
+  --wb-border-hover: rgba(0,0,0,.16);
+  --wb-border-strong: rgba(0,0,0,.16);
+  --wb-border-subtle: #f2f2f2;
+  --wb-button-primary-bg: rgba(0,0,0,.9);
+  --wb-button-primary-bg-hover: #111111;
+  --wb-button-primary-fg: #ffffff;
+  --wb-color-border-primary: rgba(0,0,0,.16);
+  --wb-color-border-secondary: #e8e8e8;
+  --wb-color-text-disabled: rgba(0,0,0,.35);
+  --wb-color-text-primary: rgba(0,0,0,.92);
+  --wb-color-text-secondary: rgba(0,0,0,.7);
+  --wb-color-text-tertiary: rgba(0,0,0,.5);
+  --wb-palette-black-100: #000000;
+  --wb-palette-gray-3: #f2f2f2;
+  --wb-palette-gray-4: #e8e8e8;
+  --wb-palette-white-100: #ffffff;
+  --wb-radius-lg: 8px;
+  --wb-radius-md: 6px;
+  --wb-radius-sm: 4px;
+  --wb-shadow-card-soft: 0 2px 10px rgba(0,0,0,.08);
+  --wb-spacing-12: 12px;
+  --wb-text-muted: rgba(0,0,0,.5);
+  --wb-text-white: #ffffff;
+}
 .skills-view .ec-search-wrapper {
   position: relative;
   width: 200px;

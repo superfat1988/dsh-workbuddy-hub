@@ -42,9 +42,12 @@
     "test-summon.mjs"
   ],
   "scripts": {
-    "build:client": "esbuild src/index.jsx --bundle --format=cjs --jsx=automatic --loader:.css=css --outfile=client.js --external:react --external:react-dom",
+    "build:client": "esbuild src/index.jsx --bundle --format=cjs --jsx=automatic --loader:.css=css --outfile=client.js --external:react --banner:js=\"window.__ModuleLoader__.load({ id: 'dsh-workbuddy-hub', factory: function (require) { const module = { exports: {} };\" --footer:js=\"return module.exports; } });\" && node scripts/inject-css.mjs",
     "test": "node --check index.js && node --check client.js && node --check mcp-manager.js && node --check expert-persona.js && node test-mcp-manager.mjs && node test-expert-persona.mjs && node test-connector-cli.mjs && node test-summon.mjs && node test-client.mjs",
     "pack:check": "npm pack --dry-run"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
 }
