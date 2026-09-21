@@ -1,0 +1,14 @@
+# dsh-workbuddy-hub bundle layer. 所有 config 均为非秘密值，可在 profile patch 中覆盖。
+- insert:
+    - id: workbuddy-hub
+      name: dsh-workbuddy-hub
+      config:
+        # 内容主仓（镜像 fork 的 raw 源；上游删库后仍可用）
+        mirrorRepo: 'superfat1988/workbuddyskills'
+        mirrorBranch: 'main'
+        # 上游（默认优先在线检查 changelog，失败回退镜像）
+        upstreamRepo: 'infometa/workbuddyskills'
+        # 本地内容仓（git 仓库，插件初始化并管理）
+        storeRoot: '~/workbuddyskills'
+        # DSH skills 挂载前缀：~/.dsh/skills/workbuddy-<name> → storeRoot/skills/<name>
+        skillPrefix: 'workbuddy-'

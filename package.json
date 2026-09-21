@@ -1,0 +1,40 @@
+{
+  "name": "dsh-workbuddy-hub",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "WorkBuddy marketplace hub for DSH: mirror-synced catalog of experts/skills/connectors, on-demand install into ~/workbuddyskills, persona summoning, find/recommend skills.",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-runtime"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "react": "^18.2.0"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --check index.js && node --check client.js && node test.mjs",
+    "pack:check": "npm pack --dry-run"
+  },
+  "license": "MIT"
+}
