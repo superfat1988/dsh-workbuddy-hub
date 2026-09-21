@@ -21,9 +21,10 @@ import {
   existsSync, mkdirSync, readFileSync, rmSync, writeFileSync,
   symlinkSync, unlinkSync, lstatSync, statSync,
 } from 'node:fs'
+import { createConnectorManager, validateConnectorMcp } from './mcp-manager.js'
 
 export const name = 'workbuddy-hub'
-export const inject = ['webServer', 'connection']
+export const inject = ['webServer', 'connection', 'loader']
 
 const PREFIX = '/workbuddy-hub'
 const GH_RAW = 'https://raw.githubusercontent.com'
@@ -337,6 +338,21 @@ export function apply(ctx, config = {}) {
     mkdirSync(d, { recursive: true })
   }
 
+  // Connector MCP fibers are owned here; unloading the plugin (or HMR) tears
+  // every transport down instead of leaving orphaned registrations behind.
+  const connectors = createConnectorManager(ctx)
+  ctx.effect(() => () => connectors.disposeAll(), 'workbuddy-hub: connector transports')
+
+  /** Persisted connector status is deliberately sanitized: no urls/headers/env. */
+  const noteConnectorStatus = (key, patch) => {
+    const registry = loadJson(P.registry, { version: 1, installed: {} })
+    const record = registry.installed?.[key]
+    if (record === undefined) return
+    Object.assign(record, patch)
+    saveJson(P.registry, registry)
+  }
+  const connectorStatus = key => connectors.statusOf(key)
+
   const json = (res, code, body) => {
     res.statusCode = code
     res.setHeader('content-type', 'application/json; charset=utf-8')
@@ -425,7 +441,70 @@ export function apply(ctx, config = {}) {
     }
 
     if (route === 'GET /installed') {
-      json(res, 200, loadJson(P.registry, { version: 1, installed: {} }))
+      const registry = loadJson(P.registry, { version: 1, installed: {} })
+      for (const [key, record] of Object.entries(registry.installed ?? {})) {
+        if (record.kind !== 'connector') continue
+        const live = connectorStatus(key)
+        record.enabled = live.state === 'enabled'
+        // A recorded failure stays visible until the next successful enable.
+        record.status = live.state === 'enabled' ? 'enabled'
+          : record.status === 'failed' ? 'failed' : 'disabled'
+        if (live.serverName) record.serverName = live.serverName
+      }
+      json(res, 200, registry)
+      return true
+    }
+
+    if (route === 'POST /connectors/enable' || route === 'POST /connectors/disable') {
+      const body = JSON.parse((await readBody(req)) || '{}')
+      const entryName = String(body.name || '')
+      if (!/^[\w.-]+$/.test(entryName)) { json(res, 400, { error: 'invalid name' }); return true }
+      const key = `connector/${entryName}`
+      const registry = loadJson(P.registry, { version: 1, installed: {} })
+      const record = registry.installed?.[key]
+      if (record === undefined) { json(res, 404, { error: 'not installed' }); return true }
+
+      if (route === 'POST /connectors/disable') {
+        await connectors.disable(key)
+        noteConnectorStatus(key, { enabled: false, status: 'disabled', lastError: '' })
+        json(res, 200, { ok: true, key, status: 'disabled' })
+        return true
+      }
+
+      const mcpPath = join(record.dest, 'mcp.json')
+      if (!existsSync(mcpPath)) {
+        json(res, 400, { error: 'connector has no mcp.json (CLI/skill-only connector)' })
+        return true
+      }
+      let raw
+      try {
+        raw = JSON.parse(readFileSync(mcpPath, 'utf8'))
+      } catch {
+        json(res, 400, { error: 'mcp.json is not valid JSON' })
+        return true
+      }
+      // Static admission runs first so a refusal can still report the transport
+      // and the credential refs the UI must ask the user to configure. No
+      // resolved secret value is ever persisted.
+      const admission = validateConnectorMcp(raw, entryName)
+      const facts = admission.ok
+        ? { credentialRefs: admission.refs, transport: admission.summary.transport }
+        : {}
+      try {
+        const result = await connectors.enable(key, raw, entryName)
+        noteConnectorStatus(key, {
+          enabled: true, status: 'enabled', lastError: '',
+          serverName: result.serverName,
+          credentialRefs: result.refs,
+          transport: result.summary.transport,
+        })
+        json(res, 200, { ok: true, key, ...result })
+      } catch (error) {
+        const message = String(error?.message || error)
+        // Installed-but-disabled on failure: never leave a half-mounted child.
+        noteConnectorStatus(key, { enabled: false, status: 'failed', lastError: message.slice(0, 300), ...facts })
+        json(res, 502, { ok: false, error: message.slice(0, 300), status: 'failed', ...facts })
+      }
       return true
     }
 
@@ -500,6 +579,8 @@ export function apply(ctx, config = {}) {
       const registry = loadJson(P.registry, { version: 1, installed: {} })
       const record = registry.installed?.[key]
       if (!record) { json(res, 404, { error: 'not installed' }); return true }
+      // Tear the transport down (and await it) before deleting its files.
+      if (kind === 'connector') await connectors.disable(key)
       if (kind === 'skill') unlinkSkill(skillPrefix, entryName)
       rmSync(record.dest, { recursive: true, force: true })
       delete registry.installed[key]

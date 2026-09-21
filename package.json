@@ -26,14 +26,15 @@
     "react": "^18.2.0"
   },
   "files": [
-    "index.js",
+    "README.md",
     "client.js",
     "cordis.patch.yml",
-    "README.md",
+    "index.js",
+    "mcp-manager.js",
     "test-client.mjs"
   ],
   "scripts": {
-    "test": "node --check index.js && node --check client.js && node test-client.mjs",
+    "test": "node --check index.js && node --check client.js && node --check mcp-manager.js && node test-mcp-manager.mjs && node test-client.mjs",
     "pack:check": "npm pack --dry-run"
   },
   "license": "MIT"
