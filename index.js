@@ -18,7 +18,7 @@
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
-  existsSync, mkdirSync, readFileSync, rmSync, writeFileSync,
+  existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
   symlinkSync, unlinkSync, lstatSync, statSync,
 } from 'node:fs'
 import { createConnectorManager, validateConnectorMcp } from './mcp-manager.js'
@@ -299,6 +299,78 @@ export function unlinkSkill(prefix, entryName) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Connector capability surfaces
+ *
+ * WorkBuddy connectors come in two shapes: MCP connectors carry `mcp.json`
+ * (activated through mcp-manager), while CLI connectors carry `cli.json` plus
+ * one or more skills under `skills/` (either `skills/SKILL.md` or
+ * `skills/<child>/SKILL.md`). Only the MCP half was usable before; linking the
+ * bundled skills is what makes a CLI connector actually do something in DSH.
+ * ------------------------------------------------------------------ */
+
+/** Every directory under `<connector>/skills` that carries a SKILL.md. */
+export function connectorSkillDirs(dest) {
+  const root = join(dest, 'skills')
+  if (!existsSync(root)) return []
+  if (existsSync(join(root, 'SKILL.md'))) return [{ child: '', dir: root }]
+  const out = []
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const dir = join(root, entry.name)
+    if (existsSync(join(dir, 'SKILL.md'))) out.push({ child: entry.name, dir })
+  }
+  return out
+}
+
+/** Link each bundled skill into ~/.dsh/skills so DSH can load it. */
+export function linkConnectorSkills(prefix, connectorName, dest) {
+  const linked = []
+  for (const { child, dir } of connectorSkillDirs(dest)) {
+    const name = child === '' ? connectorName : `${connectorName}-${child}`
+    if (!/^[\w.-]{1,80}$/.test(name)) continue
+    const linkPath = join(homedir(), '.dsh', 'skills', `${prefix}${name}`)
+    try {
+      lstatSync(linkPath); unlinkSync(linkPath)
+    } catch { /* absent */ }
+    try {
+      symlinkSync(dir, linkPath)
+      linked.push({ name, linkPath })
+    } catch { /* link failure is reported by the caller's linked list */ }
+  }
+  return linked
+}
+
+export function unlinkConnectorSkills(prefix, linked = []) {
+  for (const item of linked) {
+    const name = typeof item === 'string' ? item : item?.name
+    if (!name) continue
+    try {
+      const linkPath = join(homedir(), '.dsh', 'skills', `${prefix}${name}`)
+      lstatSync(linkPath); unlinkSync(linkPath)
+    } catch { /* absent */ }
+  }
+}
+
+/** Sanitized CLI requirements: never persist the platform command templates. */
+export function readCliMeta(dest) {
+  const path = join(dest, 'cli.json')
+  if (!existsSync(path)) return null
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf8'))
+    const type = typeof raw?.runtime?.type === 'string' ? raw.runtime.type : ''
+    const version = typeof raw?.runtime?.version === 'string' ? raw.runtime.version : ''
+    return {
+      runtime: `${type}${version ? ` ${version}` : ''}`.trim(),
+      minVersion: typeof raw?.versionCheck?.minVersion === 'string' ? raw.versionCheck.minVersion : '',
+      authDomain: typeof raw?.authUrlDomain === 'string' ? raw.authUrlDomain : '',
+      needsAuth: raw?.auth !== undefined,
+    }
+  } catch {
+    return { runtime: '', minVersion: '', authDomain: '', needsAuth: false, unreadable: true }
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * Mounts — per-session attachment state (install ≠ mount)
  * ------------------------------------------------------------------ */
 
@@ -457,7 +529,12 @@ export function apply(ctx, config = {}) {
         return { kind: 'success', text: `已停用连接器「${record.displayName || name}」。` }
       }
       const mcpPath = join(record.dest, 'mcp.json')
-      if (!existsSync(mcpPath)) return { kind: 'error', text: `${name} 是 CLI/技能型连接器，没有 mcp.json。` }
+      if (!existsSync(mcpPath)) {
+        const skills = (record.linkedSkills ?? []).map(s => s.name)
+        return { kind: 'error', text: skills.length > 0
+          ? `${name} 是 CLI 型连接器（无 mcp.json），其技能已挂载：${skills.join('、')}。`
+          : `${name} 是 CLI/技能型连接器，没有 mcp.json。` }
+      }
       try {
         const raw = JSON.parse(readFileSync(mcpPath, 'utf8'))
         const result = await connectors.enable(key, raw, name)
@@ -686,6 +763,19 @@ export function apply(ctx, config = {}) {
           report.flags.push(`symlink failed: ${error.message}`)
         }
       }
+      if (kind === 'connector') {
+        // A connector's usable surface is its bundled skills (CLI form) and/or
+        // its MCP declaration (activated separately by the user).
+        try {
+          const linkedSkills = linkConnectorSkills(skillPrefix, entryName, dest)
+          if (linkedSkills.length > 0) record.linkedSkills = linkedSkills
+        } catch (error) {
+          report.flags.push(`skill link failed: ${error.message}`)
+        }
+        const cli = readCliMeta(dest)
+        if (cli !== null) record.cli = cli
+        record.mcp = existsSync(join(dest, 'mcp.json'))
+      }
       registry.installed[key] = record
       saveJson(P.registry, registry)
       json(res, 200, { ok: true, key, report, linked: record.linked })
@@ -701,7 +791,10 @@ export function apply(ctx, config = {}) {
       const record = registry.installed?.[key]
       if (!record) { json(res, 404, { error: 'not installed' }); return true }
       // Tear the transport down (and await it) before deleting its files.
-      if (kind === 'connector') await connectors.disable(key)
+      if (kind === 'connector') {
+        await connectors.disable(key)
+        unlinkConnectorSkills(skillPrefix, record.linkedSkills)
+      }
       if (kind === 'skill') unlinkSkill(skillPrefix, entryName)
       rmSync(record.dest, { recursive: true, force: true })
       delete registry.installed[key]

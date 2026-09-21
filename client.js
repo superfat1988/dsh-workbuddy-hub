@@ -521,7 +521,11 @@ window.__ModuleLoader__.load({
           entries.map(entry => h('div', { className: 'wbh-row', key: `${entry.kind}/${entry.name}` },
             h('span', null, `${kindOf(entry.kind).label} · ${entry.name}`,
               entry.flags?.length ? h('div', { className: 'wbh-flags' }, `⚠ ${entry.flags.length} 条扫描标记`) : null),
-            h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)' } }, `${entry.files || 0} 文件`),
+            h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)' } },
+              `${entry.files || 0} 文件`
+              + (entry.mcp ? ' · MCP' : '')
+              + (entry.cli?.runtime ? ` · CLI(${entry.cli.runtime})` : '')
+              + (entry.linkedSkills?.length ? ` · 技能 ${entry.linkedSkills.length}` : '')),
           )),
         ),
         h('p', { style: { margin: 0, fontSize: 12, lineHeight: 1.6, color: 'var(--dsw-alias-label-tertiary)' } },
