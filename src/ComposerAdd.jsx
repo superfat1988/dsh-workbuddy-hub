@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { hub } from './hub.js'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { hub, onCatalogChange } from './hub.js'
 import { WbIcon } from './icons.js'
 import Catalogue from './Catalogue.jsx'
 import SummonModal from './SummonModal.jsx'
@@ -12,10 +12,9 @@ const KINDS = [
 ]
 
 /**
- * The composer "+" control. Two-stage, matching the official interaction:
- * stage 1 is the short menu (专家 / 技能 / 连接器); stage 2 is the picker
- * popup (Catalogue with search). A card click opens the detail modal, the
- * corner button performs the direct action.
+ * The composer "+" control. Official two-stage interaction:
+ * stage 1 is a compact row-menu (avatar 16px + name 14px rows, divider,
+ * 召唤更多专家 footer); stage 2 is the searchable picker.
  */
 export default function ComposerAdd({ sessionId, runCommand }) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -28,6 +27,7 @@ export default function ComposerAdd({ sessionId, runCommand }) {
   const [notice, setNotice] = useState('')
   const [summoning, setSummoning] = useState(null)
   const [authorising, setAuthorising] = useState(null)
+  const [recent, setRecent] = useState([])
   const anchor = useRef(null)
 
   const refresh = useCallback(async () => {
@@ -39,6 +39,7 @@ export default function ComposerAdd({ sessionId, runCommand }) {
   }, [sessionId])
 
   useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => onCatalogChange(refresh), [refresh])
 
   // close on outside click
   useEffect(() => {
@@ -85,6 +86,7 @@ export default function ComposerAdd({ sessionId, runCommand }) {
         if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
         setNotice(`已挂载「${entry.displayName}」`)
       }
+      setRecent(prev => [entry, ...prev.filter(e => e.key !== key)].slice(0, 5))
       await refresh()
     } catch (error) {
       const refs = error.body?.credentialRefs ?? []
@@ -100,6 +102,24 @@ export default function ComposerAdd({ sessionId, runCommand }) {
 
   const onAction = useCallback(entry => { void attach(entry) }, [attach])
 
+  // 一段菜单条目：官方是「最近使用的 + 召唤更多」; here: installed entries
+  // of the active kind plus the 召唤更多 footer opening the full picker.
+  const menuEntries = useMemo(() => {
+    const pool = []
+    for (const key of mounted) {
+      const [k, name] = key.split('/')
+      const rec = installed[key]
+      if (rec) pool.push({ kind: k, name, displayName: rec.displayName || name, icon: rec.icon || '', key })
+    }
+    for (const [key, rec] of Object.entries(installed)) {
+      if (pool.length >= 6) break
+      if (pool.some(p => p.key === key)) continue
+      const [k, name] = key.split('/')
+      pool.push({ kind: k, name, displayName: rec.displayName || name, icon: rec.icon || '', key })
+    }
+    return pool
+  }, [installed, mounted])
+
   return (
     <div className="wbh-anchor" ref={anchor}>
       <button type="button" className="wbh-plus" aria-label="专家·技能·连接器"
@@ -111,16 +131,34 @@ export default function ComposerAdd({ sessionId, runCommand }) {
       {menuOpen && (
         <>
           <div className="wbh-popScrim" onClick={() => setMenuOpen(false)} />
-          <div className="wbh-menu" role="listbox">
-            <div className="wbh-menu-group" role="none">
-              {KINDS.map(k => (
-                <div key={k.id} className="wbh-menu-item" role="menuitem" tabIndex={0}
-                  onClick={() => openPicker(k.id)}
-                  onKeyDown={e => { if (e.key === 'Enter') openPicker(k.id) }}>
-                  <span className="wbh-menu-item-icon"><WbIcon name={k.icon} size={14} /></span>
-                  <span className="wbh-menu-item-label">{k.label}</span>
+          <div className="wbh-menu" role="menu">
+            <div className="wbh-menu-list">
+              {menuEntries.length === 0 && (
+                <div className="wbh-menu-item is-empty">暂无可选条目</div>
+              )}
+              {menuEntries.map(e => (
+                <div key={e.key} className="wbh-menu-item" role="menuitem" tabIndex={0}
+                  aria-checked={mounted.has(e.key) || undefined}
+                  onClick={() => { setMenuOpen(false); onDetail({ kind: e.kind, name: e.name, displayName: e.displayName, icon: e.icon }) }}
+                  onKeyDown={ev => { if (ev.key === 'Enter') { setMenuOpen(false); onDetail({ kind: e.kind, name: e.name, displayName: e.displayName, icon: e.icon }) } }}>
+                  <span className="wbh-menu-avatar" aria-hidden="true">
+                    {e.icon ? <img src={e.icon} alt="" /> : <span>{(e.displayName || '?').slice(0, 1)}</span>}
+                  </span>
+                  <span className="wbh-menu-name">{e.displayName}</span>
                 </div>
               ))}
+            </div>
+            <div className="wbh-menu-divider" role="separator" />
+            <div className="wbh-menu-item wbh-menu-summonMore" role="menuitem" tabIndex={0}
+              onClick={() => openPicker(kind)}
+              onKeyDown={ev => { if (ev.key === 'Enter') openPicker(kind) }}>
+              <span className="wbh-menu-summonMoreIcon">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M5 4.5h6.5V11" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </span>
+              <span className="wbh-menu-summonMoreLabel">召唤更多{KINDS.find(k => k.id === kind)?.label || ''}</span>
             </div>
           </div>
         </>

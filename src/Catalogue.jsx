@@ -97,12 +97,14 @@ export default function Catalogue({
   const [failed, setFailed] = useState('')
   const [segment, setSegment] = useState(0)          // 0=推荐 1=套件 (skill only)
   const [featured, setFeatured] = useState([])       // 精选技能 (skill only)
+  const [localRows, setLocalRows] = useState([])     // DSH 本机已装 skills
 
   useEffect(() => { setCategory(''); setSegment(0) }, [kind])
 
   useEffect(() => {
     let live = true
     hub.categories(kind).then(c => { if (live) setCategories(c) }).catch(() => {})
+    if (kind === 'skill') hub.localSkills().then(r => { if (live) setLocalRows(r) }).catch(() => {})
     return () => { live = false }
   }, [kind])
 
@@ -301,7 +303,30 @@ export default function Catalogue({
           <div className="ec-picker-header-right">{searchBox}</div>
         </div>
         {kind === 'skill' ? skillCategoryRow : categoryRow}
-        <div className="ec-picker-scroll">{pickerGrid}</div>
+        <div className="ec-picker-scroll">
+          {kind === 'skill' && localRows.length > 0 && (
+            <div className="wbh-picker-local">
+              <div className="wbh-picker-localTitle">已安装（本机）</div>
+              <div className="skills-grid">
+                {localRows.map(entry => (
+                  <SkillCard key={`local-${entry.name}`} entry={entry} busy={busy}
+                    onDetail={onDetail} onAction={onAction} />
+                ))}
+              </div>
+            </div>
+          )}
+          {pickerGrid}
+        </div>
+        <div className="wbh-picker-footer">
+          <div className="wbh-picker-footerItem" role="menuitem" tabIndex={0}>
+            <span className="wbh-picker-footerIcon">↑</span>
+            <span className="wbh-picker-footerLabel">从本地添加技能</span>
+          </div>
+          <div className="wbh-picker-footerItem" role="menuitem" tabIndex={0}>
+            <span className="wbh-picker-footerIcon">◎</span>
+            <span className="wbh-picker-footerLabel">管理技能</span>
+          </div>
+        </div>
       </div>
     )
   }

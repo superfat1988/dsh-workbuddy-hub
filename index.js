@@ -793,6 +793,31 @@ export function apply(ctx, config = {}) {
       return true
     }
 
+    // Local DSH skills (~/.dsh/skills): for the composer skill picker's
+    // "installed" section. One row per directory holding a SKILL.md.
+    if (route === 'GET /local-skills') {
+      const rows = []
+      try {
+        const dshSkills = join(homedir(), '.dsh', 'skills')
+        for (const dirent of readdirSync(dshSkills, { withFileTypes: true })) {
+          if (!dirent.isDirectory()) continue
+          if (!skillPrefix || dirent.name.startsWith(skillPrefix)) continue
+          const dir = join(dshSkills, dirent.name)
+          const skillMd = join(dir, 'SKILL.md')
+          if (!existsSync(skillMd)) continue
+          let description = ''
+          try {
+            const head = readFileSync(skillMd, 'utf8').slice(0, 2000)
+            const m = head.match(/^description:\s*(.+)$/m)
+            if (m) description = m[1].replace(/^["']|["']$/g, '').slice(0, 160)
+          } catch { /* unreadable description is fine */ }
+          rows.push({ kind: 'skill', name: dirent.name, displayName: dirent.name, description, local: true, dir })
+        }
+      } catch { /* no dsh skills dir */ }
+      json(res, 200, { ok: true, rows })
+      return true
+    }
+
     if (route === 'POST /connectors/enable' || route === 'POST /connectors/disable') {
       const body = JSON.parse((await readBody(req)) || '{}')
       const entryName = String(body.name || '')

@@ -85,6 +85,7 @@ export const hub = {
   },
 
   installed: () => api('/installed').then(r => r.installed || {}),
+  localSkills: () => api('/local-skills').then(r => r.rows || []).catch(() => []),
   mounted: sessionId => sessionId
     ? api(`/mounted?sessionId=${encodeURIComponent(sessionId)}`).then(r => r.keys || [])
     : Promise.resolve([]),

@@ -92,13 +92,20 @@
 .ec-category-tab{font-size:12.5px;padding:4px 12px}
 .ec-picker-scroll{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--wb-border-default) transparent}
 
-/* --- 二段弹窗第一段：菜单 --- */
-.wbh-menu{position:absolute;left:0;bottom:calc(100% + 10px);z-index:6250;min-width:148px;padding:6px;border:1px solid var(--wb-border-default);border-radius:12px;background:var(--wb-bg-primary);box-shadow:0 12px 40px rgba(0,0,0,.16);animation:wbhPopIn .15s ease}
-.wbh-menu-group{display:flex;flex-direction:column;gap:2px}
-.wbh-menu-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;font-size:13px;color:var(--wb-color-text-primary);cursor:pointer;transition:background .12s ease}
-.wbh-menu-item:hover{background:var(--wb-bg-hover)}
-.wbh-menu-item-icon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;color:var(--wb-color-text-secondary)}
-.wbh-menu-item-label{flex:1}
+/* --- 二段弹窗第一段：官方 _panel 尺寸 (200px/r16/p8/item 32px/avatar 16px/name 14px) --- */
+.wbh-menu{position:absolute;left:0;bottom:calc(100% + 10px);z-index:6250;width:200px;padding:8px;border:1px solid rgba(0,0,0,.08);border-radius:16px;background:var(--wb-bg-primary,#fff);box-shadow:0 6px 24px rgba(0,0,0,.04),0 4px 6px rgba(0,0,0,.04);animation:wbhPopIn .15s ease}
+.wbh-menu-list{display:flex;flex-direction:column;max-height:224px;overflow-y:auto}
+.wbh-menu-item{display:flex;align-items:center;gap:8px;height:32px;padding:0 8px;border-radius:8px;font-size:14px;color:var(--wb-color-text-primary);cursor:pointer;transition:background .12s ease}
+.wbh-menu-item:hover{background:var(--wb-bg-hover,#f5f5f5)}
+.wbh-menu-item.is-empty{color:var(--wb-color-text-tertiary);font-size:13px;cursor:default}
+.wbh-menu-item.is-empty:hover{background:transparent}
+.wbh-menu-avatar{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;overflow:hidden;flex-shrink:0;background:var(--wb-bg-hover,#eee);font-size:9px;font-weight:600;color:#fff}
+.wbh-menu-avatar img{width:100%;height:100%;object-fit:cover}
+.wbh-menu-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;line-height:22px}
+.wbh-menu-divider{height:1px;background:rgba(0,0,0,.06);margin:4px 0}
+.wbh-menu-summonMore{color:var(--wb-color-text-primary)}
+.wbh-menu-summonMoreIcon{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;color:var(--wb-color-text-secondary)}
+.wbh-menu-summonMoreLabel{font-size:14px}
 
 /* --- 官方弹窗卡片宽度 --- */
 .ec-modal-overlay{z-index:6300;padding:20px}
@@ -107,3 +114,10 @@
 .ec-modal-card .ec-modal-quick-prompt-btn .ec-modal-quick-prompt-text{font-size:14px;line-height:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ec-modal-card.is-expert-view .ec-modal-header-summon-btn{min-width:124px;height:32px}
 .ec-modal-card.is-expert-view .ec-modal-close{padding:0}
+
+/* --- picker 底部：从本地添加技能 / 管理技能（官方图6）--- */
+.wbh-picker-footer{border-top:1px solid var(--wb-border-default,#e5e5e5);padding:6px 8px;display:flex;flex-direction:column;gap:2px}
+.wbh-picker-footerItem{display:flex;align-items:center;gap:10px;height:34px;padding:0 8px;border-radius:8px;font-size:14px;color:var(--wb-color-text-primary);cursor:pointer}
+.wbh-picker-footerItem:hover{background:var(--wb-bg-hover,#f5f5f5)}
+.wbh-picker-footerIcon{display:inline-flex;width:16px;justify-content:center;color:var(--wb-color-text-secondary)}
+.wbh-picker-localTitle{font-size:12px;font-weight:600;color:var(--wb-color-text-tertiary);padding:8px 4px 4px}
