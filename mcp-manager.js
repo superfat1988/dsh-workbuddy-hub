@@ -241,6 +241,8 @@ export function createConnectorManager(ctx) {
     disable: unmount,
     statusOf,
     mountedKeys: () => [...mounted.keys()],
+    /** Credential refs each mounted connector depends on (for rotation). */
+    refsOf: key => mounted.get(key)?.refs ?? [],
     disposeAll: async () => { for (const key of [...mounted.keys()]) await unmount(key) },
   }
 }

@@ -398,6 +398,39 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  // mcp-client captures headers/env into its transport at activation, so a
+  // rotated credential would otherwise keep being used. Re-mount only the
+  // connectors whose admitted refs include the changed one.
+  const remountConnector = async key => {
+    const registry = loadJson(P.registry, { version: 1, installed: {} })
+    const record = registry.installed?.[key]
+    if (record === undefined) return
+    const mcpPath = join(record.dest, 'mcp.json')
+    if (!existsSync(mcpPath)) return
+    const live = connectorStatus(key)
+    if (live.state !== 'enabled') return
+    try {
+      const raw = JSON.parse(readFileSync(mcpPath, 'utf8'))
+      const result = await connectors.enable(key, raw, record.name)
+      noteConnectorStatus(key, {
+        enabled: true, status: 'enabled', lastError: '',
+        serverName: result.serverName, credentialRefs: result.refs, transport: result.summary.transport,
+      })
+    } catch (error) {
+      await connectors.disable(key)
+      noteConnectorStatus(key, {
+        enabled: false, status: 'failed', lastError: String(error?.message || error).slice(0, 300),
+      })
+    }
+  }
+  ctx.on('credentials/reference-updated', ref => {
+    const changed = String(ref ?? '')
+    if (changed === '') return
+    for (const key of connectors.mountedKeys()) {
+      if (connectors.refsOf(key).includes(changed)) void remountConnector(key)
+    }
+  })
+
   ctx.effect(() => ctx.commands.register({
     name: 'expert',
     description: '召唤已安装的 WorkBuddy 专家（角色化人设，运行在独立子会话中）',
