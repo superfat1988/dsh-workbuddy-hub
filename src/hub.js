@@ -57,6 +57,10 @@ export const hub = {
   async list(kind, { query = '', category = '', limit = 60 } = {}) {
     const q = encodeURIComponent(query)
     const c = encodeURIComponent(category || '')
+    if (kind === 'connector') {
+      const r = await api(`/market-list?kind=connector&pageSize=${limit}&q=${q}`)
+      return (r.rows ?? []).map(x => ({ ...toEntry(x, 'connector'), isConnected: x.isConnected, mcp: x.mcp, authType: x.authType }))
+    }
     try {
       if (kind === 'expert') {
         const r = await api(`/official-experts?limit=${limit}&q=${q}&category=${c}`)

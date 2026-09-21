@@ -1,0 +1,17 @@
+.connector-card { display:grid;grid-template-columns:40px minmax(0,1fr) auto;grid-template-rows:auto auto;row-gap:8px;align-items:start;align-content:start;min-height:88px;padding:14px 16px;border:1px solid var(--wb-border-card-static);border-radius:16px;background:var(--wb-bg-card);box-shadow:var(--wb-shadow-card-soft);transition:all .25s cubic-bezier(.4,0,.2,1);cursor:pointer }
+.connector-card:hover { border-color:var(--wb-border-default);background:var(--wb-bg-card-hover);box-shadow:var(--wb-shadow-card-soft) }
+.connector-card--skeleton { pointer-events:none;cursor:default }
+.connector-card--incompatible { opacity:.55 }
+.connector-card--incompatible:hover { border-color:var(--wb-border-default);background:var(--wb-bg-card);transform:none;box-shadow:none }
+.connector-card-icon { grid-column:1;grid-row:1;width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;color:var(--wb-color-text-primary);font-size:16px;font-weight:600;overflow:hidden }
+.connector-card-main { display:contents }
+.connector-card-name-row { grid-column:2;grid-row:1;align-self:center;display:flex;align-items:center;gap:8px;min-width:0 }
+.connector-card-name { font-size:14px;font-weight:600;color:var(--wb-color-text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis }
+.connector-card-status-dot { width:8px;height:8px;border-radius:50%;flex-shrink:0;background:var(--wb-status-success) }
+.connector-card-status-dot--connected { background:var(--wb-status-success) }
+.connector-card-status-dot--connecting { background:var(--wb-status-warning);animation:connector-status-pulse 1.2s ease-in-out infinite }
+.connector-card-status-dot--error { background:var(--wb-status-error) }
+.connector-card-badge { padding:2px 8px;border-radius:6px;font-size:11px;line-height:1.4;color:var(--wb-color-text-secondary);background:var(--wb-bg-hover);white-space:nowrap }
+.connector-card-desc { grid-column:1 / -1;grid-row:2;margin-top:2px;font-size:11px;line-height:18px;color:var(--wb-color-text-secondary);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical }
+.connector-card-action { grid-column:3;grid-row:1;align-self:start;display:inline-flex;align-items:center;margin-top:4px;margin-right:4px }
+:root.theme-switching .connector-card,body.theme-switching .connector-card,:root.theme-switching .connector-connect-btn,body.theme-switching .connector-connect-btn,:root.theme-switching .connector-detail-tool-item,body.theme-switching .connector-detail-tool-item { transition:none }

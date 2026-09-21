@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback, useMemo } from 'react'
 import { hub } from './hub.js'
 import { WbIcon } from './icons.js'
 import './official-skill.css'
+import './official-connector.css'
 
 const KINDS = [
   { id: 'expert', label: '专家', icon: 'person' },
@@ -37,6 +38,38 @@ function SkillCard({ entry, busy, onDetail, onAction }) {
         </button>
       </div>
       <div className="skill-card-desc skill-card-desc--two-lines">{entry.description || entry.name}</div>
+    </div>
+  )
+}
+
+/** 官方连接器卡：圆 icon + name + status-dot + 两行描述 + action。 */
+function ConnectorCard({ entry, busy, onDetail, onAction }) {
+  const key = `${entry.kind}/${entry.name}`
+  const enabled = entry._enabled
+  const dot = busy === key ? 'connecting' : enabled ? 'connected' : ''
+  return (
+    <div className={`connector-card${enabled ? ' connector-card--installed' : ''}`} role="button" tabIndex={0}
+      onClick={() => onDetail?.(entry)}
+      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onDetail?.(entry) } }}>
+      <div className="connector-card-icon">
+        {entry.icon
+          ? <img src={entry.icon} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+          : <span className="wbh-avatar-letter" style={{ width: 28, height: 28, borderRadius: '50%', fontSize: 13 }}>{(entry.displayName || '?').slice(0, 1)}</span>}
+      </div>
+      <div className="connector-card-main">
+        <div className="connector-card-name-row">
+          <div className="connector-card-name">{entry.displayName}</div>
+          {dot && <span className={`connector-card-status-dot connector-card-status-dot--${dot}`} />}
+        </div>
+        <div className="connector-card-desc">{entry.description || entry.name}</div>
+      </div>
+      <div className="connector-card-action">
+        <button type="button" className="wbh-btnGhost" disabled={busy === key}
+          aria-label={`${enabled ? '断开' : '连接'} ${entry.displayName}`}
+          onClick={e => { e.stopPropagation(); onAction?.(entry) }}>
+          {busy === key ? '…' : enabled ? '断开' : '连接'}
+        </button>
+      </div>
     </div>
   )
 }
@@ -114,12 +147,15 @@ export default function Catalogue({
     hub.list(kind, { query, category, limit: 60 })
       .then(r => {
         if (!live) return
-        setRows(r); setLoading(false)
+        const merged = kind === 'connector'
+          ? r.map(x => ({ ...x, _enabled: Boolean(installed[`${x.kind}/${x.name}`]?.enabled) }))
+          : r
+        setRows(merged); setLoading(false)
         if (kind === 'skill') setFeatured(shuffle(r).slice(0, 5))
       })
       .catch(e => { if (live) { setFailed(e.message); setRows([]); setLoading(false) } })
     return () => { live = false }
-  }, [kind, query, category])
+  }, [kind, query, category, installed])
 
   const kindMeta = KINDS.find(k => k.id === kind) || KINDS[0]
   const shuffle = arr => [...arr].sort(() => Math.random() - 0.5)
@@ -241,7 +277,7 @@ export default function Catalogue({
 
   const cardGrid = kind === 'connector'
     ? <div className="skills-grid">{rows.map(entry => (
-        <SkillCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy}
+        <ConnectorCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy}
           onDetail={onDetail} onAction={onAction} />
       ))}</div>
     : (
@@ -290,6 +326,9 @@ export default function Catalogue({
       {rows.map(entry => kind === 'expert'
         ? <ExpertCard key={`${entry.kind}/${entry.name}`} entry={entry} kindLabel={kindMeta.label}
             busy={busy} onDetail={onDetail} onAction={onAction} />
+        : kind === 'connector'
+        ? <ConnectorCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy}
+            onDetail={onDetail} onAction={onAction} />
         : <SkillCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy}
             onDetail={onDetail} onAction={onAction} />)}
     </div>

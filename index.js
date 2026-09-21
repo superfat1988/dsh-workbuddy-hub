@@ -17,7 +17,7 @@
  */
 import { homedir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
-import { loginStart, loginPoll, loadAuth, saveAuth, marketList, marketCategories } from './wb-market.js'
+import { loginStart, loginPoll, loadAuth, saveAuth, marketList, marketCategories, connectorRegistry } from './wb-market.js'
 import { listExperts, categories as officialCategories, installExpert } from './wb-experts.js'
 import { skillDetails } from './wb-market.js'
 import { unzip } from './wb-unzip.js'
@@ -698,7 +698,17 @@ export function apply(ctx, config = {}) {
     }
 
     if (route === 'GET /market-list') {
-      const kind = url.searchParams.get('kind') === 'skill' ? 'skill' : 'expert'
+      const kindQ = url.searchParams.get('kind') || 'expert'
+      if (kindQ === 'connector') {
+        try {
+          const rows = await connectorRegistry(P.state)
+          json(res, 200, { ok: true, source: rows.length ? 'official' : 'mirror', total: rows.length, rows })
+        } catch (error) {
+          json(res, 200, { ok: true, source: 'mirror', total: 0, rows: [], error: error.message })
+        }
+        return true
+      }
+      const kind = kindQ === 'skill' ? 'skill' : 'expert'
       const payload = {
         page: Math.max(1, Number(url.searchParams.get('page') || 1) || 1),
         page_size: Math.min(100, Number(url.searchParams.get('pageSize') || 60) || 60),
@@ -790,6 +800,16 @@ export function apply(ctx, config = {}) {
         if (live.serverName) record.serverName = live.serverName
       }
       json(res, 200, registry)
+      return true
+    }
+
+    if (route === 'GET /connector-registry') {
+      try {
+        const rows = await connectorRegistry(P.state)
+        json(res, 200, { ok: true, source: rows.length ? 'official' : 'mirror', rows })
+      } catch (error) {
+        json(res, 200, { ok: true, source: 'mirror', rows: [], error: error.message })
+      }
       return true
     }
 

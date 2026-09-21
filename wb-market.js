@@ -144,3 +144,24 @@ export async function skillDetails(ids, stateDir) {
   if (status !== 200 || json?.code !== 0) throw new Error(`skill get-by-ids failed: HTTP ${status} code=${json?.code}`)
   return json.data?.skills ?? []
 }
+
+/** Official connector registry (name/display/description/icon/auth_type/mcp). */
+export async function connectorRegistry(stateDir) {
+  const token = await bearer(stateDir)
+  if (!token) return []
+  const { status, json } = await call('GET', '/console/as/connector/registry2c/list?scope=all', { token })
+  if (status !== 200 || json?.code !== 0) return []
+  const arr = json.data?.list ?? json.data?.items ?? json.data ?? []
+  if (!Array.isArray(arr)) return []
+  return arr.map(c => ({
+    kind: 'connector',
+    name: c.name,
+    displayName: c.data?.display_name || c.name,
+    description: c.data?.description || '',
+    icon: c.data?.icon_url || '',
+    authType: c.auth_type || '',
+    mcp: c.mcp || null,
+    isConnected: Boolean(c.is_connected),
+    official: true,
+  }))
+}
