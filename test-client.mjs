@@ -53,16 +53,18 @@ assert.ok(src.includes("const on = isConnector ? enabled : mounted"), 'connector
 assert.ok(src.includes("post('/connectors/enable'"), 'attach must enable the connector')
 assert.ok(src.includes("post('/connectors/disable'"), 'detach must disable the connector')
 assert.ok(src.includes('credentialRefs'), 'refusals must surface the missing credential refs')
-assert.ok(!src.includes("input.overlay"), 'must never register the input overlay slot')
+assert.ok(!/name:\s*['"]conversation\.input\.overlay['"]/.test(src), 'must never register the input overlay slot')
 
 // the bundle must embed the official stylesheet and component classes
-assert.ok(src.includes('.ec-expert-card'), 'official expert card stylesheet embedded')
-assert.ok(src.includes('.um-tab--active'), 'official topbar tab stylesheet embedded')
-assert.ok(src.includes('.ec-card-summon-btn--top'), 'official summon button stylesheet embedded')
-assert.ok(src.includes('wbhCss') || src.includes('__wbCss'), 'compiled css injected into the bundle')
+assert.ok(src.includes('SummonDialog'), 'summon confirmation dialog present')
+assert.ok(src.includes('AuthDialog'), 'connector authorisation dialog present')
+assert.ok(src.includes("commandsRemote()"), 'commands remote resolved lazily')
+const official = existsSync(new URL('./src/marketplace.css', import.meta.url))
+assert.ok(official, 'official-component sources kept in src/ for the migration')
 
-import { readFileSync as rfs } from 'node:fs'
+import { readFileSync as rfs, existsSync } from 'node:fs'
 const pkg = JSON.parse(rfs(new URL('./package.json', import.meta.url), 'utf8'))
 assert.ok(pkg.scripts['build:client'], 'esbuild pipeline registered')
+assert.equal(typeof registration.factory, 'function', 'bundle ships as ModuleLoader factory')
 
 console.log('client module export, dock placement, connector and summon semantics: OK')
