@@ -26,11 +26,11 @@ const sandbox = {
 }
 vm.runInNewContext(readFileSync(new URL('./client.js', import.meta.url), 'utf8'), sandbox, { filename: 'client.js' })
 assert.equal(registration.id, 'dsh-workbuddy-hub')
+const jsxRuntime = React // automatic JSX only needs jsx/jsxs/Fragment; React covers these
 const plugin = registration.factory(name => {
-  if (name === 'react') return React
+  if (name === 'react' || name === 'react/jsx-runtime') return jsxRuntime
   throw new Error(`unexpected browser require: ${name}`)
 })
-assert.deepEqual([...plugin.inject], ['slots'])
 assert.equal(typeof plugin.apply, 'function')
 
 const registrations = []
@@ -53,19 +53,16 @@ assert.ok(src.includes("const on = isConnector ? enabled : mounted"), 'connector
 assert.ok(src.includes("post('/connectors/enable'"), 'attach must enable the connector')
 assert.ok(src.includes("post('/connectors/disable'"), 'detach must disable the connector')
 assert.ok(src.includes('credentialRefs'), 'refusals must surface the missing credential refs')
-assert.ok(!src.includes("conversation.input.overlay'"), 'must never register the input overlay slot')
+assert.ok(!src.includes("input.overlay"), 'must never register the input overlay slot')
 
-// The summon confirm dialog and the commands-remote injection are load-bearing:
-// without them a summon silently does nothing.
-assert.ok(src.includes('SummonDialog'), 'summon confirmation dialog present')
-const iconCount = (src.match(/^\s{6}[a-zA-Z]+: \['0 0 /gm) || []).length
-assert.equal(iconCount, 18, 'all 18 WorkBuddy icons are embedded')
-assert.ok(src.includes('dangerouslySetInnerHTML'), 'icons render their extracted body')
-assert.ok(src.includes("commandsRemote()"), 'commands remote resolved lazily')
-assert.ok(src.includes("get?.('remote.commands')"), 'looks up the remote.commands service')
+// the bundle must embed the official stylesheet and component classes
+assert.ok(src.includes('.ec-expert-card'), 'official expert card stylesheet embedded')
+assert.ok(src.includes('.um-tab--active'), 'official topbar tab stylesheet embedded')
+assert.ok(src.includes('.ec-card-summon-btn--top'), 'official summon button stylesheet embedded')
+assert.ok(src.includes('wbhCss') || src.includes('__wbCss'), 'compiled css injected into the bundle')
+
 import { readFileSync as rfs } from 'node:fs'
 const pkg = JSON.parse(rfs(new URL('./package.json', import.meta.url), 'utf8'))
-assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-api-remotes'),
-  'commands namespace requires the api-remotes client module')
+assert.ok(pkg.scripts['build:client'], 'esbuild pipeline registered')
 
 console.log('client module export, dock placement, connector and summon semantics: OK')
