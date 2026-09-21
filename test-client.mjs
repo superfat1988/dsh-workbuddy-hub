@@ -58,6 +58,9 @@ assert.ok(!src.includes("conversation.input.overlay'"), 'must never register the
 // The summon confirm dialog and the commands-remote injection are load-bearing:
 // without them a summon silently does nothing.
 assert.ok(src.includes('SummonDialog'), 'summon confirmation dialog present')
+const iconCount = (src.match(/^\s{6}[a-zA-Z]+: \['0 0 /gm) || []).length
+assert.equal(iconCount, 18, 'all 18 WorkBuddy icons are embedded')
+assert.ok(src.includes('dangerouslySetInnerHTML'), 'icons render their extracted body')
 assert.ok(src.includes("commandsRemote()"), 'commands remote resolved lazily')
 assert.ok(src.includes("get?.('remote.commands')"), 'looks up the remote.commands service')
 import { readFileSync as rfs } from 'node:fs'
