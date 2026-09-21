@@ -30,7 +30,7 @@ const plugin = registration.factory(name => {
   if (name === 'react') return React
   throw new Error(`unexpected browser require: ${name}`)
 })
-assert.deepEqual([...plugin.inject], ['slots', 'remote'])
+assert.deepEqual([...plugin.inject], ['slots'])
 assert.equal(typeof plugin.apply, 'function')
 
 const registrations = []
@@ -38,7 +38,7 @@ const slots = {
   inject(_name, callback) { callback() },
   register(options, component) { registrations.push({ options, component }) },
 }
-plugin.apply({ slots, get: name => name === 'remote' ? undefined : undefined })
+plugin.apply({ slots, get: () => undefined })
 const bySlot = name => registrations.find(row => row.options.name === name)
 assert.equal(bySlot('main').options.key, 'workbuddy-hub')
 assert.equal(bySlot('sidebar.panellist').options.id, 'workbuddy-hub')
@@ -55,4 +55,14 @@ assert.ok(src.includes("post('/connectors/disable'"), 'detach must disable the c
 assert.ok(src.includes('credentialRefs'), 'refusals must surface the missing credential refs')
 assert.ok(!src.includes("conversation.input.overlay'"), 'must never register the input overlay slot')
 
-console.log('client module export, dock placement and connector semantics: OK')
+// The summon confirm dialog and the commands-remote injection are load-bearing:
+// without them a summon silently does nothing.
+assert.ok(src.includes('SummonDialog'), 'summon confirmation dialog present')
+assert.ok(src.includes("commandsRemote()"), 'commands remote resolved lazily')
+assert.ok(src.includes("get?.('remote.commands')"), 'looks up the remote.commands service')
+import { readFileSync as rfs } from 'node:fs'
+const pkg = JSON.parse(rfs(new URL('./package.json', import.meta.url), 'utf8'))
+assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-api-remotes'),
+  'commands namespace requires the api-remotes client module')
+
+console.log('client module export, dock placement, connector and summon semantics: OK')

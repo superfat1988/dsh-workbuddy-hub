@@ -36,11 +36,21 @@ window.__ModuleLoader__.load({
     const notify = () => window.dispatchEvent(new Event(EVENT))
     // Filled during apply(); the host command channel is how a summon actually
     // reaches the live Agent (the browser cannot call spawnTeammate directly).
-    let commandRemote = null
+    let pluginCtx = null
+    /** Resolve the commands Remote at CALL time: the remotes module can finish
+        loading after this plugin's apply(), so caching it eagerly loses it. */
+    const commandsRemote = () => {
+      // The generated namespaces are client *services*: `@deepseek-ai/dsh-api-remotes`
+      // mounts `commands` as `remote.commands`, which is how the shipped command
+      // plugins reach it. Reading it lazily also survives load-order differences.
+      try { return pluginCtx?.get?.('remote.commands') ?? null } catch { return null }
+    }
     const runCommand = async (sessionId, line) => {
-      if (commandRemote === null || !sessionId) return { ok: false, error: '命令通道不可用' }
+      if (!sessionId) return { ok: false, error: '当前没有会话，无法执行命令' }
+      const remote = commandsRemote()
+      if (remote === null) return { ok: false, error: '命令通道不可用（remotes 未就绪）' }
       try {
-        const result = await commandRemote.execute(sessionId, line, [])
+        const result = await remote.execute(sessionId, line, [])
         if (!result?.ok) return { ok: false, error: result?.error?.message || '命令执行失败' }
         return { ok: true, value: result.value?.result }
       } catch (error) {
@@ -68,20 +78,20 @@ window.__ModuleLoader__.load({
 .wbh-plus[aria-expanded="true"]{background:var(--dsw-alias-interactive-bg-hover-solid)}
 .wbh-anchor{position:relative;display:inline-flex}
 .wbh-scrim{position:fixed;inset:0;z-index:1240}
-.wbh-menu{position:absolute;left:0;bottom:calc(100% + 10px);z-index:1250;display:flex;align-items:flex-start;animation:wbhRise .16s ease-out}
-.wbh-menuCol{display:flex;flex-direction:column;width:196px;padding:6px;border:1px solid var(--dsw-alias-border-l2);border-radius:13px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 14px 40px rgba(0,0,0,.30)}
-.wbh-menuRow{display:flex;align-items:center;gap:9px;padding:8px 9px;border:0;border-radius:9px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12.5px;cursor:pointer;text-align:left;transition:background .12s ease}
+.wbh-menu{position:absolute;left:0;bottom:calc(100% + 10px);z-index:1250;display:flex;align-items:flex-start;animation:wbhPopIn .15s ease}
+.wbh-menuCol{display:flex;flex-direction:column;width:196px;padding:5px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 8px 24px rgba(0,0,0,.12)}
+.wbh-menuRow{display:flex;align-items:center;gap:9px;padding:8px 9px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12.5px;cursor:pointer;text-align:left;transition:background .15s ease}
 .wbh-menuRow:hover,.wbh-menuRow.on{background:var(--dsw-alias-bg-layer-2)}
 .wbh-menuRow.on{font-weight:600}
 .wbh-menuRowIcon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;flex:0 0 auto;font-size:13px;color:var(--dsw-alias-label-secondary)}
 .wbh-menuRowLabel{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wbh-menuRowChev{color:var(--dsw-alias-label-tertiary);font-size:11px}
-.wbh-pane{display:flex;flex-direction:column;align-self:flex-start;width:min(420px,calc(100vw - 240px));max-height:min(440px,calc(100vh - 140px));margin-left:7px;border:1px solid var(--dsw-alias-border-l2);border-radius:13px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 14px 40px rgba(0,0,0,.30);overflow:hidden;animation:wbhFade .16s ease-out}
+.wbh-pane{display:flex;flex-direction:column;align-self:flex-start;width:min(420px,calc(100vw - 240px));max-height:min(440px,calc(100vh - 140px));margin-left:7px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 8px 24px rgba(0,0,0,.12);overflow:hidden;animation:wbhPaneIn .15s ease}
 .wbh-paneHead{display:flex;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid var(--dsw-alias-border-l2)}
 .wbh-search{box-sizing:border-box;flex:1;min-width:0;padding:6px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;outline:none}
 .wbh-search:focus{border-color:var(--dsw-alias-label-info,#5b8cff)}
 .wbh-paneList{flex:1;min-height:120px;overflow:auto;padding:6px}
-.wbh-item{display:flex;align-items:center;gap:10px;width:100%;padding:8px 9px;border:0;border-radius:10px;background:transparent;color:inherit;font:inherit;cursor:pointer;text-align:left;transition:background .12s ease}
+.wbh-item{display:flex;align-items:center;gap:10px;width:100%;padding:8px 9px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;cursor:pointer;text-align:left;transition:background .15s ease}
 .wbh-item:hover{background:var(--dsw-alias-bg-layer-2)}
 .wbh-item:disabled{opacity:.6;cursor:default}
 .wbh-avatar{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:26px;height:26px;border-radius:8px;overflow:hidden;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:600}
@@ -120,19 +130,40 @@ window.__ModuleLoader__.load({
 .wbh-dot{width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-label-success,#2b8a3e)}
 .wbh-panel{border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:var(--dsw-alias-bg-layer-1);overflow:hidden}
 .wbh-panelHead{display:flex;align-items:center;gap:6px;padding:9px 11px;border-bottom:1px solid var(--dsw-alias-border-l2)}
-.wbh-tab{padding:6px 13px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;transition:background .12s ease,color .12s ease}
+.wbh-tab{padding:6px 13px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;transition:background .15s ease,color .15s ease}
 .wbh-tab:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2)}
 .wbh-tab.on{background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);font-weight:600}
 .wbh-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px;padding:11px;max-height:min(58vh,560px);overflow:auto}
-.wbh-card{display:flex;align-items:flex-start;gap:10px;padding:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:11px;background:var(--dsw-alias-bg-layer-2)}
+.wbh-card{display:flex;align-items:flex-start;gap:10px;padding:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);transition:background .15s ease}
+.wbh-card:hover{background:var(--dsw-alias-bg-layer-3)}
 .wbh-card .wbh-avatar{width:30px;height:30px;border-radius:9px;font-size:13px}
 .wbh-flags{margin-top:4px;font-size:10px;color:var(--dsw-alias-label-warning,#b8860b)}
 .wbh-note{padding:8px 12px;border-top:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.55}
 .wbh-settings{box-sizing:border-box;max-width:840px;padding:22px 26px;display:flex;flex-direction:column;gap:13px}
 .wbh-secTitle{margin:0 0 7px;font-size:13px;font-weight:650}
 .wbh-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-2);margin-bottom:6px}
-@keyframes wbhRise{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
-@keyframes wbhFade{from{opacity:0;transform:translateX(-4px)}to{opacity:1;transform:translateX(0)}}
+/* WorkBuddy's enter motion (cb-plugin-dropdown-in): opacity plus a 4px slide over
+   .15s ease. This popover opens upward, so the slide arrives from below. */
+@keyframes wbhPopIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+@keyframes wbhPaneIn{from{opacity:0;transform:translateX(-4px)}to{opacity:1;transform:translateX(0)}}
+@keyframes wbhModalIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+@keyframes wbhScrimIn{from{opacity:0}to{opacity:1}}
+.wbh-modalRoot{position:fixed;inset:0;z-index:1300;display:grid;place-items:center}
+.wbh-modalScrim{position:absolute;inset:0;background:rgba(0,0,0,.28);animation:wbhScrimIn .15s ease}
+.wbh-modal{position:relative;width:min(520px,calc(100vw - 40px));padding:16px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 8px 24px rgba(0,0,0,.12);animation:wbhModalIn .15s ease}
+.wbh-modalHead{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.wbh-modalTitle{margin:0;font-size:14px;font-weight:650;color:var(--dsw-alias-label-primary)}
+.wbh-modalSub{margin:2px 0 0;font-size:11px;color:var(--dsw-alias-label-tertiary)}
+.wbh-modalDesc{margin:0 0 10px;font-size:12px;line-height:1.6;color:var(--dsw-alias-label-secondary)}
+.wbh-modalInput{box-sizing:border-box;width:100%;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;resize:vertical;outline:none}
+.wbh-modalInput:focus{border-color:var(--dsw-alias-label-info,#5b8cff)}
+.wbh-modalFoot{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+.wbh-btnGhost,.wbh-btnPrimary{padding:5px 14px;border-radius:8px;font:inherit;font-size:12px;cursor:pointer;transition:background .15s ease}
+.wbh-btnGhost{border:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary)}
+.wbh-btnGhost:hover{background:var(--dsw-alias-bg-layer-2)}
+.wbh-btnPrimary{border:1px solid transparent;background:var(--dsw-alias-button-info-fill,#3b7dff);color:#fff}
+.wbh-btnPrimary:hover:not(:disabled){filter:brightness(1.05)}
+.wbh-btnPrimary:disabled{opacity:.6;cursor:default}
 @media(max-width:760px){.wbh-menu{flex-direction:column;left:-40px}.wbh-pane{width:min(420px,calc(100vw - 28px));margin:6px 0 0;max-height:46vh}.wbh-grid{grid-template-columns:1fr}}
 `
 
@@ -183,6 +214,44 @@ window.__ModuleLoader__.load({
       ? `${API}/icon?kind=${entry.kind}&name=${encodeURIComponent(entry.name)}`
       : ''
     const zh = entry => entry.displayName || entry.name
+
+    /** 召唤确认弹窗：WorkBuddy 在真正召唤前先让用户确认，并可顺手写下任务。 */
+    function SummonDialog({ entry, busy, onCancel, onConfirm }) {
+      const [task, setTask] = useState('')
+      useEffect(() => {
+        const onKey = event => { if (event.key === 'Escape') onCancel() }
+        window.addEventListener('keydown', onKey)
+        return () => window.removeEventListener('keydown', onKey)
+      }, [onCancel])
+      return h('div', { className: 'wbh-root wbh-modalRoot', role: 'dialog', 'aria-modal': 'true',
+        'aria-label': `召唤 ${zh(entry)}` },
+        h('style', null, STYLE),
+        h('div', { className: 'wbh-modalScrim', onClick: onCancel }),
+        h('div', { className: 'wbh-modal' },
+          h('div', { className: 'wbh-modalHead' },
+            h(Avatar, { entry, size: 36 }),
+            h('div', { style: { minWidth: 0 } },
+              h('h3', { className: 'wbh-modalTitle' }, `召唤 ${zh(entry)}`),
+              h('p', { className: 'wbh-modalSub' }, '专家运行在独立会话中，主对话只接收结论'),
+            ),
+          ),
+          h('p', { className: 'wbh-modalDesc' }, entry.description || entry.dir),
+          h('textarea', {
+            className: 'wbh-modalInput', rows: 3, value: task,
+            placeholder: '可直接写下要交给这位专家的任务（留空则先确认角色）',
+            'aria-label': '任务描述',
+            onChange: event => setTask(event.target.value),
+          }),
+          h('div', { className: 'wbh-modalFoot' },
+            h('button', { type: 'button', className: 'wbh-btnGhost', onClick: onCancel }, '取消'),
+            h('button', {
+              type: 'button', className: 'wbh-btnPrimary', disabled: busy,
+              onClick: () => { void onConfirm(task) },
+            }, busy ? '召唤中…' : '召唤专家'),
+          ),
+        ),
+      )
+    }
 
     /** Connector affordance: labelled 连接 until connected, switch afterwards. */
     function ConnectorAction({ on, busy, onToggle }) {
@@ -241,6 +310,7 @@ window.__ModuleLoader__.load({
     }
 
     function MarketMenu({ sessionId, onClose, onOpenPanel }) {
+      const [summoning, setSummoning] = useState(null)
       const [kind, setKind] = useState('expert')
       const [query, setQuery] = useState('')
       const [busy, setBusy] = useState('')
@@ -261,7 +331,7 @@ window.__ModuleLoader__.load({
       const installed = installedState.data || {}
       const mounted = new Set(mountedState.data || [])
 
-      const attach = useCallback(async entry => {
+      const attach = useCallback(async (entry, task = '') => {
         const key = `${entry.kind}/${entry.name}`
         setBusy(key); setNotice('')
         try {
@@ -278,7 +348,7 @@ window.__ModuleLoader__.load({
             if (sessionId) await post('/mount', { sessionId, kind: entry.kind, name: entry.name })
             // 召唤 mutates nothing in this conversation: the expert runs in its
             // own child session and only its conclusion comes back.
-            const summoned = await runCommand(sessionId, `/expert ${entry.name}`)
+            const summoned = await runCommand(sessionId, `/expert ${entry.name}${task.trim() === '' ? '' : ` ${task.trim()}`}`)
             setNotice(summoned.ok
               ? `已召唤「${zh(entry)}」：${summoned.value?.text || '专家会话已创建'}`
               : `已挂载，但召唤失败：${summoned.error}`)
@@ -353,7 +423,7 @@ window.__ModuleLoader__.load({
                   mounted: mounted.has(key),
                   enabled: installed[key]?.enabled === true,
                   busy: busy === key,
-                  onPrimary: attach,
+                  onPrimary: entry => setSummoning(entry),
                   onToggle: entry => mounted.has(key) ? detach(entry) : attach(entry),
                 })
               }),
@@ -363,6 +433,12 @@ window.__ModuleLoader__.load({
             notice && h('div', { className: 'wbh-note', role: 'status' }, notice),
           ),
         ),
+        summoning !== null && sessionId !== undefined && h(SummonDialog, {
+          entry: summoning,
+          busy: busy === `${summoning.kind}/${summoning.name}`,
+          onCancel: () => setSummoning(null),
+          onConfirm: async task => { await attach(summoning, task); setSummoning(null) },
+        }),
       )
     }
 
@@ -434,6 +510,7 @@ window.__ModuleLoader__.load({
     /* ---------------- global market page ---------------- */
 
     function MarketPanel({ kind, sessionId, onNotice }) {
+      const [summoning, setSummoning] = useState(null)
       const [query, setQuery] = useState('')
       const [busy, setBusy] = useState('')
       const revision = useRevision()
@@ -449,7 +526,7 @@ window.__ModuleLoader__.load({
       const installed = installedState.data || {}
       const mounted = new Set(mountedState.data || [])
 
-      const act = async entry => {
+      const act = async (entry, task = '') => {
         const key = `${entry.kind}/${entry.name}`
         setBusy(key)
         try {
@@ -468,7 +545,7 @@ window.__ModuleLoader__.load({
             }
           } else if (entry.kind === 'expert') {
             if (sessionId) await post('/mount', { sessionId, kind: entry.kind, name: entry.name })
-            const summoned = await runCommand(sessionId, `/expert ${entry.name}`)
+            const summoned = await runCommand(sessionId, `/expert ${entry.name}${task.trim() === '' ? '' : ` ${task.trim()}`}`)
             onNotice?.(summoned.ok
               ? `已召唤「${zh(entry)}」：${summoned.value?.text || '专家会话已创建'}`
               : `已挂载，但召唤失败：${summoned.error}`)
@@ -521,13 +598,20 @@ window.__ModuleLoader__.load({
                 ? h(ConnectorAction, { on: switchOn, busy: busy === key, onToggle: () => { void act(entry) } })
                 : h('button', {
                     type: 'button', className: `wbh-action${isMounted ? '' : ' primary'}`,
-                    disabled: busy === key, onClick: () => { void act(entry) },
+                    disabled: busy === key,
+                    onClick: () => { if (entry.kind === 'expert') setSummoning(entry); else void act(entry) },
                   }, busy === key ? '…' : isMounted ? '已挂载' : entry.kind === 'expert' ? '召唤' : '挂载'),
             )
           }),
         ),
         h('div', { className: 'wbh-note' },
           '安装与外部授权始终由你确认；专家只推荐与召唤，不会自动替换当前对话角色。'),
+        summoning !== null && sessionId !== undefined && h(SummonDialog, {
+          entry: summoning,
+          busy: busy === `${summoning.kind}/${summoning.name}`,
+          onCancel: () => setSummoning(null),
+          onConfirm: async task => { await act(summoning, task); setSummoning(null) },
+        }),
       )
     }
 
@@ -605,9 +689,13 @@ window.__ModuleLoader__.load({
 
     /* ---------------- registration ---------------- */
 
-    exports.inject = ['slots', 'remote']
+    // Only `slots` is a hard dependency: a wrong service name here would stop the
+    // whole plugin from applying (the earlier "pending" failure). The remotes
+    // MODULE is declared in dsh.client.inject, which guarantees it mounts its
+    // namespaces before this bundle runs; the lookup stays lazy besides.
+    exports.inject = ['slots']
     exports.apply = ctx => {
-      try { commandRemote = ctx.get('remote')?.commands ?? null } catch { commandRemote = null }
+      pluginCtx = ctx
       ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'workbuddy-hub' }, HubPage))
       ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
         name: 'sidebar.panellist', id: 'workbuddy-hub', order: -90,
