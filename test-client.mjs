@@ -46,4 +46,13 @@ assert.equal(bySlot('conversation.input.left').options.id, 'workbuddy-hub-add')
 assert.equal(bySlot('conversation.composer.dock').options.id, 'workbuddy-hub-attached')
 assert.equal(bySlot('conversation.input.overlay'), undefined, 'attached rail must never overlay the input placeholder')
 assert.equal(bySlot('settings.plugins.tab').options.id, 'workbuddy-hub')
-console.log('client module export and correct below-composer dock registration: OK')
+// Connector switches must express MCP connection state, and switching off must
+// actually tear the transport down rather than only hiding the chip.
+const src = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
+assert.ok(src.includes("const on = isConnector ? enabled : mounted"), 'connector switch reads enabled state')
+assert.ok(src.includes("post('/connectors/enable'"), 'attach must enable the connector')
+assert.ok(src.includes("post('/connectors/disable'"), 'detach must disable the connector')
+assert.ok(src.includes('credentialRefs'), 'refusals must surface the missing credential refs')
+assert.ok(!src.includes("conversation.input.overlay'"), 'must never register the input overlay slot')
+
+console.log('client module export, dock placement and connector semantics: OK')

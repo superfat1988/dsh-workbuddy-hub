@@ -137,7 +137,13 @@ window.__ModuleLoader__.load({
     const api = async (path, options) => {
       const response = await fetch(API + path, options)
       const body = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`)
+      if (!response.ok) {
+        const error = new Error(body.error || `HTTP ${response.status}`)
+        // Structured details (e.g. credentialRefs) drive the UI's next step.
+        error.body = body
+        error.status = response.status
+        throw error
+      }
       return body
     }
     const post = (path, payload) => api(path, {
@@ -187,9 +193,12 @@ window.__ModuleLoader__.load({
 
     /* ---------------- market menu (two-level) ---------------- */
 
-    function MenuItem({ entry, installed, mounted, busy, onPrimary, onToggle }) {
+    function MenuItem({ entry, installed, mounted, enabled, busy, onPrimary, onToggle }) {
       const isConnector = entry.kind === 'connector'
       const isExpert = entry.kind === 'expert'
+      // A connector switch means "MCP is connected" (WorkBuddy semantics); for
+      // experts and skills the chip/attach state is what the row reports.
+      const on = isConnector ? enabled : mounted
       return h('button', {
         type: 'button', className: 'wbh-item', disabled: busy,
         onClick: () => { void (isConnector ? onToggle(entry) : onPrimary(entry)) },
@@ -207,7 +216,7 @@ window.__ModuleLoader__.load({
           : h('div', { className: 'wbh-itemDesc' }, entry.dir),
       ),
       isConnector
-        ? h('span', { className: `wbh-switch${mounted ? ' on' : ''}`, role: 'switch', 'aria-checked': mounted ? 'true' : 'false' },
+        ? h('span', { className: `wbh-switch${on ? ' on' : ''}`, role: 'switch', 'aria-checked': on ? 'true' : 'false' },
             h('i', null))
         : h('span', { className: `wbh-action${isExpert && !mounted ? ' primary' : ''}` },
             busy ? '…' : mounted ? '已挂载' : isExpert ? '召唤' : installed ? '挂载' : '添加'),
@@ -242,25 +251,30 @@ window.__ModuleLoader__.load({
           if (!installed[key]) {
             await post('/install', { kind: entry.kind, name: entry.name })
           }
-          if (sessionId) await post('/mount', { sessionId, kind: entry.kind, name: entry.name })
-          notify()
-          if (entry.kind === 'expert') {
+          if (entry.kind === 'connector') {
+            // Connect the real transport first: a connector that cannot reach
+            // its endpoint must not look attached.
+            const result = await post('/connectors/enable', { name: entry.name })
+            if (sessionId) await post('/mount', { sessionId, kind: entry.kind, name: entry.name })
+            setNotice(`已连接「${zh(entry)}」（工具命名空间 ${result.serverName}），下一次模型步骤起可用。`)
+          } else if (entry.kind === 'expert') {
+            if (sessionId) await post('/mount', { sessionId, kind: entry.kind, name: entry.name })
             // 召唤 mutates nothing in this conversation: the expert runs in its
             // own child session and only its conclusion comes back.
             const summoned = await runCommand(sessionId, `/expert ${entry.name}`)
             setNotice(summoned.ok
               ? `已召唤「${zh(entry)}」：${summoned.value?.text || '专家会话已创建'}`
               : `已挂载，但召唤失败：${summoned.error}`)
-          } else if (entry.kind === 'connector') {
-            const enabled = await runCommand(sessionId, `/connector ${entry.name} on`)
-            setNotice(enabled.ok
-              ? (enabled.value?.text || `已连接「${zh(entry)}」`)
-              : `已挂载；连接失败：${enabled.error}`)
           } else {
+            if (sessionId) await post('/mount', { sessionId, kind: entry.kind, name: entry.name })
             setNotice(`已挂载「${zh(entry)}」`)
           }
+          notify()
         } catch (error) {
-          setNotice(`失败：${error.message}`)
+          const missing = (error.body?.credentialRefs ?? []).join('、')
+          setNotice(missing !== ''
+            ? `「${zh(entry)}」需要先配置凭证：${missing}`
+            : `失败：${error.message}`)
         } finally { setBusy('') }
       }, [installed, sessionId])
 
@@ -268,8 +282,14 @@ window.__ModuleLoader__.load({
         const key = `${entry.kind}/${entry.name}`
         setBusy(key); setNotice('')
         try {
+          if (entry.kind === 'connector') {
+            // Switching off must tear the transport down, not just hide the chip.
+            await post('/connectors/disable', { name: entry.name })
+            setNotice(`已断开「${zh(entry)}」`)
+          } else {
+            setNotice(`已取消「${zh(entry)}」`)
+          }
           if (sessionId) await post('/unmount', { sessionId, kind: entry.kind, name: entry.name })
-          setNotice(`已取消「${zh(entry)}」`)
           notify()
         } catch (error) {
           setNotice(`失败：${error.message}`)
@@ -314,6 +334,7 @@ window.__ModuleLoader__.load({
                   key, entry,
                   installed: Boolean(installed[key]),
                   mounted: mounted.has(key),
+                  enabled: installed[key]?.enabled === true,
                   busy: busy === key,
                   onPrimary: attach,
                   onToggle: entry => mounted.has(key) ? detach(entry) : attach(entry),
@@ -438,6 +459,8 @@ window.__ModuleLoader__.load({
             const key = `${entry.kind}/${entry.name}`
             const isConnector = entry.kind === 'connector'
             const isMounted = mounted.has(key)
+            const isEnabled = installed[key]?.enabled === true
+            const switchOn = isConnector ? isEnabled : isMounted
             return h('article', { className: 'wbh-card', key },
               h(Avatar, { entry: entry, size: 30 }),
               h('div', { className: 'wbh-itemBody' },
@@ -451,7 +474,7 @@ window.__ModuleLoader__.load({
                 entry.flags?.length ? h('div', { className: 'wbh-flags' }, `⚠ ${entry.flags.length} 条安全扫描标记`) : null,
               ),
               isConnector
-                ? h('span', { className: `wbh-switch${isMounted ? ' on' : ''}`, role: 'switch', 'aria-checked': isMounted ? 'true' : 'false' }, h('i', null))
+                ? h('span', { className: `wbh-switch${switchOn ? ' on' : ''}`, role: 'switch', 'aria-checked': switchOn ? 'true' : 'false' }, h('i', null))
                 : h('span', { className: `wbh-action${isMounted ? '' : ' primary'}` }, busy === key ? '…' : isMounted ? '已挂载' : entry.kind === 'expert' ? '召唤' : '挂载'),
             )
           }),
