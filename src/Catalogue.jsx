@@ -1,14 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { hub } from './hub.js'
 import { WbIcon } from './icons.js'
+import './official-skill.css'
 
 const KINDS = [
   { id: 'expert', label: '专家', icon: 'person' },
   { id: 'skill', label: '技能', icon: 'sparkle' },
   { id: 'connector', label: '连接器', icon: 'link' },
 ]
-
-const SORTS = ['综合', '最热', '最新']
 
 /**
  * The official marketplace surface: um-tab kind selector, sort tabs,
@@ -22,7 +21,6 @@ export default function Catalogue({
   const [rows, setRows] = useState([])
   const [categories, setCategories] = useState([])
   const [category, setCategory] = useState('')
-  const [sort, setSort] = useState(0)
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState('')
 
@@ -96,6 +94,36 @@ export default function Catalogue({
       )}
       {rows.map(entry => {
         const key = `${entry.kind}/${entry.name}`
+        if (entry.kind === 'skill') {
+          // Official skill-card: icon + name + "+" install button + two-line desc.
+          return (
+            <div key={key} className="skill-card" role="button" tabIndex={0}
+              onClick={() => onDetail?.(entry)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onDetail?.(entry) } }}>
+              <div className="skill-card-content">
+                <div className="skill-card-icon">
+                  {entry.icon
+                    ? <img src={entry.icon} alt={entry.displayName} width={28} height={28}
+                        style={{ borderRadius: 6, objectFit: 'cover', flexShrink: 0, background: 'rgba(128,128,128,.15)' }} />
+                    : <span className="wbh-avatar-letter" style={{ width: 28, height: 28, borderRadius: 6 }}>{(entry.displayName || '?').slice(0, 1)}</span>}
+                </div>
+                <div className="skill-card-top">
+                  <div className="skill-card-body">
+                    <div className="skill-card-name-row">
+                      <span className="skill-card-name">{entry.displayName}</span>
+                    </div>
+                  </div>
+                </div>
+                <button type="button" className="skill-add-btn" aria-label={`安装 ${entry.displayName}`}
+                  disabled={busy === key}
+                  onClick={e => { e.stopPropagation(); onAction?.(entry) }}>
+                  <WbIcon name="plus" size={14} />
+                </button>
+              </div>
+              <div className="skill-card-desc skill-card-desc--two-lines">{entry.description || entry.name}</div>
+            </div>
+          )
+        }
         return (
           <article key={key}
             className={`ec-expert-card${entry.kind === 'expert' ? ' ec-expert-card--selectable' : ''}`}
@@ -135,19 +163,21 @@ export default function Catalogue({
     </div>
   )
 
+  const searchBox = (
+    <div className="ec-search-wrapper">
+      <WbIcon name="search" size={14} />
+      <input value={query} placeholder={`搜索${kindMeta.label}`}
+        aria-label={`搜索${kindMeta.label}`}
+        onChange={e => onQuery(e.target.value)} />
+    </div>
+  )
+
   if (variant === 'picker') {
     return (
       <div className="ec-picker-panel">
         <div className="ec-picker-header">
           {kindTabs}
-          <div className="ec-picker-header-right">
-            <div className="ec-search-wrapper">
-              <WbIcon name="search" size={14} />
-              <input value={query} placeholder={`搜索${kindMeta.label}`}
-                aria-label={`搜索${kindMeta.label}`}
-                onChange={e => onQuery(e.target.value)} />
-            </div>
-          </div>
+          <div className="ec-picker-header-right">{searchBox}</div>
         </div>
         {categoryRow}
         <div className="ec-picker-scroll">{grid}</div>
@@ -161,18 +191,10 @@ export default function Catalogue({
         <div className="ec-topbar__left">
           <div className="um-header__inner">{kindTabs}</div>
         </div>
+        <div className="ec-topbar__right">{searchBox}</div>
       </header>
       <div className="ec-page-layout">
         <div className="ec-main-content">
-          <div className="ec-list-tabs-row">
-            <div className="ec-list-tabs">
-              {SORTS.map((s, i) => (
-                <button key={s} type="button"
-                  className={`ec-list-tab${sort === i ? ' is-active' : ''}`}
-                  onClick={() => setSort(i)}>{s}</button>
-              ))}
-            </div>
-          </div>
           {categoryRow}
           <div className="ec-main-scroll">{grid}</div>
         </div>

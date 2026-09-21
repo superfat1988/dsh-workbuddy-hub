@@ -1,0 +1,91 @@
+.skill-card { display:flex;flex-direction:column;padding:16px 20px;border-radius:16px;border:1px solid var(--wb-border-card-static);background:var(--wb-bg-card);box-shadow:var(--wb-shadow-card-soft);transition:background .2s ease,box-shadow .2s ease,border-color .2s ease;cursor:pointer;min-height:84px;max-height:fit-content;min-width:0;position:relative;overflow:visible }
+.skill-card:hover { background:var(--wb-bg-card-hover);box-shadow:var(--wb-shadow-card-soft);border-color:#00000014 }
+.skill-card--disabled .skill-card-icon { opacity:.35 }
+.skill-card--disabled .skill-card-name { color:var(--wb-color-text-secondary);opacity:.55 }
+.skill-card--disabled .skill-card-desc { color:var(--wb-color-text-tertiary);opacity:.55 }
+.skill-card--disabled .skill-card-meta { opacity:.55 }
+.skill-card--batch-mode { cursor:pointer;padding-left:34px }
+.skill-card--batch-mode .skill-card-body { cursor:pointer }
+.skill-card--batch-mode .skill-checkbox { pointer-events:none }
+.skill-card-content { display:flex;flex-direction:row;align-items:center;flex:1;gap:12px;min-width:0 }
+.skill-card-badge { flex-shrink:0;font-size:10px;font-weight:600;padding:2px 6px;border-radius:4px;white-space:nowrap;line-height:1.3 }
+.skill-card-badge--plugin { background:color-mix(in srgb,var(--wb-accent-purple) 20%,transparent);color:var(--wb-accent-purple) }
+.skill-card-name-status-icon { display:inline-flex;align-items:center;margin-left:4px }
+.skill-card-name-status-icon--api-key { color:currentColor }
+.skill-card-feature-tags { display:flex;flex-wrap:wrap;gap:4px;margin-top:6px }
+.skill-card-feature-tag { font-size:10px;font-weight:500;padding:2px 6px;border-radius:3px;background:color-mix(in srgb,var(--wb-border-subtle) 40%,transparent);color:var(--wb-color-text-tertiary);white-space:nowrap }
+.skill-card-feature-tag--skills { background:color-mix(in srgb,var(--wb-status-success) 15%,transparent);color:var(--wb-status-success) }
+.skill-card-feature-tag--commands { background:color-mix(in srgb,var(--wb-accent-blue) 15%,transparent);color:var(--wb-accent-blue) }
+.skill-card-feature-tag--mcp { background:color-mix(in srgb,var(--wb-status-warning) 15%,transparent);color:var(--wb-status-warning) }
+.skill-card-feature-tag--agents { background:color-mix(in srgb,var(--wb-accent-pink) 15%,transparent);color:var(--wb-accent-pink) }
+.skill-card-feature-tag--hooks { background:color-mix(in srgb,var(--wb-accent-purple) 15%,transparent);color:var(--wb-accent-purple) }
+.skill-card-feature-tag--rules { background:color-mix(in srgb,var(--wb-accent-teal) 15%,transparent);color:var(--wb-accent-teal) }
+.skill-card-main-row { display:flex;align-items:center;gap:12px }
+.skill-card-icon { width:28px;height:28px;border-radius:28px;display:inline-flex;align-items:center;justify-content:center;color:var(--wb-color-text-secondary);flex-shrink:0;overflow:hidden }
+.skill-card-icon img { width:28px;height:28px;border-radius:28px }
+.skill-card-body { flex:1;min-width:0;cursor:pointer }
+.skill-card-name-row { display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:nowrap;width:100%;margin-bottom:2px }
+.skill-card-name { font-size:14.5px;font-weight:650;letter-spacing:-.01em;color:var(--wb-color-text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1 1 auto;line-height:1.4 }
+.skill-card-source { flex-shrink:0;font-size:11px;font-weight:500;color:var(--wb-color-text-secondary);background:var(--wb-bg-hover);padding:1px 6px;border-radius:4px;white-space:nowrap;line-height:1.4 }
+.skill-card-desc { margin-top:10px;font-size:12px;color:var(--wb-color-text-secondary);line-height:1.6;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis;white-space:normal;min-height:38px;align-self:stretch }
+.skill-card-desc--two-lines { -webkit-line-clamp:2 }
+.skill-card-stats { display:flex;align-items:center;gap:10px;margin-top:4px }
+.skill-card-stat { display:inline-flex;align-items:center;gap:3px;font-size:11px;color:var(--wb-color-text-secondary) }
+.skill-card-stat svg { opacity:.7 }
+.skill-card-installed-check { display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;color:var(--wb-text-weak);flex-shrink:0 }
+.skill-card-installed-check svg { width:14px;height:14px;stroke-width:2.5 }
+button.skill-card-installed-check { background:transparent;border:0;padding:0;cursor:pointer;position:relative }
+button.skill-card-installed-check:hover { color:var(--wb-color-text-primary) }
+button.skill-card-installed-check:focus-visible { outline:2px solid var(--wb-border-focus);outline-offset:1px;border-radius:4px }
+.skill-card-installed-check__default,.skill-card-installed-check__hover { position:absolute;inset:0;display:inline-flex;align-items:center;justify-content:center;transition:opacity .12s ease;pointer-events:none }
+.skill-card-installed-check__default { opacity:1 }
+.skill-card-installed-check__hover,button.skill-card-installed-check:hover .skill-card-installed-check__default { opacity:0 }
+button.skill-card-installed-check:hover .skill-card-installed-check__hover { opacity:1 }
+.skill-card:has(.skill-card-menu) { z-index:50 }
+.skill-card:has(.skill-card-menu) .skill-status { z-index:60 }
+.skill-card-menu-wrap { position:relative;display:inline-flex;align-items:center }
+.skill-card--installed-list-mode .skill-card-pin,.skill-card--installed-list-mode .skill-card-menu-wrap { opacity:0;width:0;min-width:0;margin:0;padding:0;overflow:hidden;pointer-events:none;transition:opacity .12s ease,width .12s ease }
+.skill-card--installed-list-mode:hover .skill-card-pin,.skill-card--installed-list-mode:hover .skill-card-menu-wrap { opacity:1;width:22px;min-width:22px;padding:initial;pointer-events:auto;overflow:visible }
+.skill-card--installed-list-mode .skill-card-pin.skill-card-pin--active { opacity:1;width:22px;min-width:22px;padding:initial;pointer-events:auto }
+.skill-card--installed-list-mode .skill-card-menu-wrap:has(.skill-card-menu) { opacity:1;width:22px;min-width:22px;padding:initial;pointer-events:auto;overflow:visible }
+.skill-card-pin { width:22px;height:22px;padding:0;border:none;border-radius:5px;background:transparent;color:var(--wb-text-weak);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background-color .15s ease,color .15s ease,opacity .12s ease }
+.skill-card-pin svg { width:14px;height:14px }
+.skill-card-pin:hover { background:var(--wb-bg-hover);color:var(--wb-color-text-primary) }
+.skill-card-pin:focus-visible { outline:2px solid var(--wb-border-focus);outline-offset:1px }
+.skill-card-pin--active { color:var(--wb-color-text-primary) }
+.skill-card-switch-wrap { display:inline-flex;align-items:center;flex-shrink:0;line-height:0 }
+.skill-card-switch-wrap .cb-switch--small .cb-switch__track { width:26px;height:16px;padding:0 }
+.skill-card-switch-wrap .cb-switch--small .cb-switch__thumb { width:12px;height:12px;top:2px;left:2px;background:var(--wb-text-on-primary) }
+.skill-card-switch-wrap .cb-switch--small.cb-switch--checked .cb-switch__thumb { transform:translate(10px) }
+.skill-card-switch-wrap .cb-switch--small .cb-switch__icon { width:10px;height:10px }
+body.vscode-dark .skill-card-switch-wrap .cb-switch--small.cb-switch--checked .cb-switch__track,body[data-vscode-theme-kind=vscode-dark] .skill-card-switch-wrap .cb-switch--small.cb-switch--checked .cb-switch__track { background:var(--wb-brand-primary-deep) }
+.skill-card-menu-btn { width:22px;height:22px;border-radius:5px;border:none;background:transparent;color:var(--wb-text-weak);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background-color .15s,color .15s }
+.skill-card-menu-btn:hover,.skill-card-menu-btn.is-open { background:var(--wb-bg-hover);color:var(--wb-color-text-primary) }
+.skill-card-menu-btn svg { width:14px;height:14px }
+.skill-card-menu { position:absolute;top:calc(100% + 4px);right:0;min-width:108px;padding:4px;background:var(--wb-bg-popover);border:1px solid var(--wb-border-default);border-radius:8px;box-shadow:0 8px 24px var(--wb-border-default);z-index:100 }
+.skill-card-menu-item { display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:12px;color:var(--wb-color-text-secondary);border-radius:6px;cursor:pointer;line-height:1.2;white-space:nowrap;transition:background .1s }
+.skill-card-menu-item svg { width:13px;height:13px;flex-shrink:0 }
+.skill-card-menu-item:hover { background:var(--wb-bg-hover);color:var(--wb-color-text-primary) }
+.skill-add-btn { flex-shrink:0;margin-left:8px;align-self:flex-start;margin-top:2px;width:26px;height:26px;border-radius:6px;border:none;background:var(--wb-bg-hover);color:var(--wb-color-text-primary);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .15s,color .15s;padding:0 }
+.skill-add-btn svg { width:14px;height:14px;stroke-width:2 }
+.skill-add-btn:hover { background:var(--wb-border-default) }
+.skill-add-btn--loading { pointer-events:none }
+body.vscode-light .skill-add-btn,body[data-vscode-theme-kind=vscode-light] .skill-add-btn { background:var(--wb-bg-hover);color:var(--wb-color-text-primary) }
+body.vscode-light .skill-add-btn:hover,body[data-vscode-theme-kind=vscode-light] .skill-add-btn:hover { background:var(--wb-bg-hover) }
+.skill-card:hover .skill-install-float { opacity:1;transform:translateY(0) }
+.skill-card:hover .skill-install-float--try-now { opacity:1;transform:translateY(0) }
+.skill-card-top { display:flex;flex-direction:column;flex:1;min-width:0;gap:0 }
+.skill-card-reason { position:absolute;top:0;left:0;z-index:1;display:inline-flex;align-items:center;gap:4px;font-size:12px;line-height:2;font-weight:600;letter-spacing:.01em;padding:0 8px 0 10px;background:var(--wb-brand-primary-subtle);border:none;border-radius:16px 0 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:calc(100% - 24px);color:var(--wb-brand-primary-deep) }
+.skill-card-reason:before { content:"";width:12px;height:12px;flex-shrink:0;background-color:currentColor;mask-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path transform='matrix(1 0 0 1 0.999974 0.5)' d='M0 5.7L0 5.6727Q0 4.8316 0.0412 4.5297Q0.119 3.9597 0.4394 3.6393Q0.7597 3.319 1.3298 3.2412Q1.6316 3.2 2.4727 3.2L2.6535 3.2L3.4226 1.1492Q3.617 0.6307 4.0721 0.3154Q4.5272 0 5.0808 0Q5.8722 0 6.4001 0.5895Q6.9281 1.179 6.8412 1.9655L6.7045 3.2023Q7.3412 3.2083 7.6128 3.2295Q8.2529 3.2794 8.6392 3.4806Q9.6283 3.9957 9.9078 5.0753Q10.0169 5.4969 9.9217 6.1319Q9.8653 6.5073 9.6207 7.5672L9.6207 7.5673L9.5686 7.7932Q9.2248 9.2828 8.9033 9.7078Q8.5159 10.2199 7.9297 10.4823Q7.4433 10.7 5.9146 10.7L2.4727 10.7Q1.6316 10.7 1.3298 10.6588Q0.7597 10.581 0.4394 10.2606Q0.119 9.9403 0.0412 9.3703Q0 9.0684 0 8.2273L0 5.7ZM1 5.7L1 8.2273Q1 9.4071 1.1465 9.5536Q1.2884 9.6955 2.3999 9.6999L2.3999 4.2002Q1.2884 4.2045 1.1465 4.3464Q1 4.4929 1 5.6727L1 5.7ZM3.3999 4.0029L3.3999 9.7L5.9146 9.7Q7.2298 9.7 7.5211 9.5696Q7.8732 9.412 8.1059 9.1044Q8.2985 8.8498 8.5942 7.5683L8.6463 7.3424L8.6463 7.3424Q9.0306 5.6771 8.9397 5.3259Q8.7718 4.6771 8.1774 4.3676Q7.8555 4.2 6.1465 4.2Q5.9369 4.206 5.793 4.0535Q5.6405 3.9095 5.6465 3.6999Q5.6465 3.6862 5.6473 3.6725Q5.648 3.6587 5.6495 3.645L5.8472 1.8557Q5.885 1.5133 5.6552 1.2566Q5.4254 1 5.0808 1Q4.5465 1 4.3589 1.5003L3.4682 3.8755Q3.4428 3.946 3.3999 4.0029Z' fill-rule='evenodd' fill='black'/></svg>");-webkit-mask-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path transform='matrix(1 0 0 1 0.999974 0.5)' d='M0 5.7L0 5.6727Q0 4.8316 0.0412 4.5297Q0.119 3.9597 0.4394 3.6393Q0.7597 3.319 1.3298 3.2412Q1.6316 3.2 2.4727 3.2L2.6535 3.2L3.4226 1.1492Q3.617 0.6307 4.0721 0.3154Q4.5272 0 5.0808 0Q5.8722 0 6.4001 0.5895Q6.9281 1.179 6.8412 1.9655L6.7045 3.2023Q7.3412 3.2083 7.6128 3.2295Q8.2529 3.2794 8.6392 3.4806Q9.6283 3.9957 9.9078 5.0753Q10.0169 5.4969 9.9217 6.1319Q9.8653 6.5073 9.6207 7.5672L9.6207 7.5673L9.5686 7.7932Q9.2248 9.2828 8.9033 9.7078Q8.5159 10.2199 7.9297 10.4823Q7.4433 10.7 5.9146 10.7L2.4727 10.7Q1.6316 10.7 1.3298 10.6588Q0.7597 10.581 0.4394 10.2606Q0.119 9.9403 0.0412 9.3703Q0 9.0684 0 8.2273L0 5.7ZM1 5.7L1 8.2273Q1 9.4071 1.1465 9.5536Q1.2884 9.6955 2.3999 9.6999L2.3999 4.2002Q1.2884 4.2045 1.1465 4.3464Q1 4.4929 1 5.6727L1 5.7ZM3.3999 4.0029L3.3999 9.7L5.9146 9.7Q7.2298 9.7 7.5211 9.5696Q7.8732 9.412 8.1059 9.1044Q8.2985 8.8498 8.5942 7.5683L8.6463 7.3424L8.6463 7.3424Q9.0306 5.6771 8.9397 5.3259Q8.7718 4.6771 8.1774 4.3676Q7.8555 4.2 6.1465 4.2Q5.9369 4.206 5.793 4.0535Q5.6405 3.9095 5.6465 3.6999Q5.6465 3.6862 5.6473 3.6725Q5.648 3.6587 5.6495 3.645L5.8472 1.8557Q5.885 1.5133 5.6552 1.2566Q5.4254 1 5.0808 1Q4.5465 1 4.3589 1.5003L3.4682 3.8755Q3.4428 3.946 3.3999 4.0029Z' fill-rule='evenodd' fill='black'/></svg>");mask-repeat:no-repeat;-webkit-mask-repeat:no-repeat;mask-size:contain;-webkit-mask-size:contain }
+body.vscode-dark .skill-card-reason,body[data-vscode-theme-kind=vscode-dark] .skill-card-reason { background:color-mix(in srgb,var(--wb-brand-primary) 18%,transparent);color:var(--wb-brand-primary) }
+.skill-card:hover .skill-install-btn { opacity:1;visibility:visible;pointer-events:auto }
+.skills-featured-section .skill-card { min-height:109px }
+.skills-featured-section--has-reasons .skill-card { padding:36px 20px 16px }
+.skill-card--skeleton { cursor:default;pointer-events:none }
+.skill-card--skeleton .skill-card-skeleton-block { background:linear-gradient(90deg,color-mix(in srgb,var(--wb-border-subtle) 50%,transparent) 25%,var(--wb-bg-hover) 50%,color-mix(in srgb,var(--wb-border-subtle) 50%,transparent) 75%);background-size:200% 100%;animation:skill-skeleton-shimmer 1.5s ease-in-out infinite }
+.skill-card-skeleton-line { height:12px;border-radius:6px;background:linear-gradient(90deg,color-mix(in srgb,var(--wb-border-subtle) 50%,transparent) 25%,var(--wb-bg-hover) 50%,color-mix(in srgb,var(--wb-border-subtle) 50%,transparent) 75%);background-size:200% 100%;animation:skill-skeleton-shimmer 1.5s ease-in-out infinite }
+.skill-card-skeleton-line--name { width:60%;height:14px }
+.skill-card-skeleton-line--desc { width:90%;margin-top:6px }
+.skill-card-skeleton-toggle { width:38px;height:22px;border-radius:999px;flex-shrink:0;background:linear-gradient(90deg,color-mix(in srgb,var(--wb-border-subtle) 50%,transparent) 25%,var(--wb-bg-hover) 50%,color-mix(in srgb,var(--wb-border-subtle) 50%,transparent) 75%);background-size:200% 100%;animation:skill-skeleton-shimmer 1.5s ease-in-out infinite }
+body.vscode-dark .skill-card:hover,body[data-vscode-theme-kind=vscode-dark] .skill-card:hover { background:var(--wb-color-bg-card-hover);border-color:var(--wb-border-subtle) }
+:root.theme-switching .skill-card,body.theme-switching .skill-card { transition:none }

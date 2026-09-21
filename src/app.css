@@ -1,5 +1,6 @@
 /* Plugin-owned chrome: composer "+" anchor, popup shell, rail chips, settings.
    Everything catalogue-shaped comes from the official stylesheet. */
+:root{--wb-spacing-12:64px}
 .wbh-anchor{position:relative;display:inline-flex;align-items:center}
 .wbh-plus{display:grid;place-items:center;flex:none;width:28px;height:28px;padding:0;border:none;border-radius:999px;background:transparent;color:var(--dsw-alias-label-primary);cursor:pointer;transition:background-color 100ms ease}
 .wbh-plus:hover:not(:disabled),.wbh-plus[aria-expanded="true"]{background:var(--dsw-alias-interactive-bg-hover-solid)}
@@ -88,6 +89,7 @@
 .ec-list-tab.is-active{color:var(--wb-color-text-primary);font-weight:600}
 .ec-list-tab.is-active::after{content:"";position:absolute;left:0;right:0;bottom:-3px;height:2px;border-radius:2px;background:var(--wb-color-text-primary)}
 .ec-category-tabs-wrap{padding:0 var(--ec-page-gutter);margin-bottom:8px}
+.ec-category-tab{font-size:12.5px;padding:4px 12px}
 .ec-picker-scroll{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--wb-border-default) transparent}
 
 /* --- 二段弹窗第一段：菜单 --- */
@@ -101,3 +103,7 @@
 /* --- 官方弹窗卡片宽度 --- */
 .ec-modal-overlay{z-index:6300;padding:20px}
 .ec-modal-card{width:640px;max-width:calc(100vw - 40px);max-height:640px}
+.ec-modal-card .ec-modal-quick-prompt-btn{font-size:14px;line-height:22px;background:#f7f7f7;min-height:48px;height:48px;gap:16px;padding:12px 16px;border:none;box-sizing:border-box}
+.ec-modal-card .ec-modal-quick-prompt-btn .ec-modal-quick-prompt-text{font-size:14px;line-height:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ec-modal-card.is-expert-view .ec-modal-header-summon-btn{min-width:124px;height:32px}
+.ec-modal-card.is-expert-view .ec-modal-close{padding:0}
