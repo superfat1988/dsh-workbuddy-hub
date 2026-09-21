@@ -43,7 +43,7 @@ function toEntry(row, kind) {
     icon,
     tags: (row.tags ?? []).map(t => (typeof t === 'string' ? t : t.zh || t.en)).filter(Boolean).slice(0, 4),
     quickPrompts: (row.quickPrompts ?? []).map(q => (typeof q === 'string' ? q : q.zh || q.en)).filter(Boolean),
-    useCount: row.use_count ?? row.useCount ?? row.usage ?? '',
+    useCount: row.use_count || row.useCount || row.usage || '',
     official: true,
   }
 }

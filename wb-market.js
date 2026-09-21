@@ -106,11 +106,12 @@ export async function bearer(stateDir) {
 
 // ---- market reads ---------------------------------------------------------
 /** Expert/skill catalogue from the official market API. */
-export async function marketList(kind, { page = 1, pageSize = 60, query = '', categoryId } = {}, stateDir) {
+export async function marketList(kind, { page = 1, pageSize = 60, query = '', categoryId, categories } = {}, stateDir) {
   const token = await bearer(stateDir)
   const payload = { page, page_size: pageSize }
   if (query) payload.keyword = query
-  if (categoryId && categoryId !== 'all') payload.category_id = categoryId
+  const cats = Array.isArray(categories) && categories.length ? categories : (categoryId && categoryId !== 'all' ? [categoryId] : [])
+  if (cats.length) payload.categories = cats
   const { status, json } = await call('POST', `/v2/operation-platform/market/${kind}/list`, { token, body: payload })
   if (status !== 200 || json?.code !== 0) {
     const err = new Error(`official market ${kind} list failed: HTTP ${status} code=${json?.code} msg=${json?.msg}`)
@@ -127,8 +128,13 @@ export async function marketCategories(kind, stateDir) {
   const token = await bearer(stateDir)
   const path = kind === 'expert' ? '/v2/operation-platform/market/expert-categories' : `/v2/operation-platform/market/categories?type=${kind}`
   const { status, json } = await call('GET', path, { token })
-  if (status !== 200 || json?.code !== 0) return []
-  return json.data?.items ?? []
+  if (status === 200 && json?.code === 0) {
+    const items = json.data?.items ?? []
+    if (items.length) return items.map(i => ({ id: i.id, label: i.name_zh ?? i.name?.zh ?? i.name, count: i.item_count ?? i.count ?? 0 }))
+  }
+  // No-login fallback: the captured official snapshot (labels + counts).
+  const { FALLBACK_CATEGORIES } = await import('./wb-cats.js')
+  return FALLBACK_CATEGORIES[kind === 'expert' ? 'expert' : 'skill'] ?? []
 }
 
 /** Full records for the given skill ids (includes download_url). */

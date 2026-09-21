@@ -706,7 +706,7 @@ export function apply(ctx, config = {}) {
       const q = (url.searchParams.get('q') || '').trim()
       if (q) payload.keyword = q
       const cat = url.searchParams.get('category')
-      if (cat && cat !== 'all') payload.category_id = cat
+      if (cat && cat !== 'all') payload.categories = [cat]
       try {
         const { total, rows } = await marketList(kind, payload, P.state)
         json(res, 200, { ok: true, source: 'official', total, rows })
