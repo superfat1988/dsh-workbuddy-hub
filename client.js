@@ -165,6 +165,49 @@ window.__ModuleLoader__.load({
 .wbh-btnPrimary:hover:not(:disabled){filter:brightness(1.05)}
 .wbh-btnPrimary:disabled{opacity:.6;cursor:default}
 @media(max-width:760px){.wbh-menu{flex-direction:column;left:-40px}.wbh-pane{width:min(420px,calc(100vw - 28px));margin:6px 0 0;max-height:46vh}.wbh-grid{grid-template-columns:1fr}}
+/* ================= WorkBuddy parity layer =================
+   Geometry, typography, radii, shadows and hover behaviour are taken from
+   WorkBuddy's shipped marketplace stylesheet (cb-plugins-marketplace-*,
+   cb-plugins-card-*, cb-plugin-detail-dropdown*), mapped onto DSH's alias
+   tokens so the widget still follows the active theme. Rules here come last,
+   so they override the earlier Draft look of the same selectors. */
+.wbh-tabs{display:flex;align-items:center;gap:8px;margin-bottom:16px;padding:0;border-bottom:0;flex-wrap:wrap}
+.wbh-tab{display:flex;align-items:center;gap:4px;padding:6px 8px 6px 12px;border-radius:16px;border:1px solid var(--dsw-alias-border-l2);background:transparent;font-size:13px;color:var(--dsw-alias-label-secondary);transition:all .15s ease}
+.wbh-tab:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
+.wbh-tab.on{background:var(--dsw-alias-interactive-bg-hover-solid);border-color:var(--dsw-alias-label-info,#0078d4);color:var(--dsw-alias-label-primary);font-weight:500}
+.wbh-menuRow{padding:8px 12px;border-radius:4px;font-size:13px}
+.wbh-item{padding:8px 12px;border-radius:4px}
+.wbh-itemName{font-size:13px}
+.wbh-itemDesc{font-size:12px;line-height:1.5;-webkit-line-clamp:2}
+.wbh-card{padding:16px;gap:8px;border-radius:8px;align-items:center;transition:all .15s ease;cursor:pointer;position:relative}
+.wbh-card:hover{border-color:var(--dsw-alias-label-info,#0078d4);background:var(--dsw-alias-bg-layer-1)}
+.wbh-card .wbh-itemDesc{font-size:13px;color:var(--dsw-alias-label-secondary)}
+.wbh-card .wbh-action,.wbh-card .wbh-connect,.wbh-card .wbh-switch{opacity:0;visibility:hidden;transition:opacity .15s ease}
+.wbh-card:hover .wbh-action,.wbh-card:hover .wbh-connect,.wbh-card:hover .wbh-switch,
+.wbh-card .wbh-switch.on{opacity:1;visibility:visible}
+.wbh-cardMenu{position:absolute;top:8px;right:8px;display:flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;border:0;border-radius:4px;background:transparent;color:var(--dsw-alias-label-primary);opacity:.6;cursor:pointer;transition:all .15s ease}
+.wbh-cardMenu:hover{opacity:1;background:var(--dsw-alias-bg-layer-3)}
+.wbh-chipFilter{display:flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:4px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:12px;max-width:200px}
+.wbh-chipFilter span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wbh-chipFilter button{width:12px;height:12px;padding:0;border:0;background:transparent;color:inherit;opacity:.7;cursor:pointer;line-height:1}
+.wbh-chipFilter button:hover{opacity:1}
+/* WorkBuddy's marketplace page is bare: pill row, then the search field, then the
+   card grid — no surrounding bordered panel. */
+.wbh-panel{border:0;background:transparent;border-radius:0;overflow:visible}
+.wbh-panelHead{padding:0;border-bottom:0;margin-bottom:12px}
+.wbh-tabs{padding:0;border-bottom:0;background:transparent;margin:0 0 16px}
+.wbh-grid{padding:0;gap:10px}
+.wbh-addBtn{display:flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:1px dashed var(--dsw-alias-border-l3);border-radius:16px;background:transparent;color:var(--dsw-alias-label-primary);opacity:.6;cursor:pointer;transition:all .15s ease}
+.wbh-addBtn:hover{opacity:1;border-color:var(--dsw-alias-label-info,#0078d4);background:var(--dsw-alias-bg-layer-2)}
+.wbh-menuRowChev{width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center}
+/* Confirm / authorisation dialogs follow the panel language: 10px radius and the
+   same 0 8px 24px 12% shadow the marketplace dropdown uses. */
+.wbh-modal{padding:20px;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12)}
+.wbh-modalTitle{font-size:15px;font-weight:600}
+.wbh-modalBadge{display:inline-flex;align-items:center;gap:4px;padding:1px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;font-size:11px;color:var(--dsw-alias-label-secondary)}
+.wbh-authRow{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);margin-bottom:8px}
+.wbh-authKey{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--dsw-alias-label-secondary)}
+.wbh-modalIcon{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:10px;background:var(--dsw-alias-bg-layer-3)}
 `
 
     /* ---------------- data layer ---------------- */
@@ -253,6 +296,57 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** 连接器授权：需要凭证时给出明确的授权步骤，必要时外跳授权页（新标签页）。 */
+    function AuthDialog({ entry, refs, error, onClose, onRetry, busy, authDomain = '', retryable = true }) {
+      const domain = authDomain !== '' ? authDomain : (entry?.cli?.authDomain ?? '')
+      const authUrl = domain === '' ? '' : `https://${domain.replace(/^https?:\/\//, '')}`
+      return h('div', { className: 'wbh-root wbh-modalRoot', role: 'dialog', 'aria-modal': 'true',
+        'aria-label': `连接 ${zh(entry)}` },
+        h('style', null, STYLE),
+        h('div', { className: 'wbh-modalScrim', onClick: onClose }),
+        h('div', { className: 'wbh-modal' },
+          h('div', { className: 'wbh-modalHead' },
+            h('span', { className: 'wbh-modalIcon' }, h(KindIcon, { kind: 'connector', size: 18 })),
+            h('div', { style: { minWidth: 0 } },
+              h('h3', { className: 'wbh-modalTitle' }, `连接 ${zh(entry)}`),
+              h('p', { className: 'wbh-modalSub' }, '授权完成后回到本对话框重试'),
+            ),
+          ),
+          h('p', { className: 'wbh-modalDesc' }, error || entry?.description || ''),
+          refs.length === 0 && retryable === false && h('div', { className: 'wbh-authRow' },
+            h(KindIcon, { kind: 'skill', size: 14 }),
+            h('span', { className: 'wbh-authKey' }, 'CLI'),
+            h('span', { style: { flex: 1 } }),
+            h('span', { className: 'wbh-modalBadge' }, '技能已挂载'),
+          ),
+          refs.length > 0 && h('div', null,
+            h('p', { className: 'wbh-modalSub', style: { marginBottom: 6 } }, '该连接器需要以下凭证'),
+            refs.map(ref => h('div', { className: 'wbh-authRow', key: ref },
+              h(KindIcon, { kind: 'connector', size: 14 }),
+              h('span', { className: 'wbh-authKey' }, ref),
+              h('span', { style: { flex: 1 } }),
+              h('span', { className: 'wbh-modalBadge' }, '待配置'),
+            )),
+          ),
+          h('p', { className: 'wbh-modalDesc' },
+            authUrl === ''
+              ? '凭证由 DSH 凭证管理持有；配置后点「重试连接」即可。'
+              : `该连接器的授权入口在 ${domain}；点击「打开授权页」会新开标签页，授权后回来重试。`),
+          h('div', { className: 'wbh-modalFoot' },
+            h('button', { type: 'button', className: 'wbh-btnGhost', onClick: onClose }, '关闭'),
+            authUrl !== '' && h('button', {
+              type: 'button', className: 'wbh-btnGhost',
+              onClick: () => { window.open(authUrl, '_blank', 'noopener') },
+            }, '打开授权页'),
+            retryable && h('button', {
+              type: 'button', className: 'wbh-btnPrimary', disabled: busy,
+              onClick: () => { void onRetry() },
+            }, busy ? '连接中…' : '重试连接'),
+          ),
+        ),
+      )
+    }
+
     /** Connector affordance: labelled 连接 until connected, switch afterwards. */
     function ConnectorAction({ on, busy, onToggle }) {
       if (on) {
@@ -310,6 +404,7 @@ window.__ModuleLoader__.load({
     }
 
     function MarketMenu({ sessionId, onClose, onOpenPanel }) {
+      const [authorising, setAuthorising] = useState(null)
       const [summoning, setSummoning] = useState(null)
       const [kind, setKind] = useState('expert')
       const [query, setQuery] = useState('')
@@ -358,10 +453,9 @@ window.__ModuleLoader__.load({
           }
           notify()
         } catch (error) {
-          const missing = (error.body?.credentialRefs ?? []).join('、')
-          setNotice(missing !== ''
-            ? `「${zh(entry)}」需要先配置凭证：${missing}`
-            : `失败：${error.message}`)
+          const refs = error.body?.credentialRefs ?? []
+          if (refs.length > 0) setAuthorising({ entry, refs, error: error.message })
+          else setNotice(`失败：${error.message}`)
         } finally { setBusy('') }
       }, [installed, sessionId])
 
@@ -439,6 +533,13 @@ window.__ModuleLoader__.load({
           onCancel: () => setSummoning(null),
           onConfirm: async task => { await attach(summoning, task); setSummoning(null) },
         }),
+        authorising !== null && h(AuthDialog, {
+          entry: authorising.entry, refs: authorising.refs, error: authorising.error,
+          authDomain: authorising.authDomain ?? '', retryable: authorising.retryable !== false,
+          busy: busy === `${authorising.entry.kind}/${authorising.entry.name}`,
+          onClose: () => setAuthorising(null),
+          onRetry: async () => { await attach(authorising.entry); setAuthorising(null) },
+        }),
       )
     }
 
@@ -510,6 +611,7 @@ window.__ModuleLoader__.load({
     /* ---------------- global market page ---------------- */
 
     function MarketPanel({ kind, sessionId, onNotice }) {
+      const [authorising, setAuthorising] = useState(null)
       const [summoning, setSummoning] = useState(null)
       const [query, setQuery] = useState('')
       const [busy, setBusy] = useState('')
@@ -531,6 +633,27 @@ window.__ModuleLoader__.load({
         setBusy(key)
         try {
           if (!installed[key]) await post('/install', { kind: entry.kind, name: entry.name })
+          if (entry.kind === 'connector' && entry.hasCliJson === true && entry.hasMcpJson !== true) {
+            // CLI 型连接器没有 MCP 传输：它的能力是随包挂载的技能，授权走外部页面。
+            setAuthorising({
+              entry, refs: [], retryable: false,
+              authDomain: installed[key]?.cli?.authDomain ?? '',
+              error: installed[key]?.cli?.needsAuth === true
+                ? '该连接器通过命令行授权，完成后即可在本机使用其技能。'
+                : '该连接器的技能已挂载。',
+            })
+            return
+          }
+          if (entry.kind === 'connector' && entry.hasCliJson === true && entry.hasMcpJson !== true) {
+            setAuthorising({
+              entry, refs: [], retryable: false,
+              authDomain: installed[key]?.cli?.authDomain ?? '',
+              error: installed[key]?.cli?.needsAuth === true
+                ? '该连接器通过命令行授权，完成后即可在本机使用其技能。'
+                : '该连接器的技能已挂载。',
+            })
+            return
+          }
           if (entry.kind === 'connector') {
             // Connect the transport; the session attachment follows it so the
             // chip and the switch can never disagree with reality.
@@ -558,8 +681,9 @@ window.__ModuleLoader__.load({
           }
           notify()
         } catch (error) {
-          const missing = (error.body?.credentialRefs ?? []).join('、')
-          onNotice?.(missing !== '' ? `「${zh(entry)}」需要先配置凭证：${missing}` : `失败：${error.message}`)
+          const refs = error.body?.credentialRefs ?? []
+          if (refs.length > 0) setAuthorising({ entry, refs, error: error.message })
+          else onNotice?.(`失败：${error.message}`)
         } finally { setBusy('') }
       }
 
@@ -612,6 +736,13 @@ window.__ModuleLoader__.load({
           onCancel: () => setSummoning(null),
           onConfirm: async task => { await act(summoning, task); setSummoning(null) },
         }),
+        authorising !== null && h(AuthDialog, {
+          entry: authorising.entry, refs: authorising.refs, error: authorising.error,
+          authDomain: authorising.authDomain ?? '', retryable: authorising.retryable !== false,
+          busy: busy === `${authorising.entry.kind}/${authorising.entry.name}`,
+          onClose: () => setAuthorising(null),
+          onRetry: async () => { await act(authorising.entry); setAuthorising(null) },
+        }),
       )
     }
 
@@ -633,7 +764,7 @@ window.__ModuleLoader__.load({
               health.error ? '服务不可用' : '市场已连接'),
           ),
           h('div', { className: 'wbh-panel' },
-            h('div', { className: 'wbh-panelHead' },
+            h('div', { className: 'wbh-tabs' },
               KINDS.map(item => h('button', {
                 key: item.id, type: 'button', className: `wbh-tab${kind === item.id ? ' on' : ''}`,
                 onClick: () => setKind(item.id),
