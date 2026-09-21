@@ -63,12 +63,12 @@ window.__ModuleLoader__.load({
 
     const STYLE = `
 .wbh-root{font:inherit;color:var(--dsw-alias-label-primary)}
-.wbh-plus{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;margin-right:2px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:19px;line-height:1;transition:background .14s ease,color .14s ease}
-.wbh-plus:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
-.wbh-plus[aria-expanded="true"]{background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary)}
+.wbh-plus{display:grid;place-items:center;flex:none;width:28px;height:28px;padding:0;border:none;border-radius:999px;background:var(--dsw-specific-selector);color:var(--dsw-alias-label-primary);cursor:pointer;transition:background-color 100ms ease}
+.wbh-plus:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-solid)}
+.wbh-plus[aria-expanded="true"]{background:var(--dsw-alias-interactive-bg-hover-solid)}
 .wbh-anchor{position:relative;display:inline-flex}
 .wbh-scrim{position:fixed;inset:0;z-index:1240}
-.wbh-menu{position:absolute;left:0;bottom:calc(100% + 10px);z-index:1250;display:flex;align-items:stretch;animation:wbhRise .16s ease-out}
+.wbh-menu{position:absolute;left:0;bottom:calc(100% + 10px);z-index:1250;display:flex;align-items:flex-start;animation:wbhRise .16s ease-out}
 .wbh-menuCol{display:flex;flex-direction:column;width:196px;padding:6px;border:1px solid var(--dsw-alias-border-l2);border-radius:13px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 14px 40px rgba(0,0,0,.30)}
 .wbh-menuRow{display:flex;align-items:center;gap:9px;padding:8px 9px;border:0;border-radius:9px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12.5px;cursor:pointer;text-align:left;transition:background .12s ease}
 .wbh-menuRow:hover,.wbh-menuRow.on{background:var(--dsw-alias-bg-layer-2)}
@@ -76,7 +76,7 @@ window.__ModuleLoader__.load({
 .wbh-menuRowIcon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;flex:0 0 auto;font-size:13px;color:var(--dsw-alias-label-secondary)}
 .wbh-menuRowLabel{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wbh-menuRowChev{color:var(--dsw-alias-label-tertiary);font-size:11px}
-.wbh-pane{display:flex;flex-direction:column;width:min(420px,calc(100vw - 240px));max-height:min(440px,calc(100vh - 140px));margin-left:7px;border:1px solid var(--dsw-alias-border-l2);border-radius:13px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 14px 40px rgba(0,0,0,.30);overflow:hidden;animation:wbhFade .16s ease-out}
+.wbh-pane{display:flex;flex-direction:column;align-self:flex-start;width:min(420px,calc(100vw - 240px));max-height:min(440px,calc(100vh - 140px));margin-left:7px;border:1px solid var(--dsw-alias-border-l2);border-radius:13px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 14px 40px rgba(0,0,0,.30);overflow:hidden;animation:wbhFade .16s ease-out}
 .wbh-paneHead{display:flex;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid var(--dsw-alias-border-l2)}
 .wbh-search{box-sizing:border-box;flex:1;min-width:0;padding:6px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;outline:none}
 .wbh-search:focus{border-color:var(--dsw-alias-label-info,#5b8cff)}
@@ -93,7 +93,11 @@ window.__ModuleLoader__.load({
 .wbh-action{flex:0 0 auto;padding:3px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:11px;cursor:pointer;transition:background .12s ease}
 .wbh-action:hover{background:var(--dsw-alias-bg-layer-3)}
 .wbh-action.primary{border-color:var(--dsw-alias-label-info,#5b8cff);color:var(--dsw-alias-label-info,#5b8cff)}
-.wbh-switch{flex:0 0 auto;position:relative;width:34px;height:18px;border:0;border-radius:999px;background:var(--dsw-alias-bg-layer-3);cursor:pointer;transition:background .18s ease}
+.wbh-action:disabled{opacity:.55;cursor:default}
+.wbh-connect{flex:0 0 auto;display:inline-flex;align-items:center;gap:4px;padding:3px 11px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:11px;cursor:pointer;transition:background .12s ease}
+.wbh-connect:hover:not(:disabled){background:var(--dsw-alias-bg-layer-3)}
+.wbh-connect:disabled{opacity:.55;cursor:default}
+.wbh-switch{flex:0 0 auto;position:relative;width:34px;height:18px;padding:0;border:0;border-radius:999px;background:var(--dsw-alias-bg-layer-3);cursor:pointer;transition:background .18s ease}
 .wbh-switch.on{background:var(--dsw-alias-label-info,#5b8cff)}
 .wbh-switch i{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:transform .18s cubic-bezier(.4,0,.2,1)}
 .wbh-switch.on i{transform:translateX(16px)}
@@ -180,6 +184,20 @@ window.__ModuleLoader__.load({
       : ''
     const zh = entry => entry.displayName || entry.name
 
+    /** Connector affordance: labelled 连接 until connected, switch afterwards. */
+    function ConnectorAction({ on, busy, onToggle }) {
+      if (on) {
+        return h('button', {
+          type: 'button', className: 'wbh-switch on', role: 'switch', 'aria-checked': 'true',
+          disabled: busy, title: '断开连接', onClick: onToggle,
+        }, h('i', null))
+      }
+      return h('button', {
+        type: 'button', className: 'wbh-connect', disabled: busy,
+        title: '连接该连接器', onClick: onToggle,
+      }, busy ? '连接中' : '连接')
+    }
+
     function Avatar({ entry, size }) {
       const [failed, setFailed] = useState(false)
       const url = iconUrl(entry)
@@ -216,8 +234,7 @@ window.__ModuleLoader__.load({
           : h('div', { className: 'wbh-itemDesc' }, entry.dir),
       ),
       isConnector
-        ? h('span', { className: `wbh-switch${on ? ' on' : ''}`, role: 'switch', 'aria-checked': on ? 'true' : 'false' },
-            h('i', null))
+        ? h(ConnectorAction, { on, busy, onToggle: () => { void onToggle(entry) } })
         : h('span', { className: `wbh-action${isExpert && !mounted ? ' primary' : ''}` },
             busy ? '…' : mounted ? '已挂载' : isExpert ? '召唤' : installed ? '挂载' : '添加'),
       )
@@ -360,7 +377,11 @@ window.__ModuleLoader__.load({
           type: 'button', className: 'wbh-plus', 'aria-label': '专家·技能·连接器',
           'aria-expanded': open || undefined, title: '专家 · 技能 · 连接器',
           onClick: () => setOpen(v => !v),
-        }, '＋'),
+        }, h('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
+          h('path', {
+            fill: 'currentColor',
+            d: 'M8.64453 1.5V7.34961H14.5V8.65039H8.64453V14.5H7.34473V8.65039H1.5V7.34961H7.34473V1.5H8.64453Z',
+          }))),
         open && h(MarketMenu, {
           sessionId,
           onClose: () => setOpen(false),
@@ -433,12 +454,35 @@ window.__ModuleLoader__.load({
         setBusy(key)
         try {
           if (!installed[key]) await post('/install', { kind: entry.kind, name: entry.name })
-          if (!sessionId) { onNotice?.(`已安装「${zh(entry)}」（进入对话后可挂载）`) }
-          else if (mounted.has(key)) await post('/unmount', { sessionId, kind: entry.kind, name: entry.name })
-          else await post('/mount', { sessionId, kind: entry.kind, name: entry.name })
+          if (entry.kind === 'connector') {
+            // Connect the transport; the session attachment follows it so the
+            // chip and the switch can never disagree with reality.
+            if (installed[key]?.enabled === true) {
+              await post('/connectors/disable', { name: entry.name })
+              if (sessionId) await post('/unmount', { sessionId, kind: entry.kind, name: entry.name })
+              onNotice?.(`已断开「${zh(entry)}」`)
+            } else {
+              const result = await post('/connectors/enable', { name: entry.name })
+              if (sessionId) await post('/mount', { sessionId, kind: entry.kind, name: entry.name })
+              onNotice?.(`已连接「${zh(entry)}」（工具命名空间 ${result.serverName}），下一次模型步骤起可用。`)
+            }
+          } else if (entry.kind === 'expert') {
+            if (sessionId) await post('/mount', { sessionId, kind: entry.kind, name: entry.name })
+            const summoned = await runCommand(sessionId, `/expert ${entry.name}`)
+            onNotice?.(summoned.ok
+              ? `已召唤「${zh(entry)}」：${summoned.value?.text || '专家会话已创建'}`
+              : `已挂载，但召唤失败：${summoned.error}`)
+          } else if (!sessionId) {
+            onNotice?.(`已安装「${zh(entry)}」（进入对话后可挂载）`)
+          } else if (mounted.has(key)) {
+            await post('/unmount', { sessionId, kind: entry.kind, name: entry.name })
+          } else {
+            await post('/mount', { sessionId, kind: entry.kind, name: entry.name })
+          }
           notify()
         } catch (error) {
-          onNotice?.(`失败：${error.message}`)
+          const missing = (error.body?.credentialRefs ?? []).join('、')
+          onNotice?.(missing !== '' ? `「${zh(entry)}」需要先配置凭证：${missing}` : `失败：${error.message}`)
         } finally { setBusy('') }
       }
 
@@ -474,8 +518,11 @@ window.__ModuleLoader__.load({
                 entry.flags?.length ? h('div', { className: 'wbh-flags' }, `⚠ ${entry.flags.length} 条安全扫描标记`) : null,
               ),
               isConnector
-                ? h('span', { className: `wbh-switch${switchOn ? ' on' : ''}`, role: 'switch', 'aria-checked': switchOn ? 'true' : 'false' }, h('i', null))
-                : h('span', { className: `wbh-action${isMounted ? '' : ' primary'}` }, busy === key ? '…' : isMounted ? '已挂载' : entry.kind === 'expert' ? '召唤' : '挂载'),
+                ? h(ConnectorAction, { on: switchOn, busy: busy === key, onToggle: () => { void act(entry) } })
+                : h('button', {
+                    type: 'button', className: `wbh-action${isMounted ? '' : ' primary'}`,
+                    disabled: busy === key, onClick: () => { void act(entry) },
+                  }, busy === key ? '…' : isMounted ? '已挂载' : entry.kind === 'expert' ? '召唤' : '挂载'),
             )
           }),
         ),
