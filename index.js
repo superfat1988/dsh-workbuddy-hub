@@ -25,7 +25,7 @@ import { createConnectorManager, validateConnectorMcp } from './mcp-manager.js'
 import { readExpertPersona, buildPersonaLine, buildSummonPrompt } from './expert-persona.js'
 
 export const name = 'workbuddy-hub'
-export const inject = ['webServer', 'connection', 'loader', 'commands', 'subagents']
+export const inject = ['webServer', 'connection', 'loader', 'commands', 'subagents', 'credentials']
 
 const PREFIX = '/workbuddy-hub'
 const GH_RAW = 'https://raw.githubusercontent.com'
@@ -401,7 +401,9 @@ export function unmountEntry(paths, sessionId, key) {
  * HTTP routes
  * ------------------------------------------------------------------ */
 
+let pluginCtx = null
 export function apply(ctx, config = {}) {
+  pluginCtx = ctx
   const cfg = config ?? {}
   const mirrorRepo = cfg.mirrorRepo || 'superfat1988/workbuddyskills'
   const mirrorBranch = cfg.mirrorBranch || 'main'
@@ -591,6 +593,41 @@ export function apply(ctx, config = {}) {
 
     if (route === 'GET /health') {
       json(res, 200, { ok: true, store: P.root, mirror: mirrorRepo, branch: mirrorBranch })
+      return true
+    }
+
+    // ---- official market API proxy: the web-first data layer ----
+    // The official client talks to workbuddy.cn/portal/operation-platform/market/*.
+    // Proxied with the browser's cookies so the plugin sees the same catalogue the
+    // official UI does (5.8k experts / 9.1k skills, CDN icons, zh/en copy).
+    if (route.startsWith('POST /market/') || route.startsWith('GET /market/')) {
+      const rest = route.slice(route.indexOf(' /market/') + 9)
+      const headers = { 'content-type': 'application/json', accept: 'application/json' }
+      // Session credential for the official market API (user pastes their
+      // workbuddy.cn cookie into DSH credentials; never persisted here).
+      const ref = config?.workbuddyCookieRef
+      if (ref) {
+        try {
+          const resolved = await pluginCtx?.credentials?.resolve?.(ref)
+          const value = resolved?.value
+          if (value) headers.cookie = String(value)
+        } catch { /* unconfigured credential: anonymous proxying only */ }
+      }
+      if (!headers.cookie && req.headers.cookie) headers.cookie = req.headers.cookie
+      const init = { method: req.method, headers }
+      if (req.method === 'POST') {
+        const chunks = []
+        for await (const chunk of req) chunks.push(chunk)
+        init.body = Buffer.concat(chunks)
+      }
+      try {
+        const upstream_res = await fetch(`https://www.workbuddy.cn/portal/operation-platform/market/${rest}`, init)
+        const text = await upstream_res.text()
+        res.writeHead(upstream_res.status, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(text)
+      } catch (error) {
+        json(res, 502, { error: `official market unreachable: ${error.message}` })
+      }
       return true
     }
 
