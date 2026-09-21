@@ -30,7 +30,7 @@ const plugin = registration.factory(name => {
   if (name === 'react') return React
   throw new Error(`unexpected browser require: ${name}`)
 })
-assert.deepEqual([...plugin.inject], ['slots'])
+assert.deepEqual([...plugin.inject], ['slots', 'remote'])
 assert.equal(typeof plugin.apply, 'function')
 
 const registrations = []
@@ -38,7 +38,7 @@ const slots = {
   inject(_name, callback) { callback() },
   register(options, component) { registrations.push({ options, component }) },
 }
-plugin.apply({ slots })
+plugin.apply({ slots, get: name => name === 'remote' ? undefined : undefined })
 const bySlot = name => registrations.find(row => row.options.name === name)
 assert.equal(bySlot('main').options.key, 'workbuddy-hub')
 assert.equal(bySlot('sidebar.panellist').options.id, 'workbuddy-hub')

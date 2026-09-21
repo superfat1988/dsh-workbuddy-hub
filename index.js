@@ -22,9 +22,10 @@ import {
   symlinkSync, unlinkSync, lstatSync, statSync,
 } from 'node:fs'
 import { createConnectorManager, validateConnectorMcp } from './mcp-manager.js'
+import { readExpertPersona, buildPersonaLine, buildSummonPrompt } from './expert-persona.js'
 
 export const name = 'workbuddy-hub'
-export const inject = ['webServer', 'connection', 'loader']
+export const inject = ['webServer', 'connection', 'loader', 'commands', 'subagents']
 
 const PREFIX = '/workbuddy-hub'
 const GH_RAW = 'https://raw.githubusercontent.com'
@@ -352,6 +353,93 @@ export function apply(ctx, config = {}) {
     saveJson(P.registry, registry)
   }
   const connectorStatus = key => connectors.statusOf(key)
+
+  /* ---------------------------------------------------------------- *
+   * 专家召唤 — one durable child session per summon, expert persona
+   * scoped to that child only (the main conversation keeps no persona).
+   * ---------------------------------------------------------------- */
+
+  const summonExpert = async (invocation, personaStore) => {
+    const requested = String(invocation.rawInput || '').trim().replace(/^\s+/, '')
+    const registry = loadJson(P.registry, { version: 1, installed: {} })
+    const installed = Object.values(registry.installed ?? {}).filter(r => r.kind === 'expert')
+    if (requested === '') {
+      if (installed.length === 0) return { kind: 'error', text: '尚未安装任何专家；请先在「专家·技能·连接器」中召唤。' }
+      const list = installed.map(r => `${r.displayName || r.name} (/expert ${r.name})`).join('、')
+      return { kind: 'success', text: `可用专家：${list}` }
+    }
+    const name = requested.split(/\s+/)[0]
+    const record = registry.installed?.[`expert/${name}`]
+    if (record === undefined) return { kind: 'error', text: `专家未安装：${name}` }
+
+    const persona = readExpertPersona(personaStore, name)
+    if (!persona.ok) return { kind: 'error', text: `专家人设不可用：${persona.error}` }
+    // Prefer the catalog's localized label over the raw directory id.
+    const titled = { ...persona, title: record.displayName || persona.title, description: record.description || persona.description }
+
+    const task = requested.slice(name.length).trim()
+    try {
+      const started = await ctx.subagents.startContinuable({
+        provider: 'spawn',
+        label: `专家：${titled.title}`,
+        request: {
+          parent: invocation.agent,
+          prompt: [{ type: 'text', text: buildSummonPrompt(titled, task) }],
+          persona: buildPersonaLine(titled),
+        },
+        signal: invocation.signal,
+      })
+      return {
+        kind: 'success',
+        text: `已召唤「${titled.title}」，独立专家会话：${started.childId}`,
+      }
+    } catch (error) {
+      return { kind: 'error', text: `召唤失败：${String(error?.message || error)}` }
+    }
+  }
+
+  ctx.effect(() => ctx.commands.register({
+    name: 'expert',
+    description: '召唤已安装的 WorkBuddy 专家（角色化人设，运行在独立子会话中）',
+    input: { hint: '<专家目录名> [任务描述]' },
+    handler: invocation => summonExpert(invocation, P.experts),
+  }), 'workbuddy-hub: /expert command')
+
+  ctx.effect(() => ctx.commands.register({
+    name: 'connector',
+    description: '启用或停用已安装的 WorkBuddy 连接器（MCP）',
+    input: { hint: '<连接器名> [on|off]' },
+    handler: async invocation => {
+      const parts = String(invocation.rawInput || '').trim().split(/\s+/).filter(Boolean)
+      const name = parts[0] || ''
+      const action = (parts[1] || 'on').toLowerCase()
+      if (name === '') return { kind: 'error', text: '用法：/connector <连接器名> [on|off]' }
+      const key = `connector/${name}`
+      const registry = loadJson(P.registry, { version: 1, installed: {} })
+      const record = registry.installed?.[key]
+      if (record === undefined) return { kind: 'error', text: `连接器未安装：${name}` }
+      if (action === 'off') {
+        await connectors.disable(key)
+        noteConnectorStatus(key, { enabled: false, status: 'disabled', lastError: '' })
+        return { kind: 'success', text: `已停用连接器「${record.displayName || name}」。` }
+      }
+      const mcpPath = join(record.dest, 'mcp.json')
+      if (!existsSync(mcpPath)) return { kind: 'error', text: `${name} 是 CLI/技能型连接器，没有 mcp.json。` }
+      try {
+        const raw = JSON.parse(readFileSync(mcpPath, 'utf8'))
+        const result = await connectors.enable(key, raw, name)
+        noteConnectorStatus(key, {
+          enabled: true, status: 'enabled', lastError: '',
+          serverName: result.serverName, credentialRefs: result.refs, transport: result.summary.transport,
+        })
+        return { kind: 'success', text: `已启用连接器「${record.displayName || name}」（工具命名空间 ${result.serverName}），下一次模型步骤起可用。` }
+      } catch (error) {
+        const message = String(error?.message || error).slice(0, 200)
+        noteConnectorStatus(key, { enabled: false, status: 'failed', lastError: message })
+        return { kind: 'error', text: `启用失败：${message}` }
+      }
+    },
+  }), 'workbuddy-hub: /connector command')
 
   const json = (res, code, body) => {
     res.statusCode = code

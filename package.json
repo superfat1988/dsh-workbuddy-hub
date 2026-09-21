@@ -16,7 +16,8 @@
     },
     "client": {
       "inject": [
-        "@deepseek-ai/dsh-client-ui-slots"
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-connection"
       ],
       "platform": "web"
     }
@@ -29,12 +30,15 @@
     "README.md",
     "client.js",
     "cordis.patch.yml",
+    "expert-persona.js",
     "index.js",
     "mcp-manager.js",
-    "test-client.mjs"
+    "test-client.mjs",
+    "test-expert-persona.mjs",
+    "test-summon.mjs"
   ],
   "scripts": {
-    "test": "node --check index.js && node --check client.js && node --check mcp-manager.js && node test-mcp-manager.mjs && node test-client.mjs",
+    "test": "node --check index.js && node --check client.js && node --check mcp-manager.js && node --check expert-persona.js && node test-mcp-manager.mjs && node test-expert-persona.mjs && node test-summon.mjs && node test-client.mjs",
     "pack:check": "npm pack --dry-run"
   },
   "license": "MIT"

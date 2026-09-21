@@ -34,6 +34,19 @@ window.__ModuleLoader__.load({
     ]
     const kindOf = id => KINDS.find(k => k.id === id) || KINDS[0]
     const notify = () => window.dispatchEvent(new Event(EVENT))
+    // Filled during apply(); the host command channel is how a summon actually
+    // reaches the live Agent (the browser cannot call spawnTeammate directly).
+    let commandRemote = null
+    const runCommand = async (sessionId, line) => {
+      if (commandRemote === null || !sessionId) return { ok: false, error: '命令通道不可用' }
+      try {
+        const result = await commandRemote.execute(sessionId, line, [])
+        if (!result?.ok) return { ok: false, error: result?.error?.message || '命令执行失败' }
+        return { ok: true, value: result.value?.result }
+      } catch (error) {
+        return { ok: false, error: String(error?.message || error) }
+      }
+    }
 
     /** Line-art glyphs: text glyphs (◇✦⌁) fall back to tofu in some fonts. */
     function KindIcon({ kind, size = 15 }) {
@@ -230,8 +243,22 @@ window.__ModuleLoader__.load({
             await post('/install', { kind: entry.kind, name: entry.name })
           }
           if (sessionId) await post('/mount', { sessionId, kind: entry.kind, name: entry.name })
-          setNotice(`已挂载「${zh(entry)}」`)
           notify()
+          if (entry.kind === 'expert') {
+            // 召唤 mutates nothing in this conversation: the expert runs in its
+            // own child session and only its conclusion comes back.
+            const summoned = await runCommand(sessionId, `/expert ${entry.name}`)
+            setNotice(summoned.ok
+              ? `已召唤「${zh(entry)}」：${summoned.value?.text || '专家会话已创建'}`
+              : `已挂载，但召唤失败：${summoned.error}`)
+          } else if (entry.kind === 'connector') {
+            const enabled = await runCommand(sessionId, `/connector ${entry.name} on`)
+            setNotice(enabled.ok
+              ? (enabled.value?.text || `已连接「${zh(entry)}」`)
+              : `已挂载；连接失败：${enabled.error}`)
+          } else {
+            setNotice(`已挂载「${zh(entry)}」`)
+          }
         } catch (error) {
           setNotice(`失败：${error.message}`)
         } finally { setBusy('') }
@@ -504,8 +531,9 @@ window.__ModuleLoader__.load({
 
     /* ---------------- registration ---------------- */
 
-    exports.inject = ['slots']
+    exports.inject = ['slots', 'remote']
     exports.apply = ctx => {
+      try { commandRemote = ctx.get('remote')?.commands ?? null } catch { commandRemote = null }
       ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'workbuddy-hub' }, HubPage))
       ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
         name: 'sidebar.panellist', id: 'workbuddy-hub', order: -90,
