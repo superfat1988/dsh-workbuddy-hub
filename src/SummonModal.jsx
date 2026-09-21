@@ -1,13 +1,22 @@
 import React, { useState } from 'react'
 import { WbIcon } from './icons.js'
 
-/** 召唤专家 — the official .ec-modal-card layout with quick-prompt examples. */
+/**
+ * 召唤专家 — the official .ec-modal-card detail view:
+ * circle avatar + role (profession · name) + use-count + close, a header
+ * summon button, and quick-prompt examples. No free-form textarea (the task
+ * is captured in the composer after selection in the official app); here a
+ * clicked quick prompt seeds the summon task.
+ */
 export default function SummonModal({ entry, busy, onClose, onConfirm }) {
   const [task, setTask] = useState('')
   const prompts = (entry.quickPrompts ?? []).slice(0, 3)
+  const profession = entry.subtitle || '专家'
+  const useCount = entry.useCount ? `${entry.useCount}次使用` : ''
+
   return (
     <div className="ec-modal-overlay" role="dialog" aria-modal="true" aria-label={`召唤 ${entry.displayName}`}>
-      <div className="ec-modal-card is-expert-view" style={{ opacity: 1 }}>
+      <div className="ec-modal-card is-expert-view">
         <div className="ec-modal-top">
           <div className="ec-modal-avatar">
             {entry.icon
@@ -16,19 +25,25 @@ export default function SummonModal({ entry, busy, onClose, onConfirm }) {
           </div>
           <div className="ec-modal-info">
             <div className="ec-modal-title-row">
-              <h3 className="ec-modal-role">{entry.displayName}</h3>
+              <div className="ec-modal-role">
+                <span className="ec-modal-role-primary">{profession}</span>
+                <span className="ec-modal-role-separator" aria-hidden="true" />
+                <span className="ec-modal-role-secondary">{entry.displayName}</span>
+              </div>
               <div className="ec-modal-actions">
+                {useCount && <span className="ec-modal-use-count">{useCount}</span>}
                 <button type="button" className="ec-modal-close" onClick={onClose} aria-label="关闭">
                   <WbIcon name="close" size={14} />
                 </button>
               </div>
             </div>
-            <div className="ec-modal-meta">
-              {entry.subtitle && <span className="ec-modal-name">{entry.subtitle}</span>}
-              <span className="ec-modal-category-badge">专家</span>
-            </div>
+            <button type="button" className="ec-modal-summon-btn ec-modal-header-summon-btn"
+              disabled={busy} onClick={() => onConfirm(task)}>
+              {busy ? '召唤中…' : '召唤专家'}
+            </button>
           </div>
         </div>
+
         <div className="ec-modal-scroll-shell">
           <div className="ec-modal-body">
             <div className="ec-modal-content">
@@ -41,10 +56,11 @@ export default function SummonModal({ entry, busy, onClose, onConfirm }) {
             </div>
             {prompts.length > 0 && (
               <div className="ec-modal-quick-prompts">
-                <div className="ec-modal-section-title">试试这样问</div>
+                <div className="ec-modal-section-title">专家帮你做</div>
                 <div className="ec-modal-quick-prompts-list">
                   {prompts.map((p, i) => (
-                    <button key={i} type="button" className="ec-modal-quick-prompt-btn" onClick={() => setTask(p)}>
+                    <button key={i} type="button" className="ec-modal-quick-prompt-btn"
+                      onClick={() => setTask(p)}>
                       <span className="ec-modal-quick-prompt-text">{p}</span>
                       <span className="ec-modal-quick-prompt-action"><WbIcon name="chevronRight" size={14} /></span>
                     </button>
@@ -52,21 +68,7 @@ export default function SummonModal({ entry, busy, onClose, onConfirm }) {
                 </div>
               </div>
             )}
-            <div className="ec-modal-content">
-              <div className="ec-modal-section-title">任务（可选）</div>
-              <textarea
-                className="wbh-modalInput" rows={3} value={task}
-                placeholder="留空则先确认角色，也可以直接写下要交给这位专家的任务"
-                aria-label="任务描述"
-                onChange={e => setTask(e.target.value)}
-              />
-            </div>
           </div>
-        </div>
-        <div className="ec-modal-footer">
-          <button type="button" className="ec-modal-summon-btn" disabled={busy} onClick={() => onConfirm(task)}>
-            {busy ? '召唤中…' : '召唤专家'}
-          </button>
         </div>
       </div>
     </div>

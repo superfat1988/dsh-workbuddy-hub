@@ -2,6 +2,13 @@
 // onto the hub routes. Official sources first, mirror as fallback.
 const API = '/workbuddy-hub'
 
+// Tiny module-level event bus: the composer picker (input.left) and the
+// attached rail (composer.dock) are separate slot instances, so a mount /
+// unmount made by one must notify the other to re-read.
+const _changeListeners = new Set()
+export const onCatalogChange = fn => { _changeListeners.add(fn); return () => { _changeListeners.delete(fn) } }
+const _emitChange = () => { for (const fn of _changeListeners) { try { fn() } catch {} } }
+
 async function api(path, options) {
   const response = await fetch(API + path, options)
   const body = await response.json().catch(() => ({}))
@@ -36,6 +43,7 @@ function toEntry(row, kind) {
     icon,
     tags: (row.tags ?? []).map(t => (typeof t === 'string' ? t : t.zh || t.en)).filter(Boolean).slice(0, 4),
     quickPrompts: (row.quickPrompts ?? []).map(q => (typeof q === 'string' ? q : q.zh || q.en)).filter(Boolean),
+    useCount: row.use_count ?? row.useCount ?? row.usage ?? '',
     official: true,
   }
 }
@@ -46,16 +54,17 @@ export const hub = {
   toEntry,
 
   /** Catalogue for one kind, official sources first. */
-  async list(kind, { query = '', limit = 60 } = {}) {
+  async list(kind, { query = '', category = '', limit = 60 } = {}) {
     const q = encodeURIComponent(query)
+    const c = encodeURIComponent(category || '')
     try {
       if (kind === 'expert') {
-        const r = await api(`/official-experts?limit=${limit}&q=${q}`)
+        const r = await api(`/official-experts?limit=${limit}&q=${q}&category=${c}`)
         const rows = (r.rows ?? []).map(x => toEntry(x, kind))
         if (rows.length) return rows
-        if (r.total === 0 && query === '') return []
+        if (r.total === 0 && query === '' && !category) return []
       }
-      const r = await api(`/market-list?kind=${kind}&pageSize=${limit}&q=${q}`)
+      const r = await api(`/market-list?kind=${kind}&pageSize=${limit}&q=${q}&category=${c}`)
       if (r.source === 'official') return (r.rows ?? []).map(x => toEntry(x, kind))
     } catch { /* fall through to the mirror */ }
     await api('/catalog')
@@ -63,16 +72,28 @@ export const hub = {
     return (r.hits ?? []).map(x => ({ ...toEntry(x, kind), official: false }))
   },
 
+  /** Category chips for one kind (官方来源). */
+  async categories(kind) {
+    try {
+      if (kind === 'expert') {
+        const r = await api('/official-expert-categories')
+        return (r.items ?? []).map(c => ({ id: c.id, label: c.label || c.name, count: c.count }))
+      }
+      const r = await api(`/market-categories?kind=${kind}`)
+      return (r.items ?? []).map(c => ({ id: c.id, label: c.label || c.name, count: c.count }))
+    } catch { return [] }
+  },
+
   installed: () => api('/installed').then(r => r.installed || {}),
   mounted: sessionId => sessionId
     ? api(`/mounted?sessionId=${encodeURIComponent(sessionId)}`).then(r => r.keys || [])
     : Promise.resolve([]),
-  install: (kind, name, source) => post('/install', { kind, name, source }),
-  uninstall: (kind, name) => post('/uninstall', { kind, name }),
-  mount: (sessionId, kind, name) => post('/mount', { sessionId, kind, name }),
-  unmount: (sessionId, kind, name) => post('/unmount', { sessionId, kind, name }),
-  enableConnector: name => post('/connectors/enable', { name }),
-  disableConnector: name => post('/connectors/disable', { name }),
+  install: (kind, name, source) => post('/install', { kind, name, source }).then(r => { _emitChange(); return r }),
+  uninstall: (kind, name) => post('/uninstall', { kind, name }).then(r => { _emitChange(); return r }),
+  mount: (sessionId, kind, name) => post('/mount', { sessionId, kind, name }).then(r => { _emitChange(); return r }),
+  unmount: (sessionId, kind, name) => post('/unmount', { sessionId, kind, name }).then(r => { _emitChange(); return r }),
+  enableConnector: name => post('/connectors/enable', { name }).then(r => { _emitChange(); return r }),
+  disableConnector: name => post('/connectors/disable', { name }).then(r => { _emitChange(); return r }),
 
   auth: () => api('/wb-auth'),
   authStart: () => post('/wb-auth/start', {}),

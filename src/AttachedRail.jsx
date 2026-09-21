@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react'
-import { hub } from './hub.js'
+import { hub, onCatalogChange } from './hub.js'
 import { WbIcon } from './icons.js'
 
 /** Selected experts/skills/connectors, as chips below the composer card. */
@@ -21,6 +21,7 @@ export default function AttachedRail({ sessionId }) {
   }, [sessionId])
 
   useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => onCatalogChange(refresh), [refresh])
   if (items.length === 0) return null
 
   const detach = async item => {

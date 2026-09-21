@@ -61,10 +61,11 @@ export default function MarketPage({ sessionId, runCommand }) {
     } finally { setBusy('') }
   }, [installed, refresh, runCommand, sessionId])
 
-  const onAction = useCallback(entry => {
+  const onDetail = useCallback(entry => {
     if (entry.kind === 'expert') setSummoning(entry)
     else void attach(entry)
   }, [attach])
+  const onAction = useCallback(entry => { void attach(entry) }, [attach])
 
   const loggedIn = auth?.configured === true
   return (
@@ -81,7 +82,7 @@ export default function MarketPage({ sessionId, runCommand }) {
       </div>
       <Catalogue
         sessionId={sessionId} kind={kind} onKind={setKind} query={query} onQuery={setQuery}
-        onAction={onAction} installed={installed} mounted={mounted} busy={busy}
+        onDetail={onDetail} onAction={onAction} installed={installed} mounted={mounted} busy={busy}
       />
       {notice && <p className="wbh-notice">{notice}</p>}
       {summoning && (
