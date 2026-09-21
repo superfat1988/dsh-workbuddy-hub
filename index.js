@@ -18,6 +18,7 @@
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { loginStart, loginPoll, loadAuth, saveAuth, marketList, marketCategories } from './wb-market.js'
+import { listExperts, categories as officialCategories, installExpert } from './wb-experts.js'
 import {
   existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
   symlinkSync, unlinkSync, lstatSync, statSync,
@@ -674,6 +675,26 @@ export function apply(ctx, config = {}) {
     }
 
     // ---- official market data (web-first layer) ----
+    // ---- official expert registry (no login required, MIT source) ----
+    if (route === 'GET /official-experts') {
+      try {
+        const out = await listExperts({
+          query: url.searchParams.get('q') || '',
+          categoryId: url.searchParams.get('category') || 'all',
+          limit: Math.min(100, Number(url.searchParams.get('limit') || 60) || 60),
+        })
+        json(res, 200, { ok: true, source: 'official-registry', ...out })
+      } catch (error) {
+        json(res, 502, { error: error.message })
+      }
+      return true
+    }
+    if (route === 'GET /official-expert-categories') {
+      try { json(res, 200, { ok: true, items: await officialCategories() }) }
+      catch (error) { json(res, 502, { error: error.message }) }
+      return true
+    }
+
     if (route === 'GET /market-list') {
       const kind = url.searchParams.get('kind') === 'skill' ? 'skill' : 'expert'
       const payload = {
@@ -857,15 +878,33 @@ export function apply(ctx, config = {}) {
       if (!['expert', 'skill', 'connector'].includes(kind) || !/^[\w.-]+$/.test(entryName)) {
         json(res, 400, { error: 'invalid kind or name' }); return true
       }
-      const files = await downloadEntry(mirrorRepo, mirrorBranch, `${kind}s`, entryName)
-      const { dest, report } = landEntry(P, kind, entryName, files)
+      // Experts prefer the official registry (same catalogue/copy the official
+      // client shows); the mirror is the fallback for anything not published there.
+      let files, dest, report, officialMeta = null
+      if (kind === 'expert' && body.source !== 'mirror') {
+        try {
+          officialMeta = await installExpert(entryName, P.experts, skillPrefix)
+          dest = officialMeta.dest
+          report = { files: officialMeta.files, bytes: officialMeta.bytes, flags: officialMeta.flags }
+        } catch (error) {
+          if (body.source === 'official') throw error
+          officialMeta = null // fall through to the mirror
+        }
+      }
+      if (!officialMeta) {
+        files = await downloadEntry(mirrorRepo, mirrorBranch, `${kind}s`, entryName)
+        const landed = landEntry(P, kind, entryName, files)
+        dest = landed.dest; report = landed.report
+      }
       const registry = loadJson(P.registry, { version: 1, installed: {} })
       if (!registry.installed) registry.installed = {}
       const key = `${kind}/${entryName}`
       const previous = registry.installed[key]
       // Persist the catalog's localized label so UI never shows the raw dir id.
       const cache = loadJson(P.catalogCache, null)
-      const meta = cache?.index?.[`${kind}s`]?.find(e => e.name === entryName)
+      const meta = officialMeta
+        ? { displayName: officialMeta.displayName, description: officialMeta.description, tags: officialMeta.tags }
+        : cache?.index?.[`${kind}s`]?.find(e => e.name === entryName)
       const record = {
         kind, name: entryName, dest,
         displayName: meta?.displayName || entryName,
