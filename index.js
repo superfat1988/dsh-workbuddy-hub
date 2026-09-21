@@ -24,7 +24,7 @@ import {
 } from 'node:fs'
 
 export const name = 'workbuddy-hub'
-export const inject = ['webServer', 'config', 'credentials']
+export const inject = ['webServer']
 
 const PREFIX = '/workbuddy-hub'
 const GH_RAW = 'https://raw.githubusercontent.com'
@@ -224,8 +224,8 @@ export function unlinkSkill(prefix, name) {
  * HTTP routes
  * ------------------------------------------------------------------ */
 
-export function apply(ctx) {
-  const cfg = ctx.config ?? {}
+export function apply(ctx, config = {}) {
+  const cfg = config ?? {}
   const mirrorRepo = cfg.mirrorRepo || 'superfat1988/workbuddyskills'
   const mirrorBranch = cfg.mirrorBranch || 'main'
   const upstreamRepo = cfg.upstreamRepo || 'infometa/workbuddyskills'
@@ -246,10 +246,9 @@ export function apply(ctx) {
     req.on('error', reject)
   })
 
-  const server = ctx.webServer
-  server.on('request', (req, res) => {
+  const handler = async (req, res) => {
     const url = new URL(req.url, 'http://localhost')
-    if (!url.pathname.startsWith(PREFIX)) return
+    if (!url.pathname.startsWith(PREFIX)) return false
     const route = `${req.method} ${url.pathname.slice(PREFIX.length) || '/'}`
 
     ;(async () => {
@@ -332,5 +331,7 @@ export function apply(ctx) {
 
       return json(res, 404, { error: `no route: ${route}` })
     })().catch(e => json(res, 500, { error: String(e.message || e) }))
-  })
+  }
+
+  ctx.webServer.register({ kind: 'prefix', path: PREFIX, handler })
 }
