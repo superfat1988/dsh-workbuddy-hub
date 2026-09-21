@@ -66,3 +66,8 @@
 .wbh-modalRoot{position:fixed;inset:0;z-index:6300;display:grid;place-items:center}
 .wbh-modalScrim{position:absolute;inset:0;background:rgba(0,0,0,.28);animation:wbhFade .15s ease}
 @keyframes wbhFade{from{opacity:0}to{opacity:1}}
+/* 官方引用的动画定义（原官方 CSS 未内联 @keyframes，此处补齐同款 .15s ease） */
+@keyframes ec-overlay-in{from{opacity:0}to{opacity:1}}
+@keyframes ec-modal-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+@keyframes ec-picker-scale-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeInUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
