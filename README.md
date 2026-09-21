@@ -123,6 +123,18 @@ UI 层：左栏入口存在 → 市场页标题 `专家 · 技能 · 连接器`�
 并可见完整人设（`请完整遵循` + `adort-design-expert`）；子会话推理自述
 “the persona says I must check environment first”，证明人设确实生效。
 
+
+## 数据层：官方来源优先
+
+| 数据 | 来源 | 说明 |
+|---|---|---|
+| 专家目录（428，中英名/职称/简介/Tag/快捷提示词） | 官方 COS 注册表 `expert_center.json`（MIT，无需登录） | `hub.marketList('expert')` |
+| 专家头像 PNG / 人设 Markdown | 同一 COS 源直链 | 召唤用的人设与官方同源 |
+| 技能 / 连接器目录 | GitHub 镜像 `superfat1988/workbuddyskills` | 亦是包下载源 |
+| 官方登录（技能页数据、用量） | OAuth 设备授权：`POST /wb-auth/start` 给出官方 authUrl → 浏览器登录 → `POST /wb-auth/poll` 轮换取 `{access_token, refresh_token, expires_in, uid}`，存 `~/.workbuddyskills/.meta/state/` | 协议与 [workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) 一致（`copilot.tencent.com/v2/...`，Bearer + X-User-Id + CLI UA）；凭证不出本机 |
+
+插件不依赖 DeepSeek 浏览器 cookie；官方会话由设备授权获得、可刷新、可 `/wb-auth/logout` 注销。
+
 ## 已知限制
 
 - 生产（`dsh-web.service`）需用户重启才会加载本插件的新代码

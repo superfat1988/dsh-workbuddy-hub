@@ -12,11 +12,15 @@ export default function MarketPage({ sessionId, onNotice }) {
   const [kind, setKind] = useState('expert')
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState([])
+  const [cats, setCats] = useState([])
   const [installed, setInstalled] = useState({})
   useEffect(() => { hub.installed().then(setInstalled).catch(() => {}) }, [])
+  useEffect(() => { hub.categories(kind).then(setCats).catch(() => setCats([])) }, [kind])
   useEffect(() => {
     let live = true
-    hub.search(query, kind).then(h => { if (live) setHits(h) }).catch(() => { if (live) setHits([]) })
+    hub.marketList(kind, { page: 1, pageSize: 60, query })
+      .then(h => { if (live) setHits(h) })
+      .catch(() => { if (live) hub.search(query, kind).then(h => setHits(h)).catch(() => setHits([])) })
     return () => { live = false }
   }, [kind, query])
 
@@ -39,6 +43,7 @@ export default function MarketPage({ sessionId, onNotice }) {
       </div>
       <div className="ec-category-tabs-wrap"><div className="ec-category-tabs">
         <button type="button" className="ec-category-tab is-active">全部</button>
+        {cats.map(c => <button key={c.id} type="button" className="ec-category-tab">{c.label}{c.count != null ? ` ${c.count}` : ''}</button>)}
       </div></div>
       <div className="ec-expert-grid">
         {hits.map(entry => (
@@ -49,10 +54,10 @@ export default function MarketPage({ sessionId, onNotice }) {
             </button>
             <div className="ec-card-main">
               <div className="ec-card-head">
-                <div className="ec-card-avatar-sq"><img src={`/workbuddy-hub/icon?kind=${entry.kind}&name=${entry.name}`} alt="" /></div>
+                <div className="ec-card-avatar-sq">{entry.icon ? <img src={entry.icon} alt="" /> : <span>{(entry.displayName || entry.name || '?').slice(0, 1)}</span>}</div>
                 <div className="ec-card-body">
                   <div className="ec-card-title-row"><div className="ec-card-role-wrap"><div className="ec-card-role">{entry.displayName || entry.name}</div></div></div>
-                  <div className="ec-card-subtitle">{entry.kind}</div>
+                  <div className="ec-card-subtitle">{entry.subtitle || entry.kind}</div>
                 </div>
               </div>
               <div className="ec-card-desc">{entry.description || entry.dir}</div>

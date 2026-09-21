@@ -17,6 +17,7 @@
  */
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { loginStart, loginPoll, loadAuth, saveAuth, marketList, marketCategories } from './wb-market.js'
 import {
   existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
   symlinkSync, unlinkSync, lstatSync, statSync,
@@ -56,6 +57,8 @@ export function storePaths(config) {
     registry: join(root, '.meta', 'registry.json'),
     mounts: join(root, '.meta', 'mounts.json'),
     catalogCache: join(root, '.meta', 'catalog-cache.json'),
+    state: join(root, '.meta', 'state'),
+    loginState: join(root, '.meta', 'state', 'login-state.json'),
   }
 }
 
@@ -627,6 +630,83 @@ export function apply(ctx, config = {}) {
         res.end(text)
       } catch (error) {
         json(res, 502, { error: `official market unreachable: ${error.message}` })
+      }
+      return true
+    }
+
+    // ---- official account (OAuth device flow) ----
+    if (route === 'GET /wb-auth') {
+      const auth = loadAuth(P.state)
+      json(res, 200, {
+        configured: Boolean(auth?.access_token),
+        uid: auth?.uid, nickname: auth?.nickname,
+        expiresAt: auth ? (auth.obtainedAt ?? 0) + (auth.expires_in ?? 3600) * 1000 : null,
+      })
+      return true
+    }
+    if (route === 'POST /wb-auth/start') {
+      try {
+        const { state, authUrl } = await loginStart()
+        saveJson(P.loginState, { state, at: Date.now() })
+        json(res, 200, { ok: true, authUrl, state })
+      } catch (error) {
+        json(res, 502, { error: error.message })
+      }
+      return true
+    }
+    if (route === 'POST /wb-auth/poll') {
+      const st = loadJson(P.loginState, null)
+      if (!st?.state) { json(res, 400, { error: 'no login in progress (call /wb-auth/start first)' }); return true }
+      try {
+        const auth = await loginPoll(st.state)
+        saveAuth(P.state, auth)
+        rmSync(P.loginState, { force: true })
+        json(res, 200, { ok: true, nickname: auth.nickname, uid: auth.uid })
+      } catch (error) {
+        json(res, error.pending ? 202 : 502, { error: error.message, pending: Boolean(error.pending) })
+      }
+      return true
+    }
+    if (route === 'POST /wb-auth/logout') {
+      rmSync(P.state.join('workbuddy-auth.json'), { force: true })
+      json(res, 200, { ok: true })
+      return true
+    }
+
+    // ---- official market data (web-first layer) ----
+    if (route === 'GET /market-list') {
+      const kind = url.searchParams.get('kind') === 'skill' ? 'skill' : 'expert'
+      const payload = {
+        page: Math.max(1, Number(url.searchParams.get('page') || 1) || 1),
+        page_size: Math.min(100, Number(url.searchParams.get('pageSize') || 60) || 60),
+      }
+      const q = (url.searchParams.get('q') || '').trim()
+      if (q) payload.keyword = q
+      const cat = url.searchParams.get('category')
+      if (cat && cat !== 'all') payload.category_id = cat
+      try {
+        const { total, rows } = await marketList(kind, payload, P.state)
+        json(res, 200, { ok: true, source: 'official', total, rows })
+      } catch (error) {
+        // mirror fallback keeps the page usable without an official login
+        const cache = loadIndex()
+        const q2 = (url.searchParams.get('q') || '').trim().toLowerCase()
+        const hits = cache
+          ? Object.values(cache.index?.[kind === 'expert' ? 'experts' : 'skills'] ?? {})
+              .filter(e => !q2 || (e.displayName || '').toLowerCase().includes(q2) || (e.description || '').toLowerCase().includes(q2))
+              .slice(0, payload.page_size)
+          : []
+        json(res, 200, { ok: true, source: 'mirror', total: hits.length, rows: hits, error: error.message })
+      }
+      return true
+    }
+    if (route === 'GET /market-categories') {
+      const kind = url.searchParams.get('kind') === 'skill' ? 'skill' : 'expert'
+      try {
+        const items = await marketCategories(kind, P.state)
+        json(res, 200, { ok: true, source: 'official', items })
+      } catch (error) {
+        json(res, 200, { ok: true, source: 'mirror', items: [] })
       }
       return true
     }
