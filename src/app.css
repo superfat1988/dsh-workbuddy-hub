@@ -38,7 +38,8 @@
 .wbh-railIcon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;overflow:hidden;background:var(--wb-bg-hover)}
 .wbh-railIcon img{width:100%;height:100%;object-fit:cover}
 .wbh-railName{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wbh-railX{display:grid;place-items:center;width:16px;height:16px;padding:0;border:none;border-radius:50%;background:transparent;color:var(--wb-color-text-tertiary);cursor:pointer}
+.wbh-railX{display:grid;place-items:center;width:16px;height:16px;padding:0;border:none;border-radius:50%;background:transparent;color:var(--wb-color-text-tertiary);cursor:pointer;opacity:0;transition:opacity .12s ease}
+.wbh-railChip:hover .wbh-railX,.wbh-railX:focus-visible{opacity:1}
 .wbh-railX:hover{background:var(--wb-bg-hover);color:var(--wb-color-text-primary)}
 
 .wbh-settings{padding:4px 2px}
@@ -72,13 +73,21 @@
 @keyframes ec-picker-scale-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 @keyframes fadeInUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
 
-/* --- 市场页布局（滚动容器 + 排序 tabs）--- */
+/* --- 市场页布局（滚动容器 + 排序 tabs + topbar）--- */
 .ec-market-panel{display:flex;flex-direction:column;min-height:0;height:100%}
+.expert-center-page{--ec-page-gutter:24px;position:relative;display:flex;flex-direction:column;height:100%;overflow:hidden;background:var(--wb-home-bg-secondary,#f7f7f7);color:var(--wb-color-text-primary)}
+.ec-topbar{display:flex;align-items:center;height:52px;padding:0 var(--ec-page-gutter);flex-shrink:0;background:var(--wb-home-bg-secondary,#f7f7f7)}
+.ec-topbar__left{display:flex;align-items:center;gap:4px}
+.ec-page-layout{display:flex;flex:1;min-height:0;overflow:hidden}
+.ec-main-content{position:relative;flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}
 .ec-main-scroll{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--wb-border-default) transparent}
-.ec-list-tabs-row{display:inline-flex;align-items:center;gap:4px;margin:12px 0 4px;padding:4px;border-radius:12px;background:var(--wb-bg-tertiary,#f3f3f3)}
-.ec-list-tab{padding:5px 16px;border:none;border-radius:8px;background:transparent;color:var(--wb-color-text-tertiary);font-size:13px;font-weight:500;cursor:pointer;transition:all .2s ease}
+.ec-list-tabs-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;padding:4px var(--ec-page-gutter)}
+.ec-list-tabs{display:inline-flex;align-items:center;gap:20px;flex-shrink:0}
+.ec-list-tab{position:relative;padding:4px 0;border:none;background:transparent;color:var(--wb-color-text-tertiary);font-size:14px;font-weight:500;cursor:pointer;transition:color .2s ease}
 .ec-list-tab:hover{color:var(--wb-color-text-secondary)}
-.ec-list-tab.is-active{background:var(--wb-bg-card);color:var(--wb-color-text-primary);font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+.ec-list-tab.is-active{color:var(--wb-color-text-primary);font-weight:600}
+.ec-list-tab.is-active::after{content:"";position:absolute;left:0;right:0;bottom:-3px;height:2px;border-radius:2px;background:var(--wb-color-text-primary)}
+.ec-category-tabs-wrap{padding:0 var(--ec-page-gutter);margin-bottom:8px}
 .ec-picker-scroll{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--wb-border-default) transparent}
 
 /* --- 二段弹窗第一段：菜单 --- */

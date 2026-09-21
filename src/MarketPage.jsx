@@ -69,7 +69,7 @@ export default function MarketPage({ sessionId, runCommand }) {
 
   const loggedIn = auth?.configured === true
   return (
-    <div className="wbh-page">
+    <div className="expert-center-page wbh-page">
       <div className="wbh-authBar">
         <span className="wbh-authState">
           <i className={`wbh-dot${loggedIn ? '' : ' off'}`} />
