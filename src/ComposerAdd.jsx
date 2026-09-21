@@ -4,6 +4,7 @@ import { WbIcon } from './icons.js'
 import Catalogue from './Catalogue.jsx'
 import SummonModal from './SummonModal.jsx'
 import ConnectorAuthModal from './ConnectorAuthModal.jsx'
+import { insertPromptIntoComposer } from './insert-prompt.js'
 
 const KINDS = [
   { id: 'expert', label: '专家', icon: 'person' },
@@ -183,6 +184,11 @@ export default function ComposerAdd({ sessionId, runCommand }) {
           entry={summoning} busy={busy === `${summoning.kind}/${summoning.name}`}
           onClose={() => setSummoning(null)}
           onConfirm={async task => { await attach(summoning, task); setSummoning(null) }}
+          onQuickPrompt={text => {
+            setSummoning(null)
+            void attach(summoning, text)
+            insertPromptIntoComposer(text)
+          }}
         />
       )}
       {authorising && (

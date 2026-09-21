@@ -4,6 +4,7 @@ import { WbIcon } from './icons.js'
 import Catalogue from './Catalogue.jsx'
 import SummonModal from './SummonModal.jsx'
 import ConnectorAuthModal from './ConnectorAuthModal.jsx'
+import { insertPromptIntoComposer } from './insert-prompt.js'
 import './official.css'
 import './app.css'
 
@@ -88,7 +89,12 @@ export default function MarketPage({ sessionId, runCommand }) {
       {summoning && (
         <SummonModal entry={summoning} busy={busy === `${summoning.kind}/${summoning.name}`}
           onClose={() => setSummoning(null)}
-          onConfirm={async task => { await attach(summoning, task); setSummoning(null) }} />
+          onConfirm={async task => { await attach(summoning, task); setSummoning(null) }}
+          onQuickPrompt={text => {
+            setSummoning(null)
+            void attach(summoning, text)
+            insertPromptIntoComposer(text)
+          }} />
       )}
       {authorising && (
         <ConnectorAuthModal entry={authorising.entry} refs={authorising.refs} error={authorising.error}

@@ -2621,7 +2621,7 @@ function Catalogue({
 
 // src/SummonModal.jsx
 var import_react3 = __toESM(require("react"), 1);
-function SummonModal({ entry, busy, onClose, onConfirm }) {
+function SummonModal({ entry, busy, onClose, onConfirm, onQuickPrompt }) {
   const [task, setTask] = (0, import_react3.useState)("");
   const prompts = (entry.quickPrompts ?? []).slice(0, 3);
   const profession = entry.subtitle || "\u4E13\u5BB6";
@@ -2641,7 +2641,7 @@ function SummonModal({ entry, busy, onClose, onConfirm }) {
       key: i,
       type: "button",
       className: "ec-modal-quick-prompt-btn",
-      onClick: () => setTask(p)
+      onClick: () => onQuickPrompt?.(p)
     },
     /* @__PURE__ */ import_react3.default.createElement("span", { className: "ec-modal-quick-prompt-text" }, p),
     /* @__PURE__ */ import_react3.default.createElement("span", { className: "ec-modal-quick-prompt-action" }, /* @__PURE__ */ import_react3.default.createElement(WbIcon, { name: "chevronRight", size: 14 }))
@@ -2654,6 +2654,31 @@ function ConnectorAuthModal({ entry, refs = [], error, authDomain = "", retryabl
   const domain = authDomain || entry?.cli?.authDomain || "";
   const authUrl = domain ? `https://${domain.replace(/^https?:\/\//, "")}` : "";
   return /* @__PURE__ */ import_react4.default.createElement("div", { className: "ec-modal-overlay", role: "dialog", "aria-modal": "true", "aria-label": `\u8FDE\u63A5 ${entry.displayName || entry.name}` }, /* @__PURE__ */ import_react4.default.createElement("div", { className: "ec-modal-card", style: { opacity: 1 } }, /* @__PURE__ */ import_react4.default.createElement("div", { className: "ec-modal-top" }, /* @__PURE__ */ import_react4.default.createElement("div", { className: "ec-modal-avatar" }, entry.icon ? /* @__PURE__ */ import_react4.default.createElement("img", { src: entry.icon, alt: "" }) : /* @__PURE__ */ import_react4.default.createElement("span", { className: "ec-modal-avatar-fallback" }, /* @__PURE__ */ import_react4.default.createElement(WbIcon, { name: "link", size: 22 }))), /* @__PURE__ */ import_react4.default.createElement("div", { className: "ec-modal-info" }, /* @__PURE__ */ import_react4.default.createElement("div", { className: "ec-modal-title-row" }, /* @__PURE__ */ import_react4.default.createElement("h3", { className: "ec-modal-role" }, "\u8FDE\u63A5 ", entry.displayName || entry.name), /* @__PURE__ */ import_react4.default.createElement("div", { className: "ec-modal-actions" }, /* @__PURE__ */ import_react4.default.createElement("button", { type: "button", className: "ec-modal-close", onClick: onClose, "aria-label": "\u5173\u95ED" }, /* @__PURE__ */ import_react4.default.createElement(WbIcon, { name: "close", size: 14 })))), /* @__PURE__ */ import_react4.default.createElement("div", { className: "ec-modal-meta" }, /* @__PURE__ */ import_react4.default.createElement("span", { className: "ec-modal-name" }, "\u6388\u6743\u5B8C\u6210\u540E\u56DE\u5230\u672C\u5BF9\u8BDD\u6846\u91CD\u8BD5")))), /* @__PURE__ */ import_react4.default.createElement("div", { className: "ec-modal-scroll-shell" }, /* @__PURE__ */ import_react4.default.createElement("div", { className: "ec-modal-body" }, /* @__PURE__ */ import_react4.default.createElement("div", { className: "ec-modal-content" }, /* @__PURE__ */ import_react4.default.createElement("p", { className: "ec-modal-desc" }, error || entry.description || ""), refs.length > 0 ? /* @__PURE__ */ import_react4.default.createElement(import_react4.default.Fragment, null, /* @__PURE__ */ import_react4.default.createElement("div", { className: "ec-modal-section-title", style: { marginTop: 14 } }, "\u8BE5\u8FDE\u63A5\u5668\u9700\u8981\u4EE5\u4E0B\u51ED\u8BC1"), /* @__PURE__ */ import_react4.default.createElement("div", { className: "ec-modal-tags-list" }, refs.map((r) => /* @__PURE__ */ import_react4.default.createElement("span", { key: r, className: "ec-modal-tag-chip", style: { fontFamily: "ui-monospace, monospace" } }, r)))) : !retryable ? /* @__PURE__ */ import_react4.default.createElement("div", { className: "ec-modal-tags-list", style: { marginTop: 14 } }, /* @__PURE__ */ import_react4.default.createElement("span", { className: "ec-modal-tag-chip" }, "CLI \xB7 \u6280\u80FD\u5DF2\u6302\u8F7D")) : null, /* @__PURE__ */ import_react4.default.createElement("p", { className: "ec-modal-desc", style: { marginTop: 14 } }, authUrl ? `\u8BE5\u8FDE\u63A5\u5668\u7684\u6388\u6743\u5165\u53E3\u5728 ${domain}\uFF1B\u70B9\u51FB\u300C\u6253\u5F00\u6388\u6743\u9875\u300D\u4F1A\u65B0\u5F00\u6807\u7B7E\u9875\uFF0C\u6388\u6743\u540E\u56DE\u6765\u91CD\u8BD5\u3002` : "\u51ED\u8BC1\u7531 DSH \u51ED\u8BC1\u7BA1\u7406\u6301\u6709\uFF1B\u914D\u7F6E\u540E\u70B9\u300C\u91CD\u8BD5\u8FDE\u63A5\u300D\u5373\u53EF\u3002")))), /* @__PURE__ */ import_react4.default.createElement("div", { className: "ec-modal-footer", style: { gap: 10 } }, /* @__PURE__ */ import_react4.default.createElement("button", { type: "button", className: "wbh-btnGhost", onClick: onClose }, "\u5173\u95ED"), authUrl && /* @__PURE__ */ import_react4.default.createElement("button", { type: "button", className: "wbh-btnGhost", onClick: () => window.open(authUrl, "_blank", "noopener") }, /* @__PURE__ */ import_react4.default.createElement(WbIcon, { name: "external", size: 13 }), " \u6253\u5F00\u6388\u6743\u9875"), retryable && /* @__PURE__ */ import_react4.default.createElement("button", { type: "button", className: "ec-modal-summon-btn", style: { width: "auto" }, disabled: busy, onClick: onRetry }, /* @__PURE__ */ import_react4.default.createElement(WbIcon, { name: "refresh", size: 13 }), " ", busy ? "\u8FDE\u63A5\u4E2D\u2026" : "\u91CD\u8BD5\u8FDE\u63A5"))));
+}
+
+// src/insert-prompt.js
+function insertPromptIntoComposer(text) {
+  const editor = document.querySelector('[contenteditable="true"]');
+  if (!editor || !text) return false;
+  editor.focus();
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  const range = document.createRange();
+  range.selectNodeContents(editor);
+  range.collapse(false);
+  sel.addRange(range);
+  let ok = false;
+  try {
+    ok = document.execCommand("insertText", false, text);
+  } catch {
+    ok = false;
+  }
+  if (!ok) {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", text);
+    editor.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  }
+  return true;
 }
 
 // src/WbAuthCard.jsx
@@ -2812,6 +2837,11 @@ function MarketPage({ sessionId, runCommand: runCommand2 }) {
       onConfirm: async (task) => {
         await attach(summoning, task);
         setSummoning(null);
+      },
+      onQuickPrompt: (text) => {
+        setSummoning(null);
+        void attach(summoning, text);
+        insertPromptIntoComposer(text);
       }
     }
   ), authorising && /* @__PURE__ */ import_react6.default.createElement(
@@ -3015,6 +3045,11 @@ function ComposerAdd({ sessionId, runCommand: runCommand2 }) {
       onConfirm: async (task) => {
         await attach(summoning, task);
         setSummoning(null);
+      },
+      onQuickPrompt: (text) => {
+        setSummoning(null);
+        void attach(summoning, text);
+        insertPromptIntoComposer(text);
       }
     }
   ), authorising && /* @__PURE__ */ import_react7.default.createElement(

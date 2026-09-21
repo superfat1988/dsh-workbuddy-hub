@@ -8,7 +8,7 @@ import { WbIcon } from './icons.js'
  * is captured in the composer after selection in the official app); here a
  * clicked quick prompt seeds the summon task.
  */
-export default function SummonModal({ entry, busy, onClose, onConfirm }) {
+export default function SummonModal({ entry, busy, onClose, onConfirm, onQuickPrompt }) {
   const [task, setTask] = useState('')
   const prompts = (entry.quickPrompts ?? []).slice(0, 3)
   const profession = entry.subtitle || '专家'
@@ -60,7 +60,7 @@ export default function SummonModal({ entry, busy, onClose, onConfirm }) {
                 <div className="ec-modal-quick-prompts-list">
                   {prompts.map((p, i) => (
                     <button key={i} type="button" className="ec-modal-quick-prompt-btn"
-                      onClick={() => setTask(p)}>
+                      onClick={() => onQuickPrompt?.(p)}>
                       <span className="ec-modal-quick-prompt-text">{p}</span>
                       <span className="ec-modal-quick-prompt-action"><WbIcon name="chevronRight" size={14} /></span>
                     </button>
