@@ -2937,29 +2937,10 @@ function RailSlot(props) {
 }
 var plugin = {
   apply(ctx) {
-    try {
-      window.__wbhApply = (window.__wbhApply || 0) + 1;
-    } catch {
-    }
     pluginCtx = ctx;
+    const reg = (name, options, component) => ctx.slots.register(options, component);
     ctx.slots.inject("main", () => reg("main", { name: "main", key: "workbuddy-hub" }, HubPage));
-    window.__wbhReg = [];
-    const reg = (name, options, component) => {
-      try {
-        const r = ctx.slots.register(options, component);
-        window.__wbhReg.push([name, "ok", typeof r]);
-      } catch (e) {
-        window.__wbhReg.push([name, "ERR", String(e && e.message || e)]);
-      }
-    };
-    ctx.slots.inject("sidebar.panellist", () => {
-      try {
-        window.__wbhSidebar = true;
-      } catch {
-      }
-      ;
-      return reg("sidebar.panellist", { name: "sidebar.panellist", id: "workbuddy-hub", order: -90, label: () => "\u4E13\u5BB6\xB7\u6280\u80FD\xB7\u8FDE\u63A5\u5668" }, PanelIcon);
-    });
+    ctx.slots.inject("sidebar.panellist", () => reg("sidebar.panellist", { name: "sidebar.panellist", id: "workbuddy-hub", order: -90, label: () => "\u4E13\u5BB6\xB7\u6280\u80FD\xB7\u8FDE\u63A5\u5668" }, PanelIcon));
     ctx.slots.inject("conversation.input.left", () => reg("conversation.input.left", {
       name: "conversation.input.left",
       id: "workbuddy-hub-add",

@@ -41,7 +41,7 @@ const plugin = {
     pluginCtx = ctx
     const reg = (name, options, component) => ctx.slots.register(options, component)
     ctx.slots.inject('main', () => reg('main', { name: 'main', key: 'workbuddy-hub' }, HubPage))
-    ctx.slots.inject('sidebar.panellist', () => reg('sidebar.panellist', { name: 'sidebar.panellist', id: 'workbuddy-hub', order: -90, label: () => '专家·技能·连接器' }, PanelIcon) })
+    ctx.slots.inject('sidebar.panellist', () => reg('sidebar.panellist', { name: 'sidebar.panellist', id: 'workbuddy-hub', order: -90, label: () => '专家·技能·连接器' }, PanelIcon))
     ctx.slots.inject('conversation.input.left', () => reg('conversation.input.left', {
       name: 'conversation.input.left', id: 'workbuddy-hub-add', order: -90,
       label: () => '专家·技能·连接器',
