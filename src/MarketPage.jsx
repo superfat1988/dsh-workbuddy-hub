@@ -1,71 +1,104 @@
-import { useEffect, useState } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { hub } from './hub.js'
-import './marketplace.css'
+import { WbIcon } from './icons.js'
+import Catalogue from './Catalogue.jsx'
+import SummonModal from './SummonModal.jsx'
+import ConnectorAuthModal from './ConnectorAuthModal.jsx'
+import './official.css'
+import './app.css'
 
-const KINDS = [
-  { id: 'expert', label: '专家', icon: 'user' },
-  { id: 'skill', label: '技能', icon: 'wand' },
-  { id: 'connector', label: '连接器', icon: 'link' },
-]
-
-export default function MarketPage({ sessionId, onNotice }) {
+/** Main panel: the official marketplace page plus the account bar. */
+export default function MarketPage({ sessionId, runCommand }) {
   const [kind, setKind] = useState('expert')
   const [query, setQuery] = useState('')
-  const [hits, setHits] = useState([])
-  const [cats, setCats] = useState([])
   const [installed, setInstalled] = useState({})
-  useEffect(() => { hub.installed().then(setInstalled).catch(() => {}) }, [])
-  useEffect(() => { hub.categories(kind).then(setCats).catch(() => setCats([])) }, [kind])
-  useEffect(() => {
-    let live = true
-    hub.marketList(kind, { page: 1, pageSize: 60, query })
-      .then(h => { if (live) setHits(h) })
-      .catch(() => { if (live) hub.search(query, kind).then(h => setHits(h)).catch(() => setHits([])) })
-    return () => { live = false }
-  }, [kind, query])
+  const [mounted, setMounted] = useState(new Set())
+  const [busy, setBusy] = useState('')
+  const [notice, setNotice] = useState('')
+  const [summoning, setSummoning] = useState(null)
+  const [authorising, setAuthorising] = useState(null)
+  const [auth, setAuth] = useState(null)
+  const [showAuth, setShowAuth] = useState(false)
 
+  const refresh = useCallback(async () => {
+    try {
+      const [inst, mnt, a] = await Promise.all([hub.installed(), hub.mounted(sessionId), hub.auth()])
+      setInstalled(inst); setMounted(new Set(mnt)); setAuth(a)
+    } catch { /* keep previous */ }
+  }, [sessionId])
+  useEffect(() => { void refresh() }, [refresh])
+
+  const attach = useCallback(async (entry, task = '') => {
+    const key = `${entry.kind}/${entry.name}`
+    setBusy(key); setNotice('')
+    try {
+      if (!installed[key]) await hub.install(entry.kind, entry.name, entry.official ? 'official' : undefined)
+      if (entry.kind === 'connector') {
+        if (installed[key]?.enabled) {
+          await hub.disableConnector(entry.name)
+          if (sessionId) await hub.unmount(sessionId, entry.kind, entry.name)
+          setNotice(`已断开「${entry.displayName}」`)
+        } else {
+          const r = await hub.enableConnector(entry.name)
+          if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
+          setNotice(`已连接「${entry.displayName}」（工具命名空间 ${r.serverName}），下一次模型步骤起可用。`)
+        }
+      } else if (entry.kind === 'expert') {
+        if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
+        const line = `/expert ${entry.name}${task.trim() ? ` ${task.trim()}` : ''}`
+        const r = await runCommand(sessionId, line)
+        setNotice(r.ok ? `已召唤「${entry.displayName}」：${r.value?.text || '专家会话已创建'}`
+                       : `已挂载，但召唤失败：${r.error}`)
+      } else {
+        if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
+        setNotice(`已挂载「${entry.displayName}」`)
+      }
+      await refresh()
+    } catch (error) {
+      const refs = error.body?.credentialRefs ?? []
+      if (refs.length > 0) setAuthorising({ entry, refs, error: error.message })
+      else setNotice(`失败：${error.message}`)
+    } finally { setBusy('') }
+  }, [installed, refresh, runCommand, sessionId])
+
+  const onAction = useCallback(entry => {
+    if (entry.kind === 'expert') setSummoning(entry)
+    else void attach(entry)
+  }, [attach])
+
+  const loggedIn = auth?.configured === true
   return (
-    <div className="ec-picker-panel">
-      <div className="um-header__tabs">
-        {KINDS.map(k => (
-          <button key={k.id} type="button"
-            className={`um-tab${kind === k.id ? ' um-tab--active' : ''}`}
-            onClick={() => setKind(k.id)}>
-            <span>{k.label}</span>
-          </button>
-        ))}
+    <div className="wbh-page">
+      <div className="wbh-authBar">
+        <span className="wbh-authState">
+          <i className={`wbh-dot${loggedIn ? '' : ' off'}`} />
+          {loggedIn ? `官方账号已登录${auth?.nickname ? ' · ' + auth.nickname : ''}`
+                    : '官方账号未登录（技能/用量数据需登录）'}
+        </span>
+        {loggedIn
+          ? <button type="button" className="wbh-btnGhost" onClick={async () => { await hub.authLogout(); await refresh() }}>注销</button>
+          : <button type="button" className="wbh-btnPrimary" onClick={() => setShowAuth(true)}>扫码登录</button>}
       </div>
-      <div className="ec-picker-header-right">
-        <div className="ec-search-wrapper">
-          <input value={query} placeholder={`搜索${KINDS.find(k => k.id === kind).label}`}
-            onChange={e => setQuery(e.target.value)} />
-        </div>
-      </div>
-      <div className="ec-category-tabs-wrap"><div className="ec-category-tabs">
-        <button type="button" className="ec-category-tab is-active">全部</button>
-        {cats.map(c => <button key={c.id} type="button" className="ec-category-tab">{c.label}{c.count != null ? ` ${c.count}` : ''}</button>)}
-      </div></div>
-      <div className="ec-expert-grid">
-        {hits.map(entry => (
-          <article key={`${entry.kind}/${entry.name}`} className="ec-expert-card ec-expert-card--selectable">
-            <button type="button" className="ec-card-summon-btn ec-card-summon-btn--top"
-              onClick={() => onNotice?.(`${entry.kind}/${entry.name}`)}>
-              {entry.kind === 'expert' ? '召唤' : '连接'}
-            </button>
-            <div className="ec-card-main">
-              <div className="ec-card-head">
-                <div className="ec-card-avatar-sq">{entry.icon ? <img src={entry.icon} alt="" /> : <span>{(entry.displayName || entry.name || '?').slice(0, 1)}</span>}</div>
-                <div className="ec-card-body">
-                  <div className="ec-card-title-row"><div className="ec-card-role-wrap"><div className="ec-card-role">{entry.displayName || entry.name}</div></div></div>
-                  <div className="ec-card-subtitle">{entry.subtitle || entry.kind}</div>
-                </div>
-              </div>
-              <div className="ec-card-desc">{entry.description || entry.dir}</div>
-              <div className="ec-card-tags">{(entry.tags ?? []).slice(0, 3).map(t => <span key={t} className="ec-card-tag">{t}</span>)}</div>
-            </div>
-          </article>
-        ))}
-      </div>
+      <Catalogue
+        sessionId={sessionId} kind={kind} onKind={setKind} query={query} onQuery={setQuery}
+        onAction={onAction} installed={installed} mounted={mounted} busy={busy}
+      />
+      {notice && <p className="wbh-notice">{notice}</p>}
+      {summoning && (
+        <SummonModal entry={summoning} busy={busy === `${summoning.kind}/${summoning.name}`}
+          onClose={() => setSummoning(null)}
+          onConfirm={async task => { await attach(summoning, task); setSummoning(null) }} />
+      )}
+      {authorising && (
+        <ConnectorAuthModal entry={authorising.entry} refs={authorising.refs} error={authorising.error}
+          busy={busy === `${authorising.entry.kind}/${authorising.entry.name}`}
+          onClose={() => setAuthorising(null)}
+          onRetry={async () => { await attach(authorising.entry); setAuthorising(null) }} />
+      )}
+      {showAuth && <WbAuthCardLazy onClose={() => { setShowAuth(false); void refresh() }} />}
     </div>
   )
 }
+
+// lazy-ish import kept simple (single bundle)
+import WbAuthCardLazy from './WbAuthCard.jsx'

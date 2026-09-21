@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import QRCode from 'qrcode'
+import { hub } from './hub.js'
 
 /** 添加腾讯账号 — workbuddy2api-style device-login card. Single account. */
-export default function WbAuthCard({ onClose, onDone, hub }) {
+export default function WbAuthCard({ onClose, onDone }) {
   const [phase, setPhase] = useState('starting') // starting | waiting | done | error
   const [authUrl, setAuthUrl] = useState('')
   const [qr, setQr] = useState('')
