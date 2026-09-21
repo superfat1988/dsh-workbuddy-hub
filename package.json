@@ -49,5 +49,8 @@
   "license": "MIT",
   "devDependencies": {
     "esbuild": "^0.28.2"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
   }
 }
