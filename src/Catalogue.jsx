@@ -159,6 +159,22 @@ export default function Catalogue({
   }, [kind, query, category, installed])
 
   const kindMeta = KINDS.find(k => k.id === kind) || KINDS[0]
+
+  const skeletonCards = (
+    <>{Array.from({ length: 6 }).map((_, i) => (
+      <div key={i} className="wbh-skelCard">
+        <div className="wbh-skelHead">
+          <div className="wbh-skelAvatar" />
+          <div className="wbh-skelLines">
+            <div className="wbh-skelRow" style={{ width: '45%' }} />
+            <div className="wbh-skelRow short" />
+          </div>
+        </div>
+        <div className="wbh-skelRow" />
+        <div className="wbh-skelRow short" />
+      </div>
+    ))}</>
+  )
   const shuffle = arr => [...arr].sort(() => Math.random() - 0.5)
 
   const kindTabs = (

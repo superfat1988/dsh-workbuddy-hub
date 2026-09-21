@@ -2457,6 +2457,7 @@ function Catalogue({
     };
   }, [kind, query, category, installed]);
   const kindMeta = KINDS.find((k) => k.id === kind) || KINDS[0];
+  const skeletonCards = /* @__PURE__ */ import_react2.default.createElement(import_react2.default.Fragment, null, Array.from({ length: 6 }).map((_, i) => /* @__PURE__ */ import_react2.default.createElement("div", { key: i, className: "wbh-skelCard" }, /* @__PURE__ */ import_react2.default.createElement("div", { className: "wbh-skelHead" }, /* @__PURE__ */ import_react2.default.createElement("div", { className: "wbh-skelAvatar" }), /* @__PURE__ */ import_react2.default.createElement("div", { className: "wbh-skelLines" }, /* @__PURE__ */ import_react2.default.createElement("div", { className: "wbh-skelRow", style: { width: "45%" } }), /* @__PURE__ */ import_react2.default.createElement("div", { className: "wbh-skelRow short" }))), /* @__PURE__ */ import_react2.default.createElement("div", { className: "wbh-skelRow" }), /* @__PURE__ */ import_react2.default.createElement("div", { className: "wbh-skelRow short" }))));
   const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
   const kindTabs = /* @__PURE__ */ import_react2.default.createElement("div", { className: "um-header__tabs" }, KINDS.map((k) => /* @__PURE__ */ import_react2.default.createElement(
     "button",
