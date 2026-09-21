@@ -3,7 +3,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 
-execFileSync('node_modules/.bin/esbuild', [
+execFileSync('npx', ['esbuild',
   'src/index.jsx', '--bundle', '--format=cjs', '--jsx=automatic',
   '--loader:.css=css', '--outfile=/tmp/wbh-body.js', '--external:react',
 ], { stdio: 'inherit' })
