@@ -165,3 +165,22 @@ export async function connectorRegistry(stateDir) {
     official: true,
   }))
 }
+
+/** Already-bound connectors for this account (authoritative connected state). */
+export async function connectorBound(stateDir) {
+  const token = await bearer(stateDir)
+  const { status, json } = await call('GET', '/console/as/connector/user/', { token })
+  if (status !== 200 || json?.code !== 0) return []
+  const items = json.data?.connectors ?? []
+  return items
+    .filter(c => c.connect_status === 1 || c.active_status === 1)
+    .map(c => ({ name: c.name, displayName: c.display_name || c.name, description: c.description || '', mode: c.connect_mode || '', connectAt: c.connect_at || '' }))
+}
+
+/** Start the official OAuth flow for one connector; returns the raw payload
+ *  (it carries the authorize URL when the provider supports it). */
+export async function connectorAuthStart(name, stateDir) {
+  const token = await bearer(stateDir)
+  const { status, json } = await call('POST', `/console/as/connector/oauth/${encodeURIComponent(name)}/start`, { token, body: {} })
+  return { status, payload: json }
+}

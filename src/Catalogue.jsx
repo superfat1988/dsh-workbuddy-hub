@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { hub, onCatalogChange } from './hub.js'
+import { hub, onCatalogChange, addSelection } from './hub.js'
+import { insertPromptIntoComposer } from './insert-prompt.js'
 import { WbIcon } from './icons.js'
 import './official-skill.css'
 import './official-connector.css'
@@ -126,9 +127,9 @@ function ExpertCard({ entry, kindLabel, busy, onDetail, onAction }) {
   )
 }
 
-function ConnectorCard({ entry, busy, onDetail, onAction }) {
+function ConnectorCard({ entry, busy, onDetail, onAction, onConnectorAction, bound }) {
   const key = `${entry.kind}/${entry.name}`
-  const enabled = entry._enabled || entry.isConnected
+  const enabled = bound ? bound.includes(entry.name) : Boolean(entry._enabled || entry.isConnected)
   const dot = busy === key ? 'connecting' : enabled ? 'connected' : ''
   return (
     <div className={`connector-card${enabled ? ' connector-card--installed' : ''}`} role="button" tabIndex={0}
@@ -146,9 +147,9 @@ function ConnectorCard({ entry, busy, onDetail, onAction }) {
       </div>
       <div className="connector-card-action">
         <button type="button" className="wb-button wb-button--secondary wb-button--medium"
-          disabled={busy === key} aria-label={`${enabled ? '断开' : '连接'} ${entry.displayName}`}
-          onClick={e => { e.stopPropagation(); onAction?.(entry) }}>
-          {busy === key ? '…' : enabled ? '断开' : '连接'}
+          disabled={busy === key} aria-label={`${enabled ? '解绑' : '连接'} ${entry.displayName}`}
+          onClick={e => { e.stopPropagation(); void onConnectorAction?.(entry) }}>
+          {busy === key ? '…' : enabled ? '解绑' : '连接'}
         </button>
       </div>
     </div>
@@ -175,6 +176,11 @@ export default function Catalogue({
   const [addMenu, setAddMenu] = useState(false)
   const [localOnly, setLocalOnly] = useState(false)
   const [detail, setDetail] = useState(null)   // 技能/连接器的二级界面
+  const [bound, setBound] = useState([])       // 官方已绑定的连接器（真实连接态）
+  const [notice, setNotice] = useState('')     // 操作结果提示（连接/解绑失败等）
+  const [pinned, setPinned] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('wbh-pinned') || '[]')) } catch { return new Set() }
+  })
   const scrollRef = useRef(null)
 
   const PAGE_SIZE = 60
@@ -194,6 +200,7 @@ export default function Catalogue({
     let live = true
     hub.categories(kind).then(c => { if (live) setCategories(c) }).catch(() => {})
     if (kind === 'skill') hub.localSkills().then(r => { if (live) setLocalRows(r) }).catch(() => {})
+    hub.boundConnectors().then(r => { if (live) setBound(r.map(x => x.name)) }).catch(() => {})
     return () => { live = false }
   }, [kind])
 
@@ -215,7 +222,11 @@ export default function Catalogue({
   }, [kind, query, category])
 
   useEffect(() => { setPage(1); void load(1, true) }, [load])
-  useEffect(() => onCatalogChange(() => { void load(1, true) }), [load])
+  useEffect(() => onCatalogChange(() => {
+    void load(1, true)
+    hub.boundConnectors().then(r => setBound(r.map(x => x.name))).catch(() => {})
+  }), [load])
+  const isBound = useCallback(entry => bound.includes(entry.name), [bound])
 
   // 懒加载：接近底部继续取下一页
   const onScroll = useCallback(e => {
@@ -234,10 +245,52 @@ export default function Catalogue({
     return copy
   }, [rows, sort, kind])
 
+  // 连接器：已绑定=解绑；未绑定=发起官方 OAuth 并打开授权页；失败明确报错
+  const connectorAction = useCallback(async entry => {
+    const key = `${entry.kind}/${entry.name}`
+    setBusy(key); setNotice('')
+    try {
+      if (isBound(entry)) {
+        await hub.disableConnector(entry.name)
+        await hub.unmount(undefined, entry.kind, entry.name)
+        setNotice(`已解绑「${entry.displayName}」`)
+      } else {
+        const r = await hub.connectorAuthStart(entry.name)
+        if (r?.ok && r.url) {
+          window.open(r.url, '_blank', 'noopener')
+          setNotice(`已打开「${entry.displayName}」的授权页，完成后点连接器行刷新状态`)
+        } else {
+          setNotice(`连接「${entry.displayName}」失败：${r?.message || '官方未返回授权链接'}`)
+        }
+      }
+      const fresh = await hub.boundConnectors().catch(() => [])
+      setBound(fresh.map(x => x.name))
+      await onRefresh?.()
+    } catch (error) {
+      setNotice(`操作失败：${String(error?.message || error)}`)
+    } finally { setBusy('') }
+  }, [isBound, onRefresh])
+
   const handleDetail = useCallback(entry => {
     if (entry.kind === 'expert') { onDetail?.(entry); return }
     setDetail(entry)
   }, [onDetail])
+
+  // 技能：选中即把「/技能名」写进聊天输入框（DSH 的 skill 调用样式），并显示 chip
+  const handleSkillPick = useCallback(entry => {
+    insertPromptIntoComposer(`/${entry.name} `)
+    addSelection(entry)
+  }, [])
+
+  const togglePin = useCallback(entry => {
+    const key = `${entry.kind}/${entry.name}`
+    setPinned(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      try { localStorage.setItem('wbh-pinned', JSON.stringify([...next])) } catch { /* 忽略 */ }
+      return next
+    })
+  }, [])
 
   const kindMeta = KINDS.find(k => k.id === kind) || KINDS[0]
 
@@ -331,7 +384,7 @@ export default function Catalogue({
         {!loading && failed && <div className="wbh-state">读取失败：{failed}</div>}
         {!loading && !failed && visible.length === 0 && <div className="wbh-state"><p>暂无{kindMeta.label}</p></div>}
         {visible.map(entry => kind === 'connector'
-          ? <ConnectorCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={handleDetail} onAction={onAction} />
+          ? <ConnectorCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={handleDetail} onAction={onAction} onConnectorAction={connectorAction} bound={bound} />
           : <SkillCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={handleDetail} onAction={onAction} />)}
         {loadingMore && skeletonCards}
       </div>
@@ -407,7 +460,7 @@ export default function Catalogue({
   const connectorDetailModal = detail && detail.kind === 'connector' ? (
     <div className="connector-detail-overlay connector-detail-modal-overlay"
       onClick={() => setDetail(null)}>
-      <div className={`connector-detail-modal${(detail._enabled || detail.isConnected) ? ' connector-detail-modal--connected' : ''}`}
+      <div className={`connector-detail-modal${isBound(detail) ? ' connector-detail-modal--connected' : ''}`}
         onClick={e => e.stopPropagation()}>
         <button type="button" className="connector-detail-close" aria-label="关闭" onClick={() => setDetail(null)}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -429,8 +482,8 @@ export default function Catalogue({
           <div className="wbh-detailActions">
             <button type="button" className="wb-button wb-button--secondary wb-button--medium"
               disabled={busy === `${detail.kind}/${detail.name}`}
-              onClick={() => onAction?.(detail)}>
-              {(detail._enabled || detail.isConnected) ? '断开' : '连接'}
+              onClick={() => void connectorAction(detail)}>
+              {isBound(detail) ? '解绑' : '连接'}
             </button>
           </div>
         </div>
@@ -531,17 +584,43 @@ export default function Catalogue({
       </>
     )
 
-    const visibleRows = localOnly ? localRows : visible
+    const installedExperts = Object.entries(installed)
+      .filter(([, rec]) => rec?.kind === 'expert')
+      .map(([key, rec]) => ({ key, kind: 'expert', name: rec.name || key.split('/')[1], displayName: rec.displayName || rec.name, description: rec.description || '', icon: rec.icon || '' }))
+    const baseRows = kind === 'expert'
+      ? (installedExperts.length ? installedExperts : visible)
+      : kind === 'skill'
+        ? (query ? visible : localRows)
+        : visible
+    const visibleRows = [...baseRows].sort((a, b) => {
+      const pa = pinned.has(`${a.kind}/${a.name}`) ? 0 : 1
+      const pb = pinned.has(`${b.kind}/${b.name}`) ? 0 : 1
+      return pa - pb
+    })
 
     const rowNode = entry => {
       const key = `${entry.kind}/${entry.name}`
-      const connected = Boolean(entry._enabled || entry.isConnected)
+      const connected = entry.kind === 'connector' ? isBound(entry) : Boolean(entry._enabled || entry.isConnected)
       return (
         <div key={key} className="wbh-flyoutRow" role="menuitem" tabIndex={0}
-          onClick={() => onAction?.(entry)}
+          onClick={() => {
+            if (entry.kind === 'skill') handleSkillPick(entry)
+            else if (entry.kind === 'connector') void connectorAction(entry)
+            else onAction?.(entry)
+          }}
           onKeyDown={e => { if (e.key === 'Enter') onAction?.(entry) }}>
           <span className="wbh-flyoutIcon"><EntryIcon entry={entry} size={24} round={entry.kind !== 'skill'} /></span>
           <span className="wbh-flyoutName">{entry.displayName}</span>
+          {entry.kind !== 'connector' && (
+            <button type="button"
+              className={`wbh-pinBtn${pinned.has(`${entry.kind}/${entry.name}`) ? ' is-pinned' : ''}`}
+              aria-label={pinned.has(`${entry.kind}/${entry.name}`) ? '取消置顶' : '置顶'}
+              onClick={e => { e.stopPropagation(); togglePin(entry) }}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M6 2h4l-.6 3.2 2.1 2.1H9.2L9 12.5l-1 1.5-1-1.5-.2-5.2H4.5l2.1-2.1L6 2Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+              </svg>
+            </button>
+          )}
           {entry.kind === 'connector' && (
             connected
               ? <span className="wbh-toggle is-on" role="switch" aria-checked="true" aria-label="已连接"><i /></span>
@@ -562,6 +641,7 @@ export default function Catalogue({
 
     return (
       <div className="wbh-flyout" role="dialog" aria-label={`选择${kindMeta.label}`}>
+        {notice ? <div className="wbh-notice">{notice}</div> : null}
         <div className="wbh-flyoutSearch">
           <WbIcon name="search" size={15} />
           <input value={query} placeholder={`搜索${kindMeta.label}`} aria-label={`搜索${kindMeta.label}`}
@@ -591,6 +671,7 @@ export default function Catalogue({
           {skillTopRight}
         </div>
       </header>
+      {notice ? <div className="wbh-notice wbh-notice--page">{notice}</div> : null}
       <div className="ec-page-layout">
         <div className="ec-main-content">
           {view !== 'market' && (

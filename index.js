@@ -17,7 +17,7 @@
  */
 import { homedir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
-import { loginStart, loginPoll, loadAuth, saveAuth, marketList, marketCategories, connectorRegistry } from './wb-market.js'
+import { loginStart, loginPoll, loadAuth, saveAuth, marketList, marketCategories, connectorRegistry, connectorBound, connectorAuthStart } from './wb-market.js'
 import { listExperts, categories as officialCategories, installExpert } from './wb-experts.js'
 import { skillDetails } from './wb-market.js'
 import { unzip } from './wb-unzip.js'
@@ -831,6 +831,29 @@ export function apply(ctx, config = {}) {
         json(res, 200, { ok: true, source: rows.length ? 'official' : 'mirror', rows })
       } catch (error) {
         json(res, 200, { ok: true, source: 'mirror', rows: [], error: error.message })
+      }
+      return true
+    }
+
+    // 官方「已绑定连接器」列表（真实连接态，不靠本地猜测）
+    if (route === 'GET /connectors/bound') {
+      try { json(res, 200, { ok: true, items: await connectorBound(P.state) }) }
+      catch (error) { json(res, 200, { ok: false, items: [], error: String(error?.message || error) }) }
+      return true
+    }
+
+    // 发起官方 OAuth：把官方返回的授权链接（或错误）原样交给客户端
+    if (route === 'POST /connectors/auth-start') {
+      const body = JSON.parse((await readBody(req)) || '{}')
+      const entryName = String(body.name || '')
+      if (!/^[\w.-]+$/.test(entryName)) { json(res, 400, { error: 'invalid name' }); return true }
+      try {
+        const { payload } = await connectorAuthStart(entryName, P.state)
+        const data = payload?.data ?? {}
+        const url = data.url || data.auth_url || data.authorize_url || data.redirect_url || data.authUrl || ''
+        json(res, 200, { ok: Boolean(url), url, code: payload?.code, message: payload?.msg || '', raw: url ? undefined : payload })
+      } catch (error) {
+        json(res, 200, { ok: false, url: '', message: String(error?.message || error) })
       }
       return true
     }
