@@ -705,7 +705,7 @@ export function apply(ctx, config = {}) {
         const out = await listExperts({
           query: url.searchParams.get('q') || '',
           categoryId: url.searchParams.get('category') || 'all',
-          limit: Math.min(100, Number(url.searchParams.get('limit') || 60) || 60),
+          limit: Math.min(500, Number(url.searchParams.get('limit') || 60) || 60),
         })
         json(res, 200, { ok: true, source: 'official-registry', ...out })
       } catch (error) {
@@ -961,6 +961,8 @@ export function apply(ctx, config = {}) {
         description: record?.description || persona.description,
       }
       try {
+        // 子会话规范要求一个可中断信号；宿主侧发起时用一个全新的、不会被外部取消的信号。
+        const controller = new AbortController()
         const started = await ctx.subagents.startContinuable({
           provider: 'spawn',
           label: `专家：${titled.title}`,
@@ -969,6 +971,7 @@ export function apply(ctx, config = {}) {
             prompt: [{ type: 'text', text: buildSummonPrompt(titled, task) }],
             persona: buildPersonaLine(titled),
           },
+          signal: controller.signal,
         })
         json(res, 200, { ok: true, childId: started.childId, sessionId: resolved })
       } catch (error) {
@@ -1157,8 +1160,17 @@ export function apply(ctx, config = {}) {
     return true
   }
 
+  // 任何路由未捕获的异常都返回可诊断的 JSON（此前会得到空体 400，无法定位）。
+  const guardedHandler = async (req, res) => {
+    try {
+      return await handler(req, res)
+    } catch (error) {
+      try { json(res, 500, { error: String(error?.message || error) }) } catch { /* headers sent */ }
+      return true
+    }
+  }
   ctx.effect(
-    () => ctx.webServer.register({ kind: 'prefix', path: PREFIX, handler }),
+    () => ctx.webServer.register({ kind: 'prefix', path: PREFIX, handler: guardedHandler }),
     'workbuddy-hub: routes',
   )
 }

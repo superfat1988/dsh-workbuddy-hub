@@ -2248,6 +2248,22 @@ var hub = {
       const rows2 = (r.rows ?? []).map((x) => ({ ...toEntry(x, "connector"), isConnected: x.isConnected, mcp: x.mcp, authType: x.authType }));
       return { rows: rows2, total: r.total ?? rows2.length, hasMore: false, source: r.source };
     }
+    if (kind === "expert") {
+      try {
+        const e = await api(`/official-experts?limit=500&q=${q}&category=${c}`);
+        const rows2 = (e.rows ?? []).map((x) => toEntry(x, kind));
+        if (rows2.length) {
+          const start = (page - 1) * pageSize;
+          return {
+            rows: rows2.slice(start, start + pageSize),
+            total: e.total ?? rows2.length,
+            hasMore: start + pageSize < (e.total ?? rows2.length),
+            source: "official-registry"
+          };
+        }
+      } catch {
+      }
+    }
     try {
       const r = await api(`/market-list?kind=${kind}&page=${page}&pageSize=${pageSize}&q=${q}&category=${c}`);
       if (r.source === "official") {
@@ -2256,14 +2272,6 @@ var hub = {
         return { rows: rows2, total, hasMore: page * pageSize < total, source: "official" };
       }
     } catch {
-    }
-    if (kind === "expert" && !query && !category && page === 1) {
-      try {
-        const e = await api(`/official-experts?limit=${pageSize}&q=${q}&category=${c}`);
-        const rows2 = (e.rows ?? []).map((x) => toEntry(x, kind));
-        if (rows2.length) return { rows: rows2, total: e.total ?? rows2.length, hasMore: false, source: "official-registry" };
-      } catch {
-      }
     }
     await api("/catalog");
     const m = await api(`/search?q=${q}&kind=${kind}s&limit=${pageSize}`);

@@ -82,6 +82,23 @@ export const hub = {
       const rows = (r.rows ?? []).map(x => ({ ...toEntry(x, 'connector'), isConnected: x.isConnected, mcp: x.mcp, authType: x.authType }))
       return { rows, total: r.total ?? rows.length, hasMore: false, source: r.source }
     }
+    // 专家以官方注册表为准：只有注册表条目带人设文件、可安装可召唤；
+    // 市场 API 的专家只有列表数据（无 persona），装了也召唤不了，故只在其后兜底。
+    if (kind === 'expert') {
+      try {
+        const e = await api(`/official-experts?limit=500&q=${q}&category=${c}`)
+        const rows = (e.rows ?? []).map(x => toEntry(x, kind))
+        if (rows.length) {
+          const start = (page - 1) * pageSize
+          return {
+            rows: rows.slice(start, start + pageSize),
+            total: e.total ?? rows.length,
+            hasMore: start + pageSize < (e.total ?? rows.length),
+            source: 'official-registry',
+          }
+        }
+      } catch { /* fall through to the market */ }
+    }
     try {
       const r = await api(`/market-list?kind=${kind}&page=${page}&pageSize=${pageSize}&q=${q}&category=${c}`)
       if (r.source === 'official') {
@@ -90,14 +107,6 @@ export const hub = {
         return { rows, total, hasMore: page * pageSize < total, source: 'official' }
       }
     } catch { /* fall through */ }
-    // Expert registry (no paging) keeps the page usable without an official login.
-    if (kind === 'expert' && !query && !category && page === 1) {
-      try {
-        const e = await api(`/official-experts?limit=${pageSize}&q=${q}&category=${c}`)
-        const rows = (e.rows ?? []).map(x => toEntry(x, kind))
-        if (rows.length) return { rows, total: e.total ?? rows.length, hasMore: false, source: 'official-registry' }
-      } catch { /* fall through */ }
-    }
     await api('/catalog')
     const m = await api(`/search?q=${q}&kind=${kind}s&limit=${pageSize}`)
     const rows = (m.hits ?? []).map(x => ({ ...toEntry(x, kind), official: false }))
