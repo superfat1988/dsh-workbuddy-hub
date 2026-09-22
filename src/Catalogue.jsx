@@ -1,9 +1,10 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react'
-import { hub } from './hub.js'
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { hub, onCatalogChange } from './hub.js'
 import { WbIcon } from './icons.js'
 import './official-skill.css'
 import './official-connector.css'
 import './official-skeleton.css'
+import './official-button.css'
 
 const KINDS = [
   { id: 'expert', label: '专家', icon: 'person' },
@@ -11,7 +12,55 @@ const KINDS = [
   { id: 'connector', label: '连接器', icon: 'link' },
 ]
 
-/** 官方 skill-card：icon + 名称 + "+" 安装钮 + 两行描述。 */
+/** 官方排序控件（.ec-sort-group / .ec-sort-btn）。 */
+const SORTS = [
+  { id: 'reco', label: '综合' },
+  { id: 'hot', label: '最热' },
+  { id: 'new', label: '最新' },
+]
+
+const FALLBACK_COLORS = 6
+
+/** 官方按条目稳定取一个 fallback 底色（--ec-avatar-fallback-bg-N）。 */
+function fallbackIndex(seed = '') {
+  let h = 0
+  for (const ch of String(seed)) h = (h * 31 + ch.codePointAt(0)) >>> 0
+  return (h % FALLBACK_COLORS) + 1
+}
+
+function numeric(value) {
+  const n = parseFloat(String(value ?? '').replace(/[^\d.]/g, ''))
+  return Number.isFinite(n) ? n : 0
+}
+
+/**
+ * 官方图标显示逻辑：有 icon 用 <img>；加载失败或没有 icon 时退化为官方
+ * .ec-avatar-sq-fallback（首字 + 稳定底色），不显示破图。
+ */
+function EntryIcon({ entry, size = 44, round = true }) {
+  const [broken, setBroken] = useState(false)
+  const label = entry.displayName || entry.name || '?'
+  const radius = round ? '50%' : `${Math.max(6, Math.round(size * 0.21))}px`
+  if (!entry.icon || broken) {
+    return (
+      <div className="ec-avatar-sq-fallback"
+        style={{
+          background: `var(--ec-avatar-fallback-bg-${fallbackIndex(entry.name || label)})`,
+          borderRadius: radius,
+          fontSize: Math.max(11, Math.round(size * 0.42)),
+          width: '100%', height: '100%',
+        }}>
+        {label.slice(0, 1)}
+      </div>
+    )
+  }
+  return (
+    <img src={entry.icon} alt="" loading="lazy" decoding="async"
+      onError={() => setBroken(true)}
+      style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: radius, flexShrink: 0, background: 'rgba(128,128,128,.15)' }} />
+  )
+}
+
 function SkillCard({ entry, busy, onDetail, onAction }) {
   const key = `${entry.kind}/${entry.name}`
   return (
@@ -20,10 +69,7 @@ function SkillCard({ entry, busy, onDetail, onAction }) {
       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onDetail?.(entry) } }}>
       <div className="skill-card-content">
         <div className="skill-card-icon">
-          {entry.icon
-            ? <img src={entry.icon} alt={entry.displayName} width={28} height={28}
-                style={{ borderRadius: 6, objectFit: 'cover', flexShrink: 0, background: 'rgba(128,128,128,.15)' }} />
-            : <span className="wbh-avatar-letter" style={{ width: 28, height: 28, borderRadius: 6, fontSize: 13 }}>{(entry.displayName || '?').slice(0, 1)}</span>}
+          <EntryIcon entry={entry} size={28} round={false} />
         </div>
         <div className="skill-card-top">
           <div className="skill-card-body">
@@ -43,39 +89,6 @@ function SkillCard({ entry, busy, onDetail, onAction }) {
   )
 }
 
-/** 官方连接器卡：圆 icon + name + status-dot + 两行描述 + action。 */
-function ConnectorCard({ entry, busy, onDetail, onAction }) {
-  const key = `${entry.kind}/${entry.name}`
-  const enabled = entry._enabled
-  const dot = busy === key ? 'connecting' : enabled ? 'connected' : ''
-  return (
-    <div className={`connector-card${enabled ? ' connector-card--installed' : ''}`} role="button" tabIndex={0}
-      onClick={() => onDetail?.(entry)}
-      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onDetail?.(entry) } }}>
-      <div className="connector-card-icon">
-        {entry.icon
-          ? <img src={entry.icon} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
-          : <span className="wbh-avatar-letter" style={{ width: 28, height: 28, borderRadius: '50%', fontSize: 13 }}>{(entry.displayName || '?').slice(0, 1)}</span>}
-      </div>
-      <div className="connector-card-main">
-        <div className="connector-card-name-row">
-          <div className="connector-card-name">{entry.displayName}</div>
-          {dot && <span className={`connector-card-status-dot connector-card-status-dot--${dot}`} />}
-        </div>
-        <div className="connector-card-desc">{entry.description || entry.name}</div>
-      </div>
-      <div className="connector-card-action">
-        <button type="button" className="wbh-btnGhost" disabled={busy === key}
-          aria-label={`${enabled ? '断开' : '连接'} ${entry.displayName}`}
-          onClick={e => { e.stopPropagation(); onAction?.(entry) }}>
-          {busy === key ? '…' : enabled ? '断开' : '连接'}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-/** 官方专家卡：头像/职称/描述/标签 + 悬停召唤钮。 */
 function ExpertCard({ entry, kindLabel, busy, onDetail, onAction }) {
   const key = `${entry.kind}/${entry.name}`
   const label = busy === key ? '…' : entry.kind === 'expert' ? '召唤' : '连接'
@@ -93,9 +106,7 @@ function ExpertCard({ entry, kindLabel, busy, onDetail, onAction }) {
       <div className="ec-card-main">
         <div className="ec-card-head">
           <div className="ec-card-avatar-sq">
-            {entry.icon
-              ? <img src={entry.icon} alt="" loading="lazy" />
-              : <span className="wbh-avatar-letter">{(entry.displayName || '?').slice(0, 1)}</span>}
+            <EntryIcon entry={entry} size={44} round />
           </div>
           <div className="ec-card-body">
             <div className="ec-card-title-row">
@@ -115,25 +126,67 @@ function ExpertCard({ entry, kindLabel, busy, onDetail, onAction }) {
   )
 }
 
-/**
- * The official marketplace surface. expert/connector pages use the
- * ec-topbar + ec-page-layout skeleton; the skill page uses the official
- * skills-view skeleton (featured strip, 推荐/套件 segment, category chips).
- */
+function ConnectorCard({ entry, busy, onDetail, onAction }) {
+  const key = `${entry.kind}/${entry.name}`
+  const enabled = entry._enabled || entry.isConnected
+  const dot = busy === key ? 'connecting' : enabled ? 'connected' : ''
+  return (
+    <div className={`connector-card${enabled ? ' connector-card--installed' : ''}`} role="button" tabIndex={0}
+      onClick={() => onDetail?.(entry)}
+      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onDetail?.(entry) } }}>
+      <div className="connector-card-icon">
+        <EntryIcon entry={entry} size={28} round />
+      </div>
+      <div className="connector-card-main">
+        <div className="connector-card-name-row">
+          <div className="connector-card-name">{entry.displayName}</div>
+          {dot && <span className={`connector-card-status-dot connector-card-status-dot--${dot}`} />}
+        </div>
+        <div className="connector-card-desc">{entry.description || entry.name}</div>
+      </div>
+      <div className="connector-card-action">
+        <button type="button" className="wb-button wb-button--secondary wb-button--medium"
+          disabled={busy === key} aria-label={`${enabled ? '断开' : '连接'} ${entry.displayName}`}
+          onClick={e => { e.stopPropagation(); onAction?.(entry) }}>
+          {busy === key ? '…' : enabled ? '断开' : '连接'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function Catalogue({
-  sessionId, kind, onKind, query, onQuery,
-  onDetail, onAction, installed = {}, mounted = new Set(), busy = '', variant = 'page',
+  sessionId, kind, onKind, query, onQuery, onDetail, onAction,
+  installed = {}, mounted = new Set(), busy = '', variant = 'page', onRefresh,
 }) {
   const [rows, setRows] = useState([])
+  const [hasMore, setHasMore] = useState(false)
+  const [page, setPage] = useState(1)
+  const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [failed, setFailed] = useState('')
   const [categories, setCategories] = useState([])
   const [category, setCategory] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [failed, setFailed] = useState('')
-  const [segment, setSegment] = useState(0)          // 0=推荐 1=套件 (skill only)
-  const [featured, setFeatured] = useState([])       // 精选技能 (skill only)
-  const [localRows, setLocalRows] = useState([])     // DSH 本机已装 skills
+  const [sort, setSort] = useState('reco')
+  const [featured, setFeatured] = useState([])
+  const [localRows, setLocalRows] = useState([])
+  const [segment, setSegment] = useState(0)
+  const [view, setView] = useState('market')      // market | installed | local
+  const [addMenu, setAddMenu] = useState(false)
+  const scrollRef = useRef(null)
 
-  useEffect(() => { setCategory(''); setSegment(0) }, [kind])
+  const PAGE_SIZE = 60
+  const hubSkills = useMemo(
+    () => Object.entries(installed)
+      .filter(([, rec]) => rec?.kind === 'skill')
+      .map(([key, rec]) => ({
+        key, kind: 'skill', name: rec.name || key.split('/')[1],
+        displayName: rec.displayName || rec.name, description: rec.description || '', icon: rec.icon || '',
+      })),
+    [installed],
+  )
+
+  useEffect(() => { setCategory(''); setSort('reco'); setSegment(0); setPage(1); setView('market') }, [kind])
 
   useEffect(() => {
     let live = true
@@ -142,21 +195,42 @@ export default function Catalogue({
     return () => { live = false }
   }, [kind])
 
-  useEffect(() => {
-    let live = true
-    setLoading(true); setFailed('')
-    hub.list(kind, { query, category, limit: 60 })
-      .then(r => {
-        if (!live) return
-        const merged = kind === 'connector'
-          ? r.map(x => ({ ...x, _enabled: Boolean(installed[`${x.kind}/${x.name}`]?.enabled) }))
-          : r
-        setRows(merged); setLoading(false)
-        if (kind === 'skill') setFeatured(shuffle(r).slice(0, 5))
+  const load = useCallback(async (targetPage, replace) => {
+    if (replace) { setLoading(true); setFailed('') } else setLoadingMore(true)
+    try {
+      const r = await hub.list(kind, { query, category, page: targetPage, pageSize: PAGE_SIZE })
+      if (replace && kind === 'skill') setFeatured([...r.rows].sort(() => Math.random() - 0.5).slice(0, 5))
+      setRows(prev => {
+        if (replace) return r.rows
+        const seen = new Set(prev.map(p => `${p.kind}/${p.name}`))
+        return [...prev, ...r.rows.filter(x => !seen.has(`${x.kind}/${x.name}`))]
       })
-      .catch(e => { if (live) { setFailed(e.message); setRows([]); setLoading(false) } })
-    return () => { live = false }
-  }, [kind, query, category, installed])
+      setHasMore(Boolean(r.hasMore))
+    } catch (e) {
+      if (replace) { setFailed(e.message); setRows([]) }
+      setHasMore(false)
+    } finally { setLoading(false); setLoadingMore(false) }
+  }, [kind, query, category])
+
+  useEffect(() => { setPage(1); void load(1, true) }, [load])
+  useEffect(() => onCatalogChange(() => { void load(1, true) }), [load])
+
+  // 懒加载：接近底部继续取下一页
+  const onScroll = useCallback(e => {
+    const el = e.currentTarget
+    if (!hasMore || loading || loadingMore) return
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 480) setPage(p => p + 1)
+  }, [hasMore, loading, loadingMore])
+
+  useEffect(() => { if (page > 1) void load(page, false) }, [page, load])
+
+  const visible = useMemo(() => {
+    if (kind !== 'expert' || sort === 'reco') return rows
+    const copy = [...rows]
+    if (sort === 'hot') copy.sort((a, b) => numeric(b.useCount) - numeric(a.useCount))
+    else if (sort === 'new') copy.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+    return copy
+  }, [rows, sort, kind])
 
   const kindMeta = KINDS.find(k => k.id === kind) || KINDS[0]
 
@@ -175,12 +249,11 @@ export default function Catalogue({
       </div>
     ))}</>
   )
-  const shuffle = arr => [...arr].sort(() => Math.random() - 0.5)
 
   const kindTabs = (
-    <div className="um-header__tabs">
+    <div className="um-header__tabs" role="tablist">
       {KINDS.map(k => (
-        <button key={k.id} type="button"
+        <button key={k.id} type="button" role="tab" aria-selected={kind === k.id}
           className={`um-tab${kind === k.id ? ' um-tab--active' : ''}`}
           onClick={() => onKind(k.id)}>
           <WbIcon name={k.icon} size={14} />
@@ -193,180 +266,185 @@ export default function Catalogue({
   const searchBox = (
     <div className="ec-search-wrapper">
       <WbIcon name="search" size={14} />
-      <input value={query} placeholder={`搜索${kindMeta.label}`}
-        aria-label={`搜索${kindMeta.label}`}
+      <input value={query} placeholder={`搜索${kindMeta.label}`} aria-label={`搜索${kindMeta.label}`}
         onChange={e => onQuery(e.target.value)} />
     </div>
   )
 
-  /* ---------- 技能页骨架 ---------- */
-  const skillGrid = (
-    <div className="skills-grid">
-      {loading && skeletonCards}
-      {!loading && failed && <div className="wbh-state">读取失败：{failed}</div>}
-      {!loading && !failed && rows.length === 0 && (
-        <div className="wbh-state"><p>暂无技能</p></div>
-      )}
-      {rows.map(entry => (
-        <SkillCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy}
-          onDetail={onDetail} onAction={onAction} />
+  const sortGroup = kind === 'expert' ? (
+    <div className="ec-sort-group" role="tablist" aria-label="排序">
+      {SORTS.map(s => (
+        <button key={s.id} type="button" role="tab" aria-selected={sort === s.id}
+          className={`ec-sort-btn${sort === s.id ? ' is-active' : ''}`}
+          onClick={() => setSort(s.id)}>{s.label}</button>
       ))}
     </div>
-  )
+  ) : null
 
-  const skillCategoryRow = (
-    <div className="category-chip-list">
-      <button type="button"
-        className={`category-chip${category === '' ? ' category-chip--active' : ''}`}
-        onClick={() => setCategory('')}>
-        <span className="category-chip-label">全部</span>
-      </button>
-      {categories.map(c => (
-        <button key={c.id} type="button"
-          className={`category-chip${category === c.id ? ' category-chip--active' : ''}`}
-          onClick={() => setCategory(c.id)}>
-          <span className="category-chip-label">{c.label}</span>
-        </button>
-      ))}
-    </div>
-  )
-
-  const skillSegment = (
-    <div className="skills-segment-bar">
-      <div className="skills-segment-group">
-        {['推荐', '套件'].map((s, i) => (
-          <button key={s} type="button"
-            className={`skills-segment-item${segment === i ? ' skills-segment-item--active' : ''}`}
-            onClick={() => setSegment(i)}>{s}</button>
-        ))}
-      </div>
-    </div>
-  )
-
-  const skillPage = (
-    <div className="skills-view">
-      <div className="skills-content">
-        {!query && segment === 0 && featured.length > 0 && (
-          <div className="skills-featured-section">
-            <div className="skills-featured-header">
-              <div className="skills-featured-title">精选技能</div>
-              <button type="button" className="skills-featured-refresh-btn"
-                onClick={() => setFeatured(shuffle(rows).slice(0, 5))}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="14" height="14">
-                  <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
-                </svg>
-                <span>换一换</span>
-              </button>
-            </div>
-            <div className="skills-grid">
-              {featured.map(entry => (
-                <SkillCard key={`f-${entry.kind}/${entry.name}`} entry={entry} busy={busy}
-                  onDetail={onDetail} onAction={onAction} />
-              ))}
-            </div>
-          </div>
-        )}
-        {skillSegment}
-        {skillCategoryRow}
-        {skillGrid}
-      </div>
-    </div>
-  )
-
-  /* ---------- 专家/连接器页骨架 ---------- */
-  const categoryRow = (
-    <div className="ec-category-tabs-wrap">
-      <div className="ec-category-tabs">
-        <button type="button"
-          className={`ec-category-tab${category === '' ? ' is-active' : ''}`}
-          onClick={() => setCategory('')}>全部</button>
+  const categoryChips = kind === 'skill'
+    ? (
+      <div className="category-chip-list">
+        <button type="button" className={`category-chip${category === '' ? ' category-chip--active' : ''}`} onClick={() => setCategory('')}>
+          <span className="category-chip-label">全部</span></button>
         {categories.map(c => (
-          <button key={c.id} type="button"
-            className={`ec-category-tab${category === c.id ? ' is-active' : ''}`}
-            onClick={() => setCategory(c.id)}>
-            {c.label}
-            {typeof c.count === 'number' && <span className="ec-expert-count">{c.count}</span>}
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-
-  const cardGrid = kind === 'connector'
-    ? <div className="skills-grid">{rows.map(entry => (
-        <ConnectorCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy}
-          onDetail={onDetail} onAction={onAction} />
-      ))}</div>
-    : (
-      <div className="ec-expert-grid">
-        {loading && <div className="wbh-state">正在读取市场目录…</div>}
-        {!loading && failed && <div className="wbh-state">读取失败：{failed}</div>}
-        {!loading && !failed && rows.length === 0 && (
-          <div className="wbh-state"><WbIcon name={kindMeta.icon} size={40} /><p>暂无该分类的条目</p></div>
-        )}
-        {rows.map(entry => (
-          <ExpertCard key={`${entry.kind}/${entry.name}`} entry={entry} kindLabel={kindMeta.label}
-            busy={busy} onDetail={onDetail} onAction={onAction} />
+          <button key={c.id} type="button" className={`category-chip${category === c.id ? ' category-chip--active' : ''}`} onClick={() => setCategory(c.id)}>
+            <span className="category-chip-label">{c.label}</span></button>
         ))}
       </div>
     )
+    : (
+      <div className="ec-category-tabs-wrap">
+        <div className="ec-category-tabs">
+          <button type="button" className={`ec-category-tab${category === '' ? ' is-active' : ''}`} onClick={() => setCategory('')}>全部</button>
+          {categories.map(c => (
+            <button key={c.id} type="button" className={`ec-category-tab${category === c.id ? ' is-active' : ''}`} onClick={() => setCategory(c.id)}>{c.label}</button>
+          ))}
+        </div>
+      </div>
+    )
 
-  const mainPage = (
-    <div className="ec-market-panel">
-      <header className="ec-topbar">
-        <div className="ec-topbar__left">
-          <div className="um-header__inner">{kindTabs}</div>
-        </div>
-        <div className="ec-topbar__right">
-          {searchBox}
-          {kind === 'skill' && (
-            <>
-              <button type="button" className="wbh-btnGhost">我安装的</button>
-              <button type="button" className="wbh-btnGhost">添加技能</button>
-            </>
-          )}
-        </div>
-      </header>
-      <div className="ec-page-layout">
-        <div className="ec-main-content">
-          {kind === 'skill' ? skillPage : (<>{categoryRow}<div className="ec-main-scroll">{cardGrid}</div></>)}
-        </div>
+  const cardGrid = kind === 'expert'
+    ? (
+      <div className="ec-expert-grid">
+        {loading && skeletonCards}
+        {!loading && failed && <div className="wbh-state">读取失败：{failed}</div>}
+        {!loading && !failed && visible.length === 0 && (
+          <div className="wbh-state"><WbIcon name={kindMeta.icon} size={40} /><p>暂无该分类的条目</p></div>
+        )}
+        {visible.map(entry => (
+          <ExpertCard key={`${entry.kind}/${entry.name}`} entry={entry} kindLabel={kindMeta.label}
+            busy={busy} onDetail={onDetail} onAction={onAction} />
+        ))}
+        {loadingMore && skeletonCards}
+      </div>
+    )
+    : (
+      <div className="skills-grid">
+        {loading && skeletonCards}
+        {!loading && failed && <div className="wbh-state">读取失败：{failed}</div>}
+        {!loading && !failed && visible.length === 0 && <div className="wbh-state"><p>暂无{kindMeta.label}</p></div>}
+        {visible.map(entry => kind === 'connector'
+          ? <ConnectorCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={onDetail} onAction={onAction} />
+          : <SkillCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={onDetail} onAction={onAction} />)}
+        {loadingMore && skeletonCards}
+      </div>
+    )
+
+  const featuredSection = (
+    <div className="skills-featured-section">
+      <div className="skills-featured-header">
+        <div className="skills-featured-title">精选技能</div>
+        <button type="button" className="skills-featured-refresh-btn"
+          onClick={() => setFeatured([...rows].sort(() => Math.random() - 0.5).slice(0, 5))}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="14" height="14">
+            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+          </svg>
+          <span>换一换</span>
+        </button>
+      </div>
+      <div className="skills-grid">
+        {featured.map(entry => (
+          <SkillCard key={`f-${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={onDetail} onAction={onAction} />
+        ))}
       </div>
     </div>
   )
 
-  /* ---------- picker 弹窗骨架 ---------- */
-  const pickerGrid = (
-    <div className={kind === 'expert' ? 'ec-expert-grid' : 'skills-grid'}>
-      {loading && skeletonCards}
-      {!loading && failed && <div className="wbh-state">读取失败：{failed}</div>}
-      {rows.map(entry => kind === 'expert'
-        ? <ExpertCard key={`${entry.kind}/${entry.name}`} entry={entry} kindLabel={kindMeta.label}
-            busy={busy} onDetail={onDetail} onAction={onAction} />
-        : kind === 'connector'
-        ? <ConnectorCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy}
-            onDetail={onDetail} onAction={onAction} />
-        : <SkillCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy}
-            onDetail={onDetail} onAction={onAction} />)}
+  const segmentBar = (
+    <div className="skills-segment-bar">
+      <div className="skills-segment-group">
+        {['推荐', '套件'].map((label, i) => (
+          <button key={label} type="button"
+            className={`skills-segment-item${segment === i ? ' skills-segment-item--active' : ''}`}
+            onClick={() => setSegment(i)}>{label}</button>
+        ))}
+      </div>
     </div>
   )
 
+  const installedGrid = (
+    <div className="skills-grid">
+      {hubSkills.length === 0 && <div className="wbh-state"><p>还没有通过 WorkBuddy Hub 安装的技能</p></div>}
+      {hubSkills.map(entry => (
+        <div className="wbh-installedCard" key={entry.key}>
+          <SkillCard entry={entry} busy={busy} onDetail={onDetail} onAction={onAction} />
+          <button type="button" className="wb-button wb-button--secondary wb-button--small wbh-uninstallBtn"
+            onClick={async e => { e.stopPropagation(); await hub.uninstall('skill', entry.name); await onRefresh?.() }}>卸载</button>
+        </div>
+      ))}
+    </div>
+  )
+
+  const localGrid = (
+    <div className="skills-grid">
+      {localRows.length === 0 && <div className="wbh-state"><p>本机 ~/.dsh/skills 下没有可添加的技能</p></div>}
+      {localRows.map(entry => (
+        <SkillCard key={`local-${entry.name}`} entry={entry} busy={busy} onDetail={onDetail} onAction={onAction} />
+      ))}
+    </div>
+  )
+
+  const skillTopRight = kind === 'skill' ? (
+    <>
+      <button type="button" className="wb-button wb-button--secondary wb-button--medium"
+        aria-label="我安装的" aria-pressed={view === 'installed'}
+        onClick={() => setView(v => (v === 'installed' ? 'market' : 'installed'))}>
+        <span className="wb-button__icon wb-button__icon--left"><WbIcon name="download" size={14} /></span>
+        我安装的{hubSkills.length > 0 && <span className="wbh-btnCount">{hubSkills.length}</span>}
+      </button>
+      <div className="wbh-addWrap">
+        <button type="button" className="wb-button wb-button--secondary wb-button--medium"
+          aria-label="添加技能" aria-haspopup="menu" aria-expanded={addMenu}
+          onClick={() => setAddMenu(v => !v)}>
+          <span className="wb-button__icon wb-button__icon--left"><WbIcon name="plus" size={14} /></span>
+          添加技能
+        </button>
+        {addMenu && (
+          <>
+            <div className="wbh-addScrim" onClick={() => setAddMenu(false)} />
+            <div className="wbh-addMenu" role="menu">
+              <div className="wbh-addMenuItem" role="menuitem" tabIndex={0}
+                onClick={() => { setAddMenu(false); setView('local') }}>
+                <WbIcon name="download" size={14} />从本地添加技能
+              </div>
+              <div className="wbh-addMenuItem" role="menuitem" tabIndex={0}
+                onClick={() => { setAddMenu(false); setView('installed') }}>
+                <WbIcon name="gear" size={14} />管理技能
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </>
+  ) : null
+
   if (variant === 'picker') {
+    const pickerGrid = (
+      <div className={kind === 'expert' ? 'ec-expert-grid' : 'skills-grid'}>
+        {loading && skeletonCards}
+        {!loading && failed && <div className="wbh-state">读取失败：{failed}</div>}
+        {visible.map(entry => kind === 'expert'
+          ? <ExpertCard key={`${entry.kind}/${entry.name}`} entry={entry} kindLabel={kindMeta.label} busy={busy} onDetail={onDetail} onAction={onAction} />
+          : kind === 'connector'
+            ? <ConnectorCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={onDetail} onAction={onAction} />
+            : <SkillCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={onDetail} onAction={onAction} />)}
+        {loadingMore && skeletonCards}
+      </div>
+    )
     return (
       <div className="ec-picker-panel">
         <div className="ec-picker-header">
           {kindTabs}
           <div className="ec-picker-header-right">{searchBox}</div>
         </div>
-        {kind === 'skill' ? skillCategoryRow : categoryRow}
-        <div className="ec-picker-scroll">
-          {kind === 'skill' && localRows.length > 0 && (
+        {categoryChips}
+        <div className="ec-picker-scroll" ref={scrollRef} onScroll={onScroll}>
+          {kind === 'skill' && hubSkills.length > 0 && (
             <div className="wbh-picker-local">
-              <div className="wbh-picker-localTitle">已安装（本机）</div>
+              <div className="wbh-picker-localTitle">已安装（Hub）</div>
               <div className="skills-grid">
-                {localRows.map(entry => (
-                  <SkillCard key={`local-${entry.name}`} entry={entry} busy={busy}
-                    onDetail={onDetail} onAction={onAction} />
+                {hubSkills.map(entry => (
+                  <SkillCard key={`hub-${entry.name}`} entry={entry} busy={busy} onDetail={onDetail} onAction={onAction} />
                 ))}
               </div>
             </div>
@@ -374,12 +452,12 @@ export default function Catalogue({
           {pickerGrid}
         </div>
         <div className="wbh-picker-footer">
-          <div className="wbh-picker-footerItem" role="menuitem" tabIndex={0}>
-            <span className="wbh-picker-footerIcon">↑</span>
+          <div className="wbh-picker-footerItem" role="menuitem" tabIndex={0} onClick={() => setView('local')}>
+            <span className="wbh-picker-footerIcon"><WbIcon name="download" size={14} /></span>
             <span className="wbh-picker-footerLabel">从本地添加技能</span>
           </div>
-          <div className="wbh-picker-footerItem" role="menuitem" tabIndex={0}>
-            <span className="wbh-picker-footerIcon">◎</span>
+          <div className="wbh-picker-footerItem" role="menuitem" tabIndex={0} onClick={() => setView('installed')}>
+            <span className="wbh-picker-footerIcon"><WbIcon name="gear" size={14} /></span>
             <span className="wbh-picker-footerLabel">管理技能</span>
           </div>
         </div>
@@ -387,5 +465,43 @@ export default function Catalogue({
     )
   }
 
-  return mainPage
+  return (
+    <div className="ec-market-panel">
+      <header className="ec-topbar">
+        <div className="ec-topbar__left">
+          <div className="um-header__inner">{kindTabs}</div>
+        </div>
+        <div className="ec-topbar__right">
+          {searchBox}
+          {skillTopRight}
+        </div>
+      </header>
+      <div className="ec-page-layout">
+        <div className="ec-main-content">
+          {view !== 'market' && (
+            <div className="wbh-viewBar">
+              <button type="button" className="wb-button wb-button--secondary wb-button--small"
+                onClick={() => setView('market')}>← 返回{kindMeta.label}市场</button>
+              <span className="wbh-viewTitle">{view === 'installed' ? '我安装的' : '从本地添加技能'}</span>
+            </div>
+          )}
+          {view === 'market' && (
+            <div className="wbh-filterRow">
+              {categoryChips}
+              {sortGroup}
+            </div>
+          )}
+          <div className="ec-main-scroll" ref={scrollRef} onScroll={onScroll}>
+            {view === 'installed' ? installedGrid : view === 'local' ? localGrid : (
+              <>
+                {kind === 'skill' && !query && segment === 0 && featured.length > 0 && featuredSection}
+                {kind === 'skill' && segmentBar}
+                {cardGrid}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }

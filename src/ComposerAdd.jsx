@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { hub, onCatalogChange } from './hub.js'
+import { hub, addSelection, onCatalogChange } from './hub.js'
 import { WbIcon } from './icons.js'
 import Catalogue from './Catalogue.jsx'
 import SummonModal from './SummonModal.jsx'
 import ConnectorAuthModal from './ConnectorAuthModal.jsx'
+import AttachedRail from './AttachedRail.jsx'
 import { insertPromptIntoComposer } from './insert-prompt.js'
 
 const KINDS = [
@@ -63,9 +64,25 @@ export default function ComposerAdd({ sessionId, runCommand }) {
   const attach = useCallback(async (entry, task = '') => {
     const key = `${entry.kind}/${entry.name}`
     setBusy(key); setNotice('')
+    // 官方逻辑：在 picker 里选中即刻在聊天框出现该项的 chip（选择态），
+    // 安装/挂载是后续动作，失败也不回滚这次选择。
+    addSelection(entry)
     try {
-      if (!installed[key]) {
-        await hub.install(entry.kind, entry.name, entry.official ? 'official' : undefined)
+      let already = Boolean(installed[key])
+      if (!already) {
+        try {
+          const fresh = await hub.installed()
+          already = Boolean(fresh[key])
+        } catch { /* 读不到就按下述安装路径处理 */ }
+      }
+      if (!already) {
+        try {
+          await hub.install(entry.kind, entry.name, entry.official ? 'official' : undefined)
+        } catch (error) {
+          // 已经装过时后端会 400；以注册表再确认一次，避免把「已安装」当失败。
+          const fresh = await hub.installed().catch(() => ({}))
+          if (!fresh[key]) throw error
+        }
       }
       if (entry.kind === 'connector') {
         if (installed[key]?.enabled) {
@@ -75,6 +92,7 @@ export default function ComposerAdd({ sessionId, runCommand }) {
         } else {
           const r = await hub.enableConnector(entry.name)
           if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
+          addSelection(entry)
           setNotice(`已连接「${entry.displayName}」（工具命名空间 ${r.serverName}），下一次模型步骤起可用。`)
         }
       } else if (entry.kind === 'expert') {
@@ -85,6 +103,7 @@ export default function ComposerAdd({ sessionId, runCommand }) {
                        : `已挂载，但召唤失败：${r.error}`)
       } else {
         if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
+        addSelection(entry)
         setNotice(`已挂载「${entry.displayName}」`)
       }
       setRecent(prev => [entry, ...prev.filter(e => e.key !== key)].slice(0, 5))
@@ -128,6 +147,7 @@ export default function ComposerAdd({ sessionId, runCommand }) {
         onClick={() => { setMenuOpen(v => !v); setPickerOpen(false) }}>
         <WbIcon name="plus" size={14} />
       </button>
+      <AttachedRail sessionId={sessionId} />
 
       {menuOpen && (
         <>

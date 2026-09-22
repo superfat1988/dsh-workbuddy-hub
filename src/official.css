@@ -1313,3 +1313,10 @@
 .skills-view .ec-topbar--subpage .ec-topbar__back { display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 10px;border:none;background:transparent;color:var(--wb-color-text-secondary);font-size:13px;font-weight:500;cursor:pointer;border-radius:8px;transition:background .15s ease,color .15s ease;-webkit-app-region:no-drag }
 .skills-view .ec-topbar--subpage .ec-topbar__back:hover { background:var(--wb-bg-hover);color:var(--wb-color-text-primary) }
 .skills-view .ec-topbar--subpage .ec-topbar__back svg { flex-shrink:0 }
+
+.ec-sort-group { display:inline-flex;align-items:center;gap:2px;height:28px;padding:2px;flex-shrink:0;border:none;border-radius:6px;background:var(--wb-bg-inset-strong);box-sizing:border-box }
+.ec-sort-btn { display:inline-flex;align-items:center;justify-content:center;height:24px;padding:0 8px;border-radius:4px;border:none;background:transparent;color:var(--wb-color-text-tertiary);font-size:12px;font-weight:500;line-height:22px;cursor:pointer;white-space:nowrap;transition:background .15s ease,color .15s ease }
+.ec-sort-btn:hover { color:var(--wb-color-text-secondary) }
+.ec-sort-btn.is-active { background:var(--wb-bg-card);color:var(--wb-color-text-primary) }
+.ec-avatar-sq-fallback { width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;color:var(--wb-button-primary-fg);border-radius:50% }
+.ec-category-tab.is-active .ec-expert-count { color:var(--wb-color-text-secondary) }

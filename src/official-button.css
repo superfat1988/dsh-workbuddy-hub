@@ -1,0 +1,16 @@
+/* Official wb-button primitives (extracted from the app CSS), with token
+   fallbacks to the values measured on the live page. */
+.wb-button { display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;border:none;outline:none;cursor:pointer;white-space:nowrap;user-select:none;text-decoration:none;transition:background-color .2s ease,color .2s ease,border-color .2s ease;font-family:PingFang SC,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;font-weight:500;border-radius:var(--wb-button-border-radius-medium) }
+.wb-button--medium { height:var(--wb-button-height-medium);padding:0 var(--wb-button-padding-medium);font-size:var(--wb-button-font-size-medium);gap:var(--wb-button-gap-medium);min-width:var(--wb-button-min-width-medium);line-height:var(--wb-button-line-height-medium) }
+.wb-button--small { height:var(--wb-button-height-small);padding:0 var(--wb-button-padding-small);font-size:var(--wb-button-font-size-small);gap:var(--wb-button-gap-small);min-width:var(--wb-button-min-width-small);border-radius:var(--wb-button-border-radius-small);line-height:var(--wb-button-line-height-small) }
+.wb-button--small .wb-button__icon { width:var(--wb-button-icon-size-small);height:var(--wb-button-icon-size-small) }
+.wb-button--secondary { background-color:var(--wb-button-secondary-bg);color:var(--wb-button-secondary-fg);border:1px solid var(--wb-button-secondary-border) }
+.wb-button--secondary:hover:not(:disabled) { background-color:var(--wb-button-secondary-bg-hover) }
+.wb-button--secondary:active:not(:disabled) { background-color:var(--wb-button-secondary-bg-active) }
+.wb-button--secondary:disabled,.wb-button--secondary.wb-button--disabled { color:var(--wb-button-secondary-fg-disabled);cursor:not-allowed }
+.wb-button--icon-only { min-width:unset;padding:0 }
+.wb-button--icon-only.wb-button--medium { width:var(--wb-button-height-medium);height:var(--wb-button-height-medium) }
+.wb-button--icon-only.wb-button--small { width:var(--wb-button-height-small);height:var(--wb-button-height-small) }
+.wb-button--icon-only.wb-button--large { width:var(--wb-button-height-large);height:var(--wb-button-height-large) }
+.wb-button__icon { display:inline-flex;align-items:center;justify-content:center;width:var(--wb-button-icon-size-medium);height:var(--wb-button-icon-size-medium);flex-shrink:0 }
+.wb-button__icon svg { width:100%;height:100%;color:currentColor;fill:currentColor }

@@ -5,6 +5,25 @@ const API = '/workbuddy-hub'
 // Tiny module-level event bus: the composer picker (input.left) and the
 // attached rail (composer.dock) are separate slot instances, so a mount /
 // unmount made by one must notify the other to re-read.
+// 已选条目（专家/技能/连接器）：composer 的 chip 直接读这份客户端状态，
+// 因此「选中即显示、悬停删除、取消即移除」不依赖槽组件能否拿到 sessionId。
+let _selected = []
+const _selListeners = new Set()
+export function selectedItems() { return _selected }
+export function onSelectionChange(fn) { _selListeners.add(fn); return () => { _selListeners.delete(fn) } }
+const _emitSelection = () => { for (const fn of _selListeners) { try { fn() } catch {} } }
+export function addSelection(entry) {
+  const key = `${entry.kind}/${entry.name}`
+  if (_selected.some(x => x.key === key)) return
+  _selected = [..._selected, { key, kind: entry.kind, name: entry.name, displayName: entry.displayName || entry.name, icon: entry.icon || '' }]
+  _emitSelection()
+}
+export function removeSelection(kind, name) {
+  const before = _selected.length
+  _selected = _selected.filter(x => !(x.kind === kind && x.name === name))
+  if (_selected.length !== before) _emitSelection()
+}
+
 const _changeListeners = new Set()
 export const onCatalogChange = fn => { _changeListeners.add(fn); return () => { _changeListeners.delete(fn) } }
 const _emitChange = () => { for (const fn of _changeListeners) { try { fn() } catch {} } }
@@ -44,6 +63,7 @@ function toEntry(row, kind) {
     tags: (row.tags ?? []).map(t => (typeof t === 'string' ? t : t.zh || t.en)).filter(Boolean).slice(0, 4),
     quickPrompts: (row.quickPrompts ?? []).map(q => (typeof q === 'string' ? q : q.zh || q.en)).filter(Boolean),
     useCount: row.use_count || row.useCount || row.usage || '',
+    updatedAt: row.updated_at || row.updatedAt || row.created_at || '',
     official: true,
   }
 }
@@ -54,26 +74,34 @@ export const hub = {
   toEntry,
 
   /** Catalogue for one kind, official sources first. */
-  async list(kind, { query = '', category = '', limit = 60 } = {}) {
+  async list(kind, { query = '', category = '', page = 1, pageSize = 60 } = {}) {
     const q = encodeURIComponent(query)
     const c = encodeURIComponent(category || '')
     if (kind === 'connector') {
-      const r = await api(`/market-list?kind=connector&pageSize=${limit}&q=${q}`)
-      return (r.rows ?? []).map(x => ({ ...toEntry(x, 'connector'), isConnected: x.isConnected, mcp: x.mcp, authType: x.authType }))
+      const r = await api(`/market-list?kind=connector&pageSize=${pageSize}&q=${q}`)
+      const rows = (r.rows ?? []).map(x => ({ ...toEntry(x, 'connector'), isConnected: x.isConnected, mcp: x.mcp, authType: x.authType }))
+      return { rows, total: r.total ?? rows.length, hasMore: false, source: r.source }
     }
     try {
-      if (kind === 'expert') {
-        const r = await api(`/official-experts?limit=${limit}&q=${q}&category=${c}`)
+      const r = await api(`/market-list?kind=${kind}&page=${page}&pageSize=${pageSize}&q=${q}&category=${c}`)
+      if (r.source === 'official') {
         const rows = (r.rows ?? []).map(x => toEntry(x, kind))
-        if (rows.length) return rows
-        if (r.total === 0 && query === '' && !category) return []
+        const total = r.total ?? rows.length
+        return { rows, total, hasMore: page * pageSize < total, source: 'official' }
       }
-      const r = await api(`/market-list?kind=${kind}&pageSize=${limit}&q=${q}&category=${c}`)
-      if (r.source === 'official') return (r.rows ?? []).map(x => toEntry(x, kind))
-    } catch { /* fall through to the mirror */ }
+    } catch { /* fall through */ }
+    // Expert registry (no paging) keeps the page usable without an official login.
+    if (kind === 'expert' && !query && !category && page === 1) {
+      try {
+        const e = await api(`/official-experts?limit=${pageSize}&q=${q}&category=${c}`)
+        const rows = (e.rows ?? []).map(x => toEntry(x, kind))
+        if (rows.length) return { rows, total: e.total ?? rows.length, hasMore: false, source: 'official-registry' }
+      } catch { /* fall through */ }
+    }
     await api('/catalog')
-    const r = await api(`/search?q=${q}&kind=${kind}s&limit=${limit}`)
-    return (r.hits ?? []).map(x => ({ ...toEntry(x, kind), official: false }))
+    const m = await api(`/search?q=${q}&kind=${kind}s&limit=${pageSize}`)
+    const rows = (m.hits ?? []).map(x => ({ ...toEntry(x, kind), official: false }))
+    return { rows, total: m.total ?? rows.length, hasMore: false, source: 'mirror' }
   },
 
   /** Category chips for one kind (官方来源). */

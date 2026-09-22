@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { hub } from './hub.js'
+import { hub, addSelection } from './hub.js'
 import { WbIcon } from './icons.js'
 import Catalogue from './Catalogue.jsx'
 import SummonModal from './SummonModal.jsx'
@@ -32,6 +32,9 @@ export default function MarketPage({ sessionId, runCommand }) {
   const attach = useCallback(async (entry, task = '') => {
     const key = `${entry.kind}/${entry.name}`
     setBusy(key); setNotice('')
+    // 官方逻辑：在 picker 里选中即刻在聊天框出现该项的 chip（选择态），
+    // 安装/挂载是后续动作，失败也不回滚这次选择。
+    addSelection(entry)
     try {
       if (!installed[key]) await hub.install(entry.kind, entry.name, entry.official ? 'official' : undefined)
       if (entry.kind === 'connector') {
@@ -42,6 +45,7 @@ export default function MarketPage({ sessionId, runCommand }) {
         } else {
           const r = await hub.enableConnector(entry.name)
           if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
+          addSelection(entry)
           setNotice(`已连接「${entry.displayName}」（工具命名空间 ${r.serverName}），下一次模型步骤起可用。`)
         }
       } else if (entry.kind === 'expert') {
@@ -52,6 +56,7 @@ export default function MarketPage({ sessionId, runCommand }) {
                        : `已挂载，但召唤失败：${r.error}`)
       } else {
         if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
+        addSelection(entry)
         setNotice(`已挂载「${entry.displayName}」`)
       }
       await refresh()
@@ -84,6 +89,7 @@ export default function MarketPage({ sessionId, runCommand }) {
       <Catalogue
         sessionId={sessionId} kind={kind} onKind={setKind} query={query} onQuery={setQuery}
         onDetail={onDetail} onAction={onAction} installed={installed} mounted={mounted} busy={busy}
+        onRefresh={refresh}
       />
       {notice && <p className="wbh-notice">{notice}</p>}
       {summoning && (

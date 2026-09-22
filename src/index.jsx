@@ -46,11 +46,8 @@ const plugin = {
       name: 'conversation.input.left', id: 'workbuddy-hub-add', order: -90,
       label: () => '专家·技能·连接器',
     }, ComposerSlot))
-    // Never input.overlay: it floats INSIDE the card and would cover the placeholder.
-    ctx.slots.inject('conversation.composer.dock', () => reg('conversation.composer.dock', {
-      name: 'conversation.composer.dock', id: 'workbuddy-hub-attached', order: -90,
-      label: () => '已挂载 WorkBuddy 条目',
-    }, RailSlot))
+    // 已选专家/技能/连接器的 chip 由 input.left 内的 AttachedRail 渲染，
+    // 与官方一致地紧挨「+」按钮显示在输入卡左下角（不再单独注册 dock 槽）。
     ctx.slots.inject('settings.section', () => reg('settings.section', {
       name: 'settings.section', id: 'workbuddy-hub', order: 85,
       label: () => '专家·技能·连接器',
