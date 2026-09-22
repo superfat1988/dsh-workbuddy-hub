@@ -44,18 +44,18 @@ export default function MarketPage({ sessionId, runCommand }) {
           setNotice(`已断开「${entry.displayName}」`)
         } else {
           const r = await hub.enableConnector(entry.name)
-          if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
+          await hub.mount(sessionId, entry.kind, entry.name)
           addSelection(entry)
           setNotice(`已连接「${entry.displayName}」（工具命名空间 ${r.serverName}），下一次模型步骤起可用。`)
         }
       } else if (entry.kind === 'expert') {
-        if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
-        const line = `/expert ${entry.name}${task.trim() ? ` ${task.trim()}` : ''}`
-        const r = await runCommand(sessionId, line)
-        setNotice(r.ok ? `已召唤「${entry.displayName}」：${r.value?.text || '专家会话已创建'}`
+        // 宿主侧解析会话，客户端不需要 sessionId
+        await hub.mount(sessionId, entry.kind, entry.name)
+        const r = await hub.summon(entry.name, task, sessionId)
+        setNotice(r.ok ? `已召唤「${entry.displayName}」：子会话 ${r.childId}`
                        : `已挂载，但召唤失败：${r.error}`)
       } else {
-        if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
+        await hub.mount(sessionId, entry.kind, entry.name)
         addSelection(entry)
         setNotice(`已挂载「${entry.displayName}」`)
       }

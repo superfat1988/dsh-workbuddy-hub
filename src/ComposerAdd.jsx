@@ -58,7 +58,7 @@ export default function ComposerAdd({ sessionId, runCommand }) {
 
   const openPicker = useCallback(k => {
     setKind(k); setQuery('')
-    setMenuOpen(false); setPickerOpen(true)
+    setMenuOpen(true); setPickerOpen(true)
   }, [])
 
   const attach = useCallback(async (entry, task = '') => {
@@ -91,18 +91,18 @@ export default function ComposerAdd({ sessionId, runCommand }) {
           setNotice(`已断开「${entry.displayName}」`)
         } else {
           const r = await hub.enableConnector(entry.name)
-          if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
+          await hub.mount(sessionId, entry.kind, entry.name)
           addSelection(entry)
           setNotice(`已连接「${entry.displayName}」（工具命名空间 ${r.serverName}），下一次模型步骤起可用。`)
         }
       } else if (entry.kind === 'expert') {
-        if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
-        const line = `/expert ${entry.name}${task.trim() ? ` ${task.trim()}` : ''}`
-        const r = await runCommand(sessionId, line)
-        setNotice(r.ok ? `已召唤「${entry.displayName}」：${r.value?.text || '专家会话已创建'}`
+        // 宿主侧解析会话，客户端不需要 sessionId
+        await hub.mount(sessionId, entry.kind, entry.name)
+        const r = await hub.summon(entry.name, task, sessionId)
+        setNotice(r.ok ? `已召唤「${entry.displayName}」：子会话 ${r.childId}`
                        : `已挂载，但召唤失败：${r.error}`)
       } else {
-        if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
+        await hub.mount(sessionId, entry.kind, entry.name)
         addSelection(entry)
         setNotice(`已挂载「${entry.displayName}」`)
       }
@@ -151,51 +151,37 @@ export default function ComposerAdd({ sessionId, runCommand }) {
 
       {menuOpen && (
         <>
-          <div className="wbh-popScrim" onClick={() => setMenuOpen(false)} />
+          <div className="wbh-popScrim" onClick={() => { setMenuOpen(false); setPickerOpen(false) }} />
           <div className="wbh-menu" role="menu">
             <div className="wbh-menu-list">
-              {menuEntries.length === 0 && (
-                <div className="wbh-menu-item is-empty">暂无可选条目</div>
-              )}
-              {menuEntries.map(e => (
-                <div key={e.key} className="wbh-menu-item" role="menuitem" tabIndex={0}
-                  aria-checked={mounted.has(e.key) || undefined}
-                  onClick={() => { setMenuOpen(false); onDetail({ kind: e.kind, name: e.name, displayName: e.displayName, icon: e.icon }) }}
-                  onKeyDown={ev => { if (ev.key === 'Enter') { setMenuOpen(false); onDetail({ kind: e.kind, name: e.name, displayName: e.displayName, icon: e.icon }) } }}>
-                  <span className="wbh-menu-avatar" aria-hidden="true">
-                    {e.icon ? <img src={e.icon} alt="" /> : <span>{(e.displayName || '?').slice(0, 1)}</span>}
+              {KINDS.map(k => (
+                <div key={k.id}
+                  className={`wbh-menu-item${pickerOpen && kind === k.id ? ' is-open' : ''}`}
+                  role="menuitem" tabIndex={0}
+                  onMouseEnter={() => openPicker(k.id)}
+                  onClick={() => openPicker(k.id)}
+                  onKeyDown={e => { if (e.key === 'Enter') openPicker(k.id) }}>
+                  <span className="wbh-menu-avatar"><WbIcon name={k.icon} size={14} /></span>
+                  <span className="wbh-menu-name">{k.label}</span>
+                  <span className="wbh-menu-chevron" aria-hidden="true">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                      <path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
                   </span>
-                  <span className="wbh-menu-name">{e.displayName}</span>
                 </div>
               ))}
             </div>
-            <div className="wbh-menu-divider" role="separator" />
-            <div className="wbh-menu-item wbh-menu-summonMore" role="menuitem" tabIndex={0}
-              onClick={() => openPicker(kind)}
-              onKeyDown={ev => { if (ev.key === 'Enter') openPicker(kind) }}>
-              <span className="wbh-menu-summonMoreIcon">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                  <path d="M5 4.5h6.5V11" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M11.5 4.5L4.5 11.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </span>
-              <span className="wbh-menu-summonMoreLabel">召唤更多{KINDS.find(k => k.id === kind)?.label || ''}</span>
+          </div>
+          {pickerOpen && (
+            <div className="wbh-flyoutWrap">
+              <Catalogue
+                variant="picker" sessionId={sessionId} kind={kind} onKind={setKind}
+                query={query} onQuery={setQuery} onDetail={onDetail} onAction={onAction}
+                installed={installed} mounted={mounted} busy={busy}
+              />
             </div>
-          </div>
-        </>
-      )}
-
-      {pickerOpen && (
-        <>
-          <div className="wbh-popScrim" onClick={() => setPickerOpen(false)} />
-          <div className="wbh-pop">
-            <Catalogue
-              variant="picker" sessionId={sessionId} kind={kind} onKind={setKind}
-              query={query} onQuery={setQuery} onDetail={onDetail} onAction={onAction}
-              installed={installed} mounted={mounted} busy={busy}
-            />
-            {notice && <div className="wbh-popNotice">{notice}</div>}
-          </div>
+          )}
+          {notice && <div className="wbh-flyoutNotice">{notice}</div>}
         </>
       )}
 

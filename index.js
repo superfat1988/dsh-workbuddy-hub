@@ -29,7 +29,7 @@ import { createConnectorManager, validateConnectorMcp } from './mcp-manager.js'
 import { readExpertPersona, buildPersonaLine, buildSummonPrompt } from './expert-persona.js'
 
 export const name = 'workbuddy-hub'
-export const inject = ['webServer', 'connection', 'loader', 'commands', 'subagents', 'credentials']
+export const inject = ['webServer', 'connection', 'loader', 'commands', 'subagents', 'credentials', 'sessions', 'agents']
 
 const PREFIX = '/workbuddy-hub'
 const GH_RAW = 'https://raw.githubusercontent.com'
@@ -438,6 +438,28 @@ export function apply(ctx, config = {}) {
    * 专家召唤 — one durable child session per summon, expert persona
    * scoped to that child only (the main conversation keeps no persona).
    * ---------------------------------------------------------------- */
+
+  /* ---------------------------------------------------------------- *
+   * 会话解析（修法 1）：槽组件拿不到 sessionId，因此宿主侧解析——
+   * 显式传入优先，否则取最近创建的会话。mount / summon 都经此解析。
+   * ---------------------------------------------------------------- */
+  const resolveSessionId = explicit => {
+    const given = String(explicit || '').trim()
+    if (given) return given
+    try {
+      const list = ctx.sessions?.list?.() ?? []
+      let best = null
+      for (const item of list) {
+        const createdAt = item?.header?.createdAt ?? 0
+        if (best === null || createdAt > (best?.header?.createdAt ?? 0)) best = item
+      }
+      return best?.header?.id ?? best?.id ?? ''
+    } catch { return '' }
+  }
+  const resolveAgent = sessionId => {
+    if (!sessionId) return null
+    try { return ctx.agents?.get?.(sessionId) ?? null } catch { return null }
+  }
 
   const summonExpert = async (invocation, personaStore) => {
     const requested = String(invocation.rawInput || '').trim().replace(/^\s+/, '')
@@ -892,7 +914,7 @@ export function apply(ctx, config = {}) {
     }
 
     if (route === 'GET /mounted') {
-      const sessionId = url.searchParams.get('sessionId') || ''
+      const sessionId = resolveSessionId(url.searchParams.get('sessionId'))
       const store = readMounts(P)
       const keys = Array.isArray(store.sessions[sessionId]) ? store.sessions[sessionId] : []
       const registry = loadJson(P.registry, { version: 1, installed: {} })
@@ -909,12 +931,56 @@ export function apply(ctx, config = {}) {
       if (!['expert', 'skill', 'connector'].includes(kind) || !/^[\w.-]+$/.test(entryName)) {
         json(res, 400, { error: 'invalid kind or name' }); return true
       }
-      if (!sessionId) { json(res, 400, { error: 'sessionId required' }); return true }
-      const key = `${kind}/${officialMeta?.name ?? entryName}`
+      // 槽组件拿不到 sessionId：这里按「显式优先，否则最近会话」解析。
+      const resolved = resolveSessionId(sessionId)
+      if (!resolved) { json(res, 409, { error: 'no active session' }); return true }
+      const key = `${kind}/${entryName}`
       const list = route === 'POST /mount'
-        ? mountEntry(P, sessionId, key)
-        : unmountEntry(P, sessionId, key)
-      json(res, 200, { ok: true, sessionId, keys: list })
+        ? mountEntry(P, resolved, key)
+        : unmountEntry(P, resolved, key)
+      json(res, 200, { ok: true, sessionId: resolved, keys: list })
+      return true
+    }
+
+    // 召唤专家：宿主侧解析会话与 agent 后建立子会话（客户端无需 sessionId）。
+    if (route === 'POST /summon') {
+      const body = JSON.parse((await readBody(req)) || '{}')
+      const entryName = String(body.name || '')
+      const task = String(body.task || '')
+      if (!/^[\w.-]+$/.test(entryName)) { json(res, 400, { error: 'invalid name' }); return true }
+      const resolved = resolveSessionId(body.sessionId)
+      const agent = resolveAgent(resolved)
+      if (!agent) { json(res, 409, { error: 'no active session' }); return true }
+      const registry = loadJson(P.registry, { version: 1, installed: {} })
+      const record = registry.installed?.[`expert/${entryName}`]
+      const persona = readExpertPersona(P.experts, entryName)
+      if (!persona.ok) { json(res, 400, { error: `专家人设不可用：${persona.error}` }); return true }
+      const titled = {
+        ...persona,
+        title: record?.displayName || persona.title,
+        description: record?.description || persona.description,
+      }
+      try {
+        const started = await ctx.subagents.startContinuable({
+          provider: 'spawn',
+          label: `专家：${titled.title}`,
+          request: {
+            parent: agent,
+            prompt: [{ type: 'text', text: buildSummonPrompt(titled, task) }],
+            persona: buildPersonaLine(titled),
+          },
+        })
+        json(res, 200, { ok: true, childId: started.childId, sessionId: resolved })
+      } catch (error) {
+        json(res, 502, { error: String(error?.message || error) })
+      }
+      return true
+    }
+
+    // 当前解析到的会话（供界面显示/排障）
+    if (route === 'GET /active-session') {
+      const resolved = resolveSessionId('')
+      json(res, 200, { ok: true, sessionId: resolved, hasAgent: Boolean(resolveAgent(resolved)) })
       return true
     }
 

@@ -173,6 +173,7 @@ export default function Catalogue({
   const [segment, setSegment] = useState(0)
   const [view, setView] = useState('market')      // market | installed | local
   const [addMenu, setAddMenu] = useState(false)
+  const [localOnly, setLocalOnly] = useState(false)
   const scrollRef = useRef(null)
 
   const PAGE_SIZE = 60
@@ -418,49 +419,88 @@ export default function Catalogue({
     </>
   ) : null
 
+  // ---------- picker：官方二级面板（行列表 + 搜索 + 分类型底部项） ----------
   if (variant === 'picker') {
-    const pickerGrid = (
-      <div className={kind === 'expert' ? 'ec-expert-grid' : 'skills-grid'}>
-        {loading && skeletonCards}
-        {!loading && failed && <div className="wbh-state">读取失败：{failed}</div>}
-        {visible.map(entry => kind === 'expert'
-          ? <ExpertCard key={`${entry.kind}/${entry.name}`} entry={entry} kindLabel={kindMeta.label} busy={busy} onDetail={onDetail} onAction={onAction} />
-          : kind === 'connector'
-            ? <ConnectorCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={onDetail} onAction={onAction} />
-            : <SkillCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={onDetail} onAction={onAction} />)}
-        {loadingMore && skeletonCards}
+    const footerNode = kind === 'connector' ? (
+      <div className="wbh-flyoutFooterItem" role="menuitem" tabIndex={0} onClick={() => setView('installed')}>
+        <span className="wbh-flyoutFooterIcon">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M5 11L11 5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+            <path d="M6.5 5H11V9.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </span>
+        <span>管理连接器</span>
       </div>
+    ) : kind === 'expert' ? (
+      <div className="wbh-flyoutFooterItem" role="menuitem" tabIndex={0} onClick={() => setView('market')}>
+        <span className="wbh-flyoutFooterIcon">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M5 11L11 5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+            <path d="M6.5 5H11V9.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </span>
+        <span>召唤更多专家</span>
+      </div>
+    ) : (
+      <>
+        <div className="wbh-flyoutFooterItem" role="menuitem" tabIndex={0}
+          onClick={e => { e.stopPropagation(); setLocalOnly(true) }}>
+          <span className="wbh-flyoutFooterIcon"><WbIcon name="download" size={14} /></span>
+          <span>从本地添加技能</span>
+        </div>
+        <div className="wbh-flyoutFooterItem" role="menuitem" tabIndex={0}
+          onClick={e => { e.stopPropagation(); setLocalOnly(false); setView('installed') }}>
+          <span className="wbh-flyoutFooterIcon"><WbIcon name="gear" size={14} /></span>
+          <span>管理技能</span>
+        </div>
+      </>
     )
-    return (
-      <div className="ec-picker-panel">
-        <div className="ec-picker-header">
-          {kindTabs}
-          <div className="ec-picker-header-right">{searchBox}</div>
-        </div>
-        {categoryChips}
-        <div className="ec-picker-scroll" ref={scrollRef} onScroll={onScroll}>
-          {kind === 'skill' && hubSkills.length > 0 && (
-            <div className="wbh-picker-local">
-              <div className="wbh-picker-localTitle">已安装（Hub）</div>
-              <div className="skills-grid">
-                {hubSkills.map(entry => (
-                  <SkillCard key={`hub-${entry.name}`} entry={entry} busy={busy} onDetail={onDetail} onAction={onAction} />
-                ))}
-              </div>
-            </div>
+
+    const visibleRows = localOnly ? localRows : visible
+
+    const rowNode = entry => {
+      const key = `${entry.kind}/${entry.name}`
+      const connected = Boolean(entry._enabled || entry.isConnected)
+      return (
+        <div key={key} className="wbh-flyoutRow" role="menuitem" tabIndex={0}
+          onClick={() => onAction?.(entry)}
+          onKeyDown={e => { if (e.key === 'Enter') onAction?.(entry) }}>
+          <span className="wbh-flyoutIcon"><EntryIcon entry={entry} size={24} round={entry.kind !== 'skill'} /></span>
+          <span className="wbh-flyoutName">{entry.displayName}</span>
+          {entry.kind === 'connector' && (
+            connected
+              ? <span className="wbh-toggle is-on" role="switch" aria-checked="true" aria-label="已连接"><i /></span>
+              : (
+                <span className="wbh-linkAction" aria-hidden="true">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                    <path d="M6.5 9.5a2.5 2.5 0 0 0 3.5 0l2-2a2.5 2.5 0 0 0-3.5-3.5l-.8.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                    <path d="M9.5 6.5a2.5 2.5 0 0 0-3.5 0l-2 2a2.5 2.5 0 0 0 3.5 3.5l.8-.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                  </svg>
+                  <span>连接</span>
+                </span>
+              )
           )}
-          {pickerGrid}
+          {busy === key && <span className="wbh-flyoutBusy">…</span>}
         </div>
-        <div className="wbh-picker-footer">
-          <div className="wbh-picker-footerItem" role="menuitem" tabIndex={0} onClick={() => setView('local')}>
-            <span className="wbh-picker-footerIcon"><WbIcon name="download" size={14} /></span>
-            <span className="wbh-picker-footerLabel">从本地添加技能</span>
-          </div>
-          <div className="wbh-picker-footerItem" role="menuitem" tabIndex={0} onClick={() => setView('installed')}>
-            <span className="wbh-picker-footerIcon"><WbIcon name="gear" size={14} /></span>
-            <span className="wbh-picker-footerLabel">管理技能</span>
-          </div>
+      )
+    }
+
+    return (
+      <div className="wbh-flyout" role="dialog" aria-label={`选择${kindMeta.label}`}>
+        <div className="wbh-flyoutSearch">
+          <WbIcon name="search" size={15} />
+          <input value={query} placeholder={`搜索${kindMeta.label}`} aria-label={`搜索${kindMeta.label}`}
+            onChange={e => onQuery(e.target.value)} />
         </div>
+        <div className="wbh-flyoutList" ref={scrollRef} onScroll={onScroll}>
+          {loading && <div className="wbh-flyoutState">正在读取…</div>}
+          {!loading && !failed && visibleRows.length === 0 && (
+            <div className="wbh-flyoutState">暂无可用{kindMeta.label}</div>
+          )}
+          {visibleRows.map(rowNode)}
+          {loadingMore && <div className="wbh-flyoutState">加载中…</div>}
+        </div>
+        <div className="wbh-flyoutFooter">{footerNode}</div>
       </div>
     )
   }

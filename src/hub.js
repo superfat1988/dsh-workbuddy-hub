@@ -125,6 +125,8 @@ export const hub = {
   uninstall: (kind, name) => post('/uninstall', { kind, name }).then(r => { _emitChange(); return r }),
   mount: (sessionId, kind, name) => post('/mount', { sessionId, kind, name }).then(r => { _emitChange(); return r }),
   unmount: (sessionId, kind, name) => post('/unmount', { sessionId, kind, name }).then(r => { _emitChange(); return r }),
+  summon: (name, task, sessionId) => post('/summon', { name, task, sessionId }).then(r => { _emitChange(); return r }),
+  activeSession: () => api('/active-session').catch(() => ({ sessionId: '' })),
   enableConnector: name => post('/connectors/enable', { name }).then(r => { _emitChange(); return r }),
   disableConnector: name => post('/connectors/disable', { name }).then(r => { _emitChange(); return r }),
 
