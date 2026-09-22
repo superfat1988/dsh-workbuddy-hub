@@ -174,6 +174,7 @@ export default function Catalogue({
   const [view, setView] = useState('market')      // market | installed | local
   const [addMenu, setAddMenu] = useState(false)
   const [localOnly, setLocalOnly] = useState(false)
+  const [detail, setDetail] = useState(null)   // 技能/连接器的二级界面
   const scrollRef = useRef(null)
 
   const PAGE_SIZE = 60
@@ -187,7 +188,7 @@ export default function Catalogue({
     [installed],
   )
 
-  useEffect(() => { setCategory(''); setSort('reco'); setSegment(0); setPage(1); setView('market') }, [kind])
+  useEffect(() => { setCategory(''); setSort('reco'); setSegment(0); setPage(1); setView('market'); setDetail(null) }, [kind])
 
   useEffect(() => {
     let live = true
@@ -232,6 +233,11 @@ export default function Catalogue({
     else if (sort === 'new') copy.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
     return copy
   }, [rows, sort, kind])
+
+  const handleDetail = useCallback(entry => {
+    if (entry.kind === 'expert') { onDetail?.(entry); return }
+    setDetail(entry)
+  }, [onDetail])
 
   const kindMeta = KINDS.find(k => k.id === kind) || KINDS[0]
 
@@ -314,7 +320,7 @@ export default function Catalogue({
         )}
         {visible.map(entry => (
           <ExpertCard key={`${entry.kind}/${entry.name}`} entry={entry} kindLabel={kindMeta.label}
-            busy={busy} onDetail={onDetail} onAction={onAction} />
+            busy={busy} onDetail={handleDetail} onAction={onAction} />
         ))}
         {loadingMore && skeletonCards}
       </div>
@@ -325,8 +331,8 @@ export default function Catalogue({
         {!loading && failed && <div className="wbh-state">读取失败：{failed}</div>}
         {!loading && !failed && visible.length === 0 && <div className="wbh-state"><p>暂无{kindMeta.label}</p></div>}
         {visible.map(entry => kind === 'connector'
-          ? <ConnectorCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={onDetail} onAction={onAction} />
-          : <SkillCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={onDetail} onAction={onAction} />)}
+          ? <ConnectorCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={handleDetail} onAction={onAction} />
+          : <SkillCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={handleDetail} onAction={onAction} />)}
         {loadingMore && skeletonCards}
       </div>
     )
@@ -345,7 +351,7 @@ export default function Catalogue({
       </div>
       <div className="skills-grid">
         {featured.map(entry => (
-          <SkillCard key={`f-${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={onDetail} onAction={onAction} />
+          <SkillCard key={`f-${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={handleDetail} onAction={onAction} />
         ))}
       </div>
     </div>
@@ -363,12 +369,81 @@ export default function Catalogue({
     </div>
   )
 
+  const skillDetailView = detail && detail.kind === 'skill' ? (
+    <div className="skills-view skills-view--detail">
+      <div className="skill-detail-view">
+        <button type="button" className="skill-detail-back" onClick={() => setDetail(null)}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="15 18 9 12 15 6" />
+          </svg>
+          技能
+        </button>
+        <div className="skill-detail-header">
+          <div className="skill-detail-header-main">
+            <h2>{detail.displayName}</h2>
+            <div className="skill-detail-actions">
+              <button type="button" className="skillhub-install-btn skillhub-install-btn--install"
+                onClick={() => onAction?.(detail)}>
+                {busy === `${detail.kind}/${detail.name}` ? '安装中…' : '安装'}
+              </button>
+            </div>
+          </div>
+          <p>{detail.description || detail.name}</p>
+        </div>
+        <div className="skill-detail-content-box">
+          <div className="skill-detail-toolbar">
+            <button type="button" className="active">概览</button>
+          </div>
+          <dl className="wbh-detailMeta">
+            <div><dt>name</dt><dd>{detail.name}</dd></div>
+            <div><dt>version</dt><dd>{detail.version || '1.0.0'}</dd></div>
+            {detail.subtitle ? <div><dt>profession</dt><dd>{detail.subtitle}</dd></div> : null}
+          </dl>
+        </div>
+      </div>
+    </div>
+  ) : null
+
+  const connectorDetailModal = detail && detail.kind === 'connector' ? (
+    <div className="connector-detail-overlay connector-detail-modal-overlay"
+      onClick={() => setDetail(null)}>
+      <div className={`connector-detail-modal${(detail._enabled || detail.isConnected) ? ' connector-detail-modal--connected' : ''}`}
+        onClick={e => e.stopPropagation()}>
+        <button type="button" className="connector-detail-close" aria-label="关闭" onClick={() => setDetail(null)}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+        <div className="connector-detail-modal-body">
+          <div className="connector-detail-flow">
+            <div className="connector-detail-flow-avatar connector-detail-flow-avatar--workbuddy">
+              <span className="wbh-flowBrand">W</span>
+            </div>
+            <span className="wbh-flowLine" aria-hidden="true" />
+            <div className="connector-detail-flow-avatar">
+              <EntryIcon entry={detail} size={28} round />
+            </div>
+          </div>
+          <div className="wbh-detailName">{detail.displayName}</div>
+          <p className="wbh-detailDesc">{detail.description || detail.name}</p>
+          <div className="wbh-detailActions">
+            <button type="button" className="wb-button wb-button--secondary wb-button--medium"
+              disabled={busy === `${detail.kind}/${detail.name}`}
+              onClick={() => onAction?.(detail)}>
+              {(detail._enabled || detail.isConnected) ? '断开' : '连接'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  ) : null
+
   const installedGrid = (
     <div className="skills-grid">
       {hubSkills.length === 0 && <div className="wbh-state"><p>还没有通过 WorkBuddy Hub 安装的技能</p></div>}
       {hubSkills.map(entry => (
         <div className="wbh-installedCard" key={entry.key}>
-          <SkillCard entry={entry} busy={busy} onDetail={onDetail} onAction={onAction} />
+          <SkillCard entry={entry} busy={busy} onDetail={handleDetail} onAction={onAction} />
           <button type="button" className="wb-button wb-button--secondary wb-button--small wbh-uninstallBtn"
             onClick={async e => { e.stopPropagation(); await hub.uninstall('skill', entry.name); await onRefresh?.() }}>卸载</button>
         </div>
@@ -380,7 +455,7 @@ export default function Catalogue({
     <div className="skills-grid">
       {localRows.length === 0 && <div className="wbh-state"><p>本机 ~/.dsh/skills 下没有可添加的技能</p></div>}
       {localRows.map(entry => (
-        <SkillCard key={`local-${entry.name}`} entry={entry} busy={busy} onDetail={onDetail} onAction={onAction} />
+        <SkillCard key={`local-${entry.name}`} entry={entry} busy={busy} onDetail={handleDetail} onAction={onAction} />
       ))}
     </div>
   )
@@ -533,15 +608,18 @@ export default function Catalogue({
           )}
           <div className="ec-main-scroll" ref={scrollRef} onScroll={onScroll}>
             {view === 'installed' ? installedGrid : view === 'local' ? localGrid : (
-              <>
-                {kind === 'skill' && !query && segment === 0 && featured.length > 0 && featuredSection}
-                {kind === 'skill' && segmentBar}
-                {cardGrid}
-              </>
+              skillDetailView || (
+                <>
+                  {kind === 'skill' && !query && segment === 0 && featured.length > 0 && featuredSection}
+                  {kind === 'skill' && segmentBar}
+                  {cardGrid}
+                </>
+              )
             )}
           </div>
         </div>
       </div>
+      {connectorDetailModal}
     </div>
   )
 }

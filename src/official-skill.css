@@ -147,3 +147,48 @@ body.vscode-dark .skills-featured-title,body[data-vscode-theme-kind=vscode-dark]
 .skillhub-category-chip--active { background:var(--wb-bg-hover);color:var(--wb-color-text-primary);font-weight:500 }
 .skillhub-category-chip--active:hover { background:var(--wb-bg-hover);color:var(--wb-color-text-primary) }
 .plugins-section .skills-grid { min-height:200px }
+
+.skills-view--detail .skill-detail-view,.skills-view--detail .cb-plugin-detail { flex:1;min-height:0;overflow:auto }
+.skills-view--detail .skill-detail-back,.skills-view--detail .cb-plugin-detail-back { display:none!important }
+.skillhub-install-btn { height:30px;padding:0 14px;border-radius:999px;border:1px solid var(--wb-border-strong);background:transparent;color:var(--wb-color-text-primary);font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;flex-shrink:0;transition:all .2s ease }
+.skillhub-install-btn:hover:not(:disabled) { background:var(--wb-bg-hover);border-color:var(--wb-color-text-secondary) }
+.skillhub-install-btn:active { transform:scale(.97) }
+.skillhub-install-btn:disabled { cursor:default;opacity:.6 }
+.skillhub-install-btn--installed { color:var(--wb-color-text-secondary);border-color:transparent;background:transparent;cursor:default;opacity:1 }
+.skillhub-install-btn--installed:hover { background:transparent;border-color:transparent }
+.skillhub-install-btn--installing { color:var(--wb-color-text-secondary);border-color:var(--wb-border-default);opacity:.8 }
+.skillhub-install-btn--update { background:transparent;border-color:var(--wb-status-success);color:var(--wb-status-success) }
+.skillhub-install-btn--update:hover:not(:disabled) { background:color-mix(in srgb,var(--wb-status-success) 10%,transparent) }
+.skill-detail-view { height:100%;display:flex;flex-direction:column;overflow:hidden;padding:20px 24px 24px }
+.skill-detail-back { border:none;background:transparent;padding:4px 0;margin-bottom:14px;-webkit-app-region:no-drag;font-size:13px;color:var(--wb-color-text-secondary);cursor:pointer;text-align:left;display:inline-flex;align-self:flex-start;align-items:center;gap:6px;transition:color .2s ease }
+.skill-detail-back:hover { color:var(--wb-color-text-primary) }
+.skill-detail-header { padding-bottom:14px;margin-bottom:16px;border-bottom:1px solid var(--wb-border-subtle);flex-shrink:0 }
+.skill-detail-header p { margin:10px 0 0;font-size:14px;line-height:1.6;color:var(--wb-color-text-primary);max-height:calc(1.6em * 6);overflow-y:auto;word-break:break-word;overflow-wrap:anywhere }
+.skill-detail-header-main { display:flex;justify-content:space-between;align-items:center;gap:12px }
+.skill-detail-header-main h2 { margin:0;font-size:18px;font-weight:600;color:var(--wb-color-text-primary) }
+.skill-detail-actions { display:flex;align-items:center;gap:12px }
+.skill-detail-stats { display:flex;align-items:center;gap:12px;margin-top:8px }
+.skill-detail-more { position:relative }
+.skill-detail-more-btn { display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border:none;background:transparent;cursor:pointer;color:var(--wb-color-text-secondary);border-radius:8px;transition:all .15s ease }
+.skill-detail-more-btn:hover { color:var(--wb-color-text-primary);background:var(--wb-bg-hover) }
+.skill-detail-dropdown { position:absolute;top:100%;right:0;min-width:160px;margin-top:4px;padding:4px 0;background:var(--wb-bg-primary);border:1px solid var(--wb-border-subtle);border-radius:10px;box-shadow:0 8px 24px var(--wb-border-default);z-index:1000;animation:skill-dropdown-in .15s ease }
+.skill-detail-dropdown-item { display:flex;align-items:center;gap:8px;padding:8px 14px;font-size:13px;color:var(--wb-color-text-primary);cursor:pointer;transition:background .15s ease;border-radius:6px;margin:0 4px }
+.skill-detail-dropdown-item:hover { background:var(--wb-bg-hover) }
+.skill-detail-dropdown-item--danger,.skill-detail-dropdown-item--danger:hover { color:var(--wb-error-foreground) }
+.skill-detail-content-box { flex:1;min-height:0;border:1px solid var(--wb-border-subtle);border-radius:16px;background:var(--wb-bg-primary);overflow:hidden;display:flex;flex-direction:column }
+.skill-detail-toolbar { display:flex;justify-content:flex-end;padding:9px 16px 0;gap:4px }
+.skill-detail-toolbar button { width:34px;height:34px;border-radius:10px;border:1.5px solid transparent;background:transparent;color:var(--wb-color-text-secondary);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:all .15s ease }
+.skill-detail-toolbar button:hover { background:var(--wb-bg-hover) }
+.skill-detail-toolbar button.active { background:var(--wb-bg-hover);color:var(--wb-color-text-primary) }
+.skill-detail-preview,.skill-detail-code { flex:1;min-height:0;overflow:auto;margin:8px 24px 24px;scrollbar-width:thin }
+.skill-detail-meta-grid { display:flex;flex-direction:column;gap:12px;margin-bottom:16px }
+.skill-detail-meta-item { display:flex;flex-direction:column;gap:2px }
+.skill-detail-meta-label { font-size:12px;color:var(--wb-color-text-secondary) }
+.skill-detail-meta-value { font-size:13px;color:var(--wb-color-text-primary) }
+.skill-detail-code { white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.7;font-family:SF Mono,Menlo,Monaco,monospace;color:var(--wb-color-text-primary) }
+.skill-detail-loading { display:flex;flex-direction:column;gap:14px;padding:18px 24px 24px }
+.skill-detail-skeleton-line { height:14px;border-radius:6px;background:linear-gradient(90deg,color-mix(in srgb,var(--wb-border-subtle) 50%,transparent) 25%,var(--wb-bg-hover) 50%,color-mix(in srgb,var(--wb-border-subtle) 50%,transparent) 75%);background-size:200% 100%;animation:skill-skeleton-shimmer 1.5s ease-in-out infinite }
+.skill-detail-skeleton-line--title { width:40%;height:20px;margin-bottom:6px }
+.skill-detail-skeleton-line--full { width:100% }
+.skill-detail-skeleton-line--medium { width:72% }
+.skill-detail-skeleton-line--short { width:45% }

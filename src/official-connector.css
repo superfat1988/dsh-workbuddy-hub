@@ -15,3 +15,110 @@
 .connector-card-desc { grid-column:1 / -1;grid-row:2;margin-top:2px;font-size:11px;line-height:18px;color:var(--wb-color-text-secondary);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical }
 .connector-card-action { grid-column:3;grid-row:1;align-self:start;display:inline-flex;align-items:center;margin-top:4px;margin-right:4px }
 :root.theme-switching .connector-card,body.theme-switching .connector-card,:root.theme-switching .connector-connect-btn,body.theme-switching .connector-connect-btn,:root.theme-switching .connector-detail-tool-item,body.theme-switching .connector-detail-tool-item { transition:none }
+
+.connector-detail-overlay { position:fixed;inset:0;background:#00000073;display:flex;align-items:center;justify-content:center;z-index:10000;animation:connector-detail-fade-in .15s ease-out }
+.connector-detail-modal { position:relative;width:380px;max-width:90%;background:var(--wb-bg-card);border:1px solid var(--wb-border-default);border-radius:16px;padding:32px 28px 24px;box-shadow:0 20px 60px #0003;text-align:center;animation:connector-detail-slide-in .2s ease-out }
+.connector-detail-close { position:absolute;top:14px;right:14px;z-index:2;width:28px;height:28px;border:none;border-radius:8px;background:transparent;color:var(--wb-color-text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s ease }
+.connector-detail-close:hover { background:var(--wb-bg-hover);color:var(--wb-color-text-primary) }
+.connector-detail-icon { width:52px;height:52px;border-radius:14px;display:inline-flex;align-items:center;justify-content:center;margin:0 auto 14px;color:#fff;font-size:20px;font-weight:600;overflow:hidden }
+.connector-detail-icon img { width:28px;height:28px;border-radius:6px }
+.connector-detail-name { margin:0 0 6px;font-size:17px;font-weight:600;color:var(--wb-color-text-primary) }
+.connector-detail-desc { margin:0 0 20px;font-size:13px;line-height:1.5;color:var(--wb-color-text-secondary) }
+.connector-detail-version-banner { margin:0 0 16px;padding:10px 12px;border:1px solid var(--wb-status-warning);border-radius:8px;background:color-mix(in srgb,var(--wb-status-warning) 10%,transparent);color:var(--wb-color-text-primary);font-size:12px;line-height:1.5 }
+.connector-detail-headers { display:flex;flex-direction:column;gap:12px;margin-bottom:18px;text-align:left }
+.connector-detail-section-title { font-size:11px;font-weight:600;color:var(--wb-color-text-secondary);text-transform:uppercase;letter-spacing:.5px }
+.connector-detail-empty-config { font-size:13px;color:var(--wb-color-text-tertiary);text-align:center;padding:12px 0;margin:0 }
+.connector-detail-header-field { display:flex;flex-direction:column;gap:4px }
+.connector-detail-header-label { font-size:12px;font-weight:500;color:var(--wb-color-text-secondary);text-transform:capitalize }
+.connector-detail-header-input { height:36px;padding:0 12px;border:1px solid var(--wb-border-input);border-radius:8px;background:var(--wb-bg-input-inset);color:var(--wb-color-text-primary);font-size:13px;outline:none;transition:border-color .15s }
+.connector-detail-header-input::placeholder { color:var(--wb-color-text-tertiary) }
+.connector-detail-header-input:focus { border-color:var(--wb-border-input) }
+.connector-detail-actions { display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:16px }
+.connector-detail-btn { height:36px;padding:0 18px;border-radius:10px;border:none;font-size:13px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;transition:all .15s ease }
+.connector-detail-btn:disabled { opacity:.4;cursor:not-allowed }
+.connector-detail-btn svg { width:14px;height:14px;stroke:currentColor }
+.connector-detail-btn--primary { background:var(--wb-button-primary-bg);color:var(--wb-button-primary-fg) }
+.connector-detail-btn--primary:hover { background:var(--wb-button-primary-bg-hover) }
+.connector-detail-btn--secondary { background:var(--wb-bg-card);border:1px solid var(--wb-border-default);color:var(--wb-color-text-primary) }
+.connector-detail-btn--secondary:hover { background:var(--wb-bg-hover);border-color:var(--wb-border-default) }
+.connector-detail-btn--try-standalone { display:inline-flex;align-items:center;justify-content:center;padding:6px 16px;border:1px solid var(--wb-button-primary-bg);border-radius:6px;background:transparent;color:var(--wb-button-primary-bg);font-size:13px;cursor:pointer;transition:background .15s,color .15s }
+.connector-detail-btn--try-standalone:hover { background:color-mix(in srgb,var(--wb-button-primary-bg) 10%,transparent) }
+.connector-detail-btn--reset { display:inline-flex;align-items:center;justify-content:center;padding:6px 16px;border:1px solid #ff313f;border-radius:6px;background:transparent;color:#ff313f;font-size:13px;cursor:pointer;transition:background .15s,color .15s }
+.connector-detail-btn--reset:hover:not(:disabled) { background:#ff313f1a }
+.connector-detail-btn--reset:disabled { opacity:.4;cursor:not-allowed }
+.connector-detail-expand { padding-top:12px }
+.connector-detail-expand-btn { display:inline-flex;align-items:center;gap:4px;padding:4px 0;border:none;background:none;color:var(--wb-color-text-secondary);font-size:13px;cursor:pointer;transition:color .15s }
+.connector-detail-expand-btn:hover { color:var(--wb-color-text-primary) }
+.connector-detail-expand-btn svg { stroke:currentColor }
+.connector-detail-tools { margin-top:10px;max-height:200px;overflow-y:auto;scrollbar-width:thin;text-align:left }
+.connector-detail-tool-item { display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:8px;transition:background .12s }
+.connector-detail-tool-item:hover { background:var(--wb-bg-hover) }
+.connector-detail-tool-name { font-size:13px;font-weight:500;color:var(--wb-color-text-primary) }
+.connector-detail-tool-desc { font-size:12px;color:var(--wb-color-text-secondary);line-height:1.4 }
+.connector-detail-modal--connected { width:min(630px,50vw);min-width:550px;max-width:calc(100vw - 32px);max-height:min(640px,calc(100vh - 48px));overflow:hidden;display:flex;flex-direction:column;padding:0;border:0;border-radius:24px;text-align:center }
+.connector-detail-modal-body { flex:1;min-height:0;overflow-y:auto;padding:48px 0 24px;scrollbar-width:none }
+.connector-detail-modal-body::-webkit-scrollbar { width:0;display:none }
+.connector-detail-modal-fade { position:absolute;left:0;right:0;height:108px;--connector-fade-solid: 48px;background:linear-gradient(to bottom,var(--wb-bg-card, #ffffff) 0%,var(--wb-bg-card, #ffffff) var(--connector-fade-solid),color-mix(in srgb,var(--wb-bg-card, #ffffff) 0%,transparent) 100%);pointer-events:none;opacity:0;transition:opacity .18s ease;z-index:1 }
+.connector-detail-modal-fade.is-visible { opacity:1 }
+.connector-detail-modal-bottom-fade { position:absolute;right:0;bottom:0;left:0;height:60px;background:linear-gradient(to bottom,color-mix(in srgb,var(--wb-bg-card, #ffffff) 0%,transparent) 0%,var(--wb-bg-card, #ffffff) 100%);pointer-events:none;opacity:0;transition:opacity .18s ease;z-index:1 }
+.connector-detail-modal-bottom-fade.is-visible { opacity:1 }
+.connector-detail-modal--connected .connector-detail-close { top:16px;right:16px }
+.connector-detail-modal--connected .connector-detail-name { margin:20px 24px 12px;font-size:20px;line-height:28px;font-weight:600 }
+.connector-detail-modal--connected .connector-detail-desc { margin:0 auto 20px;padding:0 48px;font-size:14px;line-height:22px;color:color-mix(in srgb,var(--wb-color-text-primary) 90%,transparent);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden }
+.connector-detail-modal--connected .connector-detail-version-banner { margin:0 24px 16px;text-align:left }
+.connector-detail-modal--connected .connector-detail-actions { margin:0 0 32px;gap:12px }
+.connector-detail-modal--connected .connector-detail-btn { display:inline-flex;align-items:center;justify-content:center;gap:4px;height:32px;padding:0 24px;border-radius:8px;font-size:14px;font-weight:500 }
+.connector-detail-modal--connected .connector-detail-btn svg { width:16px;height:16px }
+.connector-detail-modal--connected .connector-detail-btn--try { border:0;background:var(--wb-button-primary-bg);color:var(--wb-button-primary-fg) }
+.connector-detail-modal--connected .connector-detail-btn--try svg { color:var(--wb-button-primary-fg) }
+.connector-detail-modal--connected .connector-detail-btn--try:hover:not(:disabled) { background:var(--wb-button-primary-bg-hover) }
+.connector-detail-modal--connected .connector-detail-btn--try-loading { background:var(--wb-connector-detail-try-loading-bg);color:var(--wb-palette-white-100) }
+.connector-detail-modal--connected .connector-detail-btn--try-loading svg { color:var(--wb-palette-white-100);animation:connector-spin 1s linear infinite }
+.connector-detail-modal--connected .connector-detail-btn--try-loading:hover:not(:disabled) { background:var(--wb-connector-detail-try-loading-bg);opacity:1 }
+.connector-detail-modal--connected .connector-detail-btn--reset { border:1px solid var(--wb-button-secondary-border);background:var(--wb-button-secondary-bg);color:var(--wb-button-secondary-fg) }
+.connector-detail-modal--connected .connector-detail-btn--reset svg { color:var(--wb-button-secondary-fg) }
+.connector-detail-modal--connected .connector-detail-btn--reset:hover:not(:disabled) { background:var(--wb-button-secondary-bg-hover) }
+.connector-detail-modal--connected .connector-detail-expand { padding:32px 0 0;text-align:left }
+.connector-detail-modal--connected .connector-detail-expand-btn { width:100%;padding:0 24px;font-size:14px;font-weight:500;color:var(--wb-color-text-primary);transition:color .15s ease }
+.connector-detail-modal--connected .connector-detail-expand-btn svg { margin-right:4px;vertical-align:middle }
+.connector-detail-modal--connected .connector-detail-expand-btn:hover:not(:disabled) { color:var(--wb-color-text-secondary) }
+.connector-detail-modal--connected .connector-detail-expand-btn:hover:not(:disabled) svg { color:var(--wb-color-text-secondary) }
+.connector-detail-modal--connected .connector-detail-tools-wrapper { position:relative;margin:12px 24px 0;padding:8px 16px;border-radius:24px;background:var(--wb-connector-detail-surface-bg) }
+.connector-detail-modal--connected .connector-detail-tools { max-height:400px;overflow-y:auto;scrollbar-width:none }
+.connector-detail-modal--connected .connector-detail-tools::-webkit-scrollbar { width:0;display:none }
+.connector-detail-modal--connected .connector-detail-modal-body:hover~.connector-detail-modal-scroll-thumb,.connector-detail-modal--connected .connector-detail-modal-scroll-thumb:hover,.connector-detail-modal--connected .connector-detail-modal-scroll-thumb.is-dragging,.connector-detail-modal--connected .connector-detail-tools-wrapper:hover .connector-detail-tools-scroll-thumb,.connector-detail-modal--connected .connector-detail-tools-scroll-thumb:hover,.connector-detail-modal--connected .connector-detail-tools-scroll-thumb.is-dragging { opacity:1 }
+.connector-detail-modal--connected .connector-detail-modal-scroll-thumb,.connector-detail-modal--connected .connector-detail-tools-scroll-thumb { position:absolute;top:0;right:4px;width:4px;border-radius:12px;background:#0003;opacity:0;touch-action:none;transition:opacity .15s ease,transform .1s ease-out }
+.connector-detail-modal--connected .connector-detail-modal-scroll-thumb.is-dragging,.connector-detail-modal--connected .connector-detail-tools-scroll-thumb.is-dragging { transition:opacity .15s ease }
+.connector-detail-modal--connected .connector-detail-tool-item { padding:10px 0;border-radius:0 }
+.connector-detail-modal--connected .connector-detail-tool-item:hover { background:transparent }
+.connector-detail-modal--connected .connector-detail-tool-desc { color:var(--wb-color-text-tertiary) }
+.connector-detail-flow { display:flex;align-items:center;justify-content:center;gap:12px }
+.connector-detail-flow-avatar { display:inline-flex;width:68px;height:68px;align-items:center;justify-content:center;overflow:hidden;border-radius:50% }
+.connector-detail-flow-avatar img { width:100%;height:100%;object-fit:cover }
+.connector-detail-flow-avatar--connector { color:var(--wb-color-text-primary);font-size:28px;font-weight:600 }
+.connector-detail-flow-avatar--connector img { width:100%;height:100%;object-fit:cover;border-radius:50% }
+.connector-detail-flow-icon { display:inline-flex;align-items:center;justify-content:center;gap:6px }
+.connector-detail-flow-icon span { width:6px;height:6px;border-radius:50%;background:var(--wb-connector-detail-flow-dot-bg) }
+.connector-detail-examples { display:flex;flex-direction:column;padding:0 24px }
+.connector-detail-examples-title { display:flex;align-items:center;gap:8px;margin-bottom:16px;font-size:14px;font-weight:500;color:var(--wb-color-text-primary) }
+.connector-detail-examples-title svg { width:16px;height:16px;flex:none;color:var(--wb-color-text-secondary) }
+.connector-detail-example { display:flex;width:100%;min-height:46px;align-items:center;gap:16px;padding:12px 16px;border:0;border-radius:16px;background:var(--wb-palette-gray-1);color:var(--wb-color-text-secondary);cursor:pointer;font-size:14px;line-height:22px;text-align:left;transition:background .15s ease }
+.connector-detail-example span { flex:1;min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden }
+.connector-detail-example svg { width:16px;height:16px;flex:none;color:currentColor }
+.connector-detail-example+.connector-detail-example { margin-top:12px }
+.connector-detail-example:hover:not(:disabled) { background:var(--wb-palette-gray-5) }
+.connector-detail-example:disabled { cursor:default;opacity:.6 }
+.connector-detail-modal--connected .connector-detail-flow { gap:14px }
+.connector-detail-modal--connected .connector-detail-flow-avatar { width:56px;height:56px }
+.connector-detail-modal--connected .connector-detail-examples { padding:0 16px }
+.connector-detail-repos-hint { font-size:13px;color:var(--wb-color-text-secondary);margin:12px 0 }
+.connector-detail-repos { margin:12px 0 }
+.connector-detail-repos-title { font-size:13px;font-weight:500;margin-bottom:8px;color:var(--wb-color-text-primary) }
+.connector-detail-repos-list { list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto }
+.connector-detail-repos-item { padding:6px 10px;border-radius:6px;background:var(--wb-bg-secondary);font-size:13px;color:var(--wb-color-text-primary);word-break:break-all }
+:root.dark .connector-detail-btn--try-loading,:root.cb-dark .connector-detail-btn--try-loading,:root .dark .connector-detail-btn--try-loading,:root .cb-dark .connector-detail-btn--try-loading,.cbChat.dark .connector-detail-btn--try-loading { background:var(--wb-connector-detail-try-loading-bg);color:var(--wb-color-text-primary) }
+:root.dark .connector-detail-btn--try-loading svg,:root.cb-dark .connector-detail-btn--try-loading svg,:root .dark .connector-detail-btn--try-loading svg,:root .cb-dark .connector-detail-btn--try-loading svg,.cbChat.dark .connector-detail-btn--try-loading svg { color:var(--wb-color-text-primary) }
+:root.dark .connector-detail-btn--try-loading:hover:not(:disabled),:root.cb-dark .connector-detail-btn--try-loading:hover:not(:disabled),:root .dark .connector-detail-btn--try-loading:hover:not(:disabled),:root .cb-dark .connector-detail-btn--try-loading:hover:not(:disabled),.cbChat.dark .connector-detail-btn--try-loading:hover:not(:disabled) { background:var(--wb-connector-detail-try-loading-bg);opacity:1 }
+:root.dark .connector-detail-example,:root.cb-dark .connector-detail-example,:root .dark .connector-detail-example,:root .cb-dark .connector-detail-example,.cbChat.dark .connector-detail-example { background:var(--wb-connector-detail-surface-bg);color:var(--wb-color-text-primary) }
+:root.dark .connector-detail-example:hover:not(:disabled),:root.cb-dark .connector-detail-example:hover:not(:disabled),:root .dark .connector-detail-example:hover:not(:disabled),:root .cb-dark .connector-detail-example:hover:not(:disabled),.cbChat.dark .connector-detail-example:hover:not(:disabled) { background:var(--wb-connector-detail-surface-bg);opacity:.85 }
+:root.dark .connector-detail-tools-wrapper,:root.cb-dark .connector-detail-tools-wrapper,:root .dark .connector-detail-tools-wrapper,:root .cb-dark .connector-detail-tools-wrapper,.cbChat.dark .connector-detail-tools-wrapper { background:var(--wb-connector-detail-surface-bg) }

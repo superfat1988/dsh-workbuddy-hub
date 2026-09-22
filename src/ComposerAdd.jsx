@@ -152,6 +152,7 @@ export default function ComposerAdd({ sessionId, runCommand }) {
       {menuOpen && (
         <>
           <div className="wbh-popScrim" onClick={() => { setMenuOpen(false); setPickerOpen(false) }} />
+          <div className="wbh-pickerLayer">
           <div className="wbh-menu" role="menu">
             <div className="wbh-menu-list">
               {KINDS.map(k => (
@@ -173,14 +174,15 @@ export default function ComposerAdd({ sessionId, runCommand }) {
             </div>
           </div>
           {pickerOpen && (
-            <div className="wbh-flyoutWrap">
+            <>
               <Catalogue
                 variant="picker" sessionId={sessionId} kind={kind} onKind={setKind}
                 query={query} onQuery={setQuery} onDetail={onDetail} onAction={onAction}
                 installed={installed} mounted={mounted} busy={busy}
               />
-            </div>
+            </>
           )}
+          </div>
           {notice && <div className="wbh-flyoutNotice">{notice}</div>}
         </>
       )}
