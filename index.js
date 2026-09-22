@@ -17,7 +17,7 @@
  */
 import { homedir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
-import { loginStart, loginPoll, loadAuth, saveAuth, marketList, marketCategories, connectorRegistry, connectorBound, connectorAuthStart } from './wb-market.js'
+import { loginStart, loginPoll, loadAuth, saveAuth, marketList, marketCategories, connectorRegistry, connectorBound, connectorAuthStart, connectorRevoke } from './wb-market.js'
 import { listExperts, categories as officialCategories, installExpert } from './wb-experts.js'
 import { skillDetails } from './wb-market.js'
 import { unzip } from './wb-unzip.js'
@@ -839,6 +839,16 @@ export function apply(ctx, config = {}) {
     if (route === 'GET /connectors/bound') {
       try { json(res, 200, { ok: true, items: await connectorBound(P.state) }) }
       catch (error) { json(res, 200, { ok: false, items: [], error: String(error?.message || error) }) }
+      return true
+    }
+
+    // 解绑连接器：走官方 revoke（本地 disable 只对「本地安装」的 MCP 有意义）
+    if (route === 'POST /connectors/unbind') {
+      const body = JSON.parse((await readBody(req)) || '{}')
+      const entryName = String(body.name || '')
+      if (!/^[\w.-]+$/.test(entryName)) { json(res, 400, { error: 'invalid name' }); return true }
+      try { json(res, 200, await connectorRevoke(entryName, P.state)) }
+      catch (error) { json(res, 200, { ok: false, message: String(error?.message || error) }) }
       return true
     }
 

@@ -251,9 +251,9 @@ export default function Catalogue({
     setBusy(key); setNotice('')
     try {
       if (isBound(entry)) {
-        await hub.disableConnector(entry.name)
-        await hub.unmount(undefined, entry.kind, entry.name)
-        setNotice(`已解绑「${entry.displayName}」`)
+        const r = await hub.connectorUnbind(entry.name)
+        if (r?.ok) await hub.unmount(undefined, entry.kind, entry.name).catch(() => {})
+        setNotice(r?.ok ? `已解绑「${entry.displayName}」` : `解绑失败：${r?.message || '官方未确认'}`)
       } else {
         const r = await hub.connectorAuthStart(entry.name)
         if (r?.ok && r.url) {
@@ -291,6 +291,20 @@ export default function Catalogue({
       return next
     })
   }, [])
+
+  // 未装任何专家时：随机 5 个，但按「当天」做种子，保证同一天内稳定不变。
+  const expertFallback = useMemo(() => {
+    const seedText = new Date().toISOString().slice(0, 10)
+    let h = 0
+    for (const ch of seedText) h = (h * 31 + ch.codePointAt(0)) >>> 0
+    const pool = [...rows]
+    const picked = []
+    while (picked.length < 5 && pool.length > 0) {
+      h = (h * 1103515245 + 12345) >>> 0
+      picked.push(pool.splice(h % pool.length, 1)[0])
+    }
+    return picked
+  }, [rows])
 
   const kindMeta = KINDS.find(k => k.id === kind) || KINDS[0]
 
@@ -587,10 +601,14 @@ export default function Catalogue({
     const installedExperts = Object.entries(installed)
       .filter(([, rec]) => rec?.kind === 'expert')
       .map(([key, rec]) => ({ key, kind: 'expert', name: rec.name || key.split('/')[1], displayName: rec.displayName || rec.name, description: rec.description || '', icon: rec.icon || '' }))
+    // 图1：技能面板只列 DSH 本机已装技能，没有就显示「暂无可用技能」。
+    const localSkills = (query
+      ? localRows.filter(e => (e.displayName || e.name || '').toLowerCase().includes(query.toLowerCase()))
+      : localRows)
     const baseRows = kind === 'expert'
-      ? (installedExperts.length ? installedExperts : visible)
+      ? (installedExperts.length ? installedExperts : expertFallback)
       : kind === 'skill'
-        ? (query ? visible : localRows)
+        ? localSkills
         : visible
     const visibleRows = [...baseRows].sort((a, b) => {
       const pa = pinned.has(`${a.kind}/${a.name}`) ? 0 : 1

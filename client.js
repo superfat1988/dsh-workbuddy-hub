@@ -2317,6 +2317,7 @@ var hub = {
   activeSession: () => api("/active-session").catch(() => ({ sessionId: "" })),
   boundConnectors: () => api("/connectors/bound").then((r) => r.items || []).catch(() => []),
   connectorAuthStart: (name) => post("/connectors/auth-start", { name }),
+  connectorUnbind: (name) => post("/connectors/unbind", { name }),
   enableConnector: (name) => post("/connectors/enable", { name }).then((r) => {
     _emitChange();
     return r;
@@ -2649,9 +2650,10 @@ function Catalogue({
     setNotice("");
     try {
       if (isBound(entry)) {
-        await hub.disableConnector(entry.name);
-        await hub.unmount(void 0, entry.kind, entry.name);
-        setNotice(`\u5DF2\u89E3\u7ED1\u300C${entry.displayName}\u300D`);
+        const r = await hub.connectorUnbind(entry.name);
+        if (r?.ok) await hub.unmount(void 0, entry.kind, entry.name).catch(() => {
+        });
+        setNotice(r?.ok ? `\u5DF2\u89E3\u7ED1\u300C${entry.displayName}\u300D` : `\u89E3\u7ED1\u5931\u8D25\uFF1A${r?.message || "\u5B98\u65B9\u672A\u786E\u8BA4"}`);
       } else {
         const r = await hub.connectorAuthStart(entry.name);
         if (r?.ok && r.url) {
@@ -2694,6 +2696,18 @@ function Catalogue({
       return next;
     });
   }, []);
+  const expertFallback = (0, import_react2.useMemo)(() => {
+    const seedText = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    let h2 = 0;
+    for (const ch of seedText) h2 = h2 * 31 + ch.codePointAt(0) >>> 0;
+    const pool = [...rows];
+    const picked = [];
+    while (picked.length < 5 && pool.length > 0) {
+      h2 = h2 * 1103515245 + 12345 >>> 0;
+      picked.push(pool.splice(h2 % pool.length, 1)[0]);
+    }
+    return picked;
+  }, [rows]);
   const kindMeta = KINDS.find((k) => k.id === kind) || KINDS[0];
   const skeletonCards = /* @__PURE__ */ import_react2.default.createElement(import_react2.default.Fragment, null, Array.from({ length: 6 }).map((_, i) => /* @__PURE__ */ import_react2.default.createElement("div", { key: i, className: "wbh-skelCard" }, /* @__PURE__ */ import_react2.default.createElement("div", { className: "wbh-skelHead" }, /* @__PURE__ */ import_react2.default.createElement("div", { className: "wbh-skelAvatar" }), /* @__PURE__ */ import_react2.default.createElement("div", { className: "wbh-skelLines" }, /* @__PURE__ */ import_react2.default.createElement("div", { className: "wbh-skelRow", style: { width: "45%" } }), /* @__PURE__ */ import_react2.default.createElement("div", { className: "wbh-skelRow short" }))), /* @__PURE__ */ import_react2.default.createElement("div", { className: "wbh-skelRow" }), /* @__PURE__ */ import_react2.default.createElement("div", { className: "wbh-skelRow short" }))));
   const kindTabs = /* @__PURE__ */ import_react2.default.createElement("div", { className: "um-header__tabs", role: "tablist" }, KINDS.map((k) => /* @__PURE__ */ import_react2.default.createElement(
@@ -2891,7 +2905,8 @@ function Catalogue({
       /* @__PURE__ */ import_react2.default.createElement("span", null, "\u7BA1\u7406\u6280\u80FD")
     ));
     const installedExperts = Object.entries(installed).filter(([, rec]) => rec?.kind === "expert").map(([key, rec]) => ({ key, kind: "expert", name: rec.name || key.split("/")[1], displayName: rec.displayName || rec.name, description: rec.description || "", icon: rec.icon || "" }));
-    const baseRows = kind === "expert" ? installedExperts.length ? installedExperts : visible : kind === "skill" ? query ? visible : localRows : visible;
+    const localSkills = query ? localRows.filter((e) => (e.displayName || e.name || "").toLowerCase().includes(query.toLowerCase())) : localRows;
+    const baseRows = kind === "expert" ? installedExperts.length ? installedExperts : expertFallback : kind === "skill" ? localSkills : visible;
     const visibleRows = [...baseRows].sort((a, b) => {
       const pa = pinned.has(`${a.kind}/${a.name}`) ? 0 : 1;
       const pb = pinned.has(`${b.kind}/${b.name}`) ? 0 : 1;

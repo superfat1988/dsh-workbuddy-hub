@@ -184,3 +184,10 @@ export async function connectorAuthStart(name, stateDir) {
   const { status, json } = await call('POST', `/console/as/connector/oauth/${encodeURIComponent(name)}/start`, { token, body: {} })
   return { status, payload: json }
 }
+
+/** Revoke (unbind) one connector through the app's own endpoint. */
+export async function connectorRevoke(name, stateDir) {
+  const token = await bearer(stateDir)
+  const { status, json } = await call('POST', `/console/as/connector/oauth/${encodeURIComponent(name)}/revoke`, { token, body: {} })
+  return { status, ok: json?.code === 0, message: json?.msg || '' }
+}
