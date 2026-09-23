@@ -1476,7 +1476,8 @@ export function apply(ctx, config = {}) {
         if (!/^[\w.-]+$/.test(presetId)) { json(res, 400, { ok: false, error: 'invalid presetId' }); return true }
         const sc = ctx.get?.('sessionController') ?? ctx.sessionController
         if (!sc || typeof sc.create !== 'function') { json(res, 503, { ok: false, error: 'sessionController unavailable' }); return true }
-        const created = await sc.create({ agentPreset: presetId })
+        const workspaceId = body.workspaceId ? String(body.workspaceId) : undefined
+        const created = await sc.create({ agentPreset: presetId, ...(workspaceId ? { workspaceId } : {}) })
         json(res, 200, { ok: true, sessionId: created.sessionId, agentPreset: created.agentPreset })
       } catch (error) {
         json(res, 500, { ok: false, error: String(error?.message || error) })

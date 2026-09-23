@@ -9,7 +9,7 @@ import './official.css'
 import './app.css'
 
 /** Main panel: the official marketplace page plus the account bar. */
-export default function MarketPage({ sessionId, runCommand }) {
+export default function MarketPage({ sessionId, workspaceId, runCommand }) {
   const [kind, setKind] = useState('expert')
   const [query, setQuery] = useState('')
   const [installed, setInstalled] = useState({})
@@ -51,7 +51,7 @@ export default function MarketPage({ sessionId, runCommand }) {
       } else if (entry.kind === 'expert') {
         // 官方语义：召唤 = 新建会话 + 该专家成为那个会话的 agent（只影响新会话，
         // 当前会话不动）。走方案 B（agent preset）。
-        const r = await summonExpertInNewSession(entry)
+        const r = await summonExpertInNewSession(entry, workspaceId)
         setNotice(r.ok ? `已在新会话中以「${entry.displayName}」身份开始` : `失败：${r.error}`)
       } else {
         await hub.mount(sessionId, entry.kind, entry.name)
@@ -74,7 +74,7 @@ export default function MarketPage({ sessionId, runCommand }) {
   const onAction = useCallback(entry => {
     if (entry.kind === 'expert') {
       setBusy(`${entry.kind}/${entry.name}`); setNotice('')
-      void summonExpertInNewSession(entry).then(r => {
+      void summonExpertInNewSession(entry, workspaceId).then(r => {
         setNotice(r.ok ? `已在新会话中以「${entry.displayName}」身份开始` : `失败：${r.error}`)
         setBusy('')
       })
@@ -97,7 +97,7 @@ export default function MarketPage({ sessionId, runCommand }) {
           onQuickPrompt={text => {
             const picked = summoning
             setSummoning(null)
-            void summonExpertInNewSession(picked).then(r => {
+            void summonExpertInNewSession(picked, workspaceId).then(r => {
               setNotice(r.ok ? `已在新会话中以「${picked.displayName}」身份开始` : `失败：${r.error}`)
               // 官方会把示例问题预填进新会话输入框
               if (r.ok) setTimeout(() => { try { insertPromptIntoComposer(text) } catch { /* 忽略 */ } }, 800)

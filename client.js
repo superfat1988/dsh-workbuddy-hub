@@ -2170,15 +2170,6 @@ var _presetSelector = null;
 function setPresetSelector(fn) {
   _presetSelector = fn;
 }
-function selectPreset(sessionId, presetId) {
-  const fn = _presetSelector;
-  if (typeof fn !== "function") return Promise.resolve({ ok: false, error: "agentPresets remote \u4E0D\u53EF\u7528" });
-  try {
-    return Promise.resolve(fn(sessionId, presetId));
-  } catch (error) {
-    return Promise.resolve({ ok: false, error: String(error?.message || error) });
-  }
-}
 var _sessionStarter = null;
 function setSessionStarter(fn) {
   _sessionStarter = fn;
@@ -2419,29 +2410,23 @@ var hub = {
   authPoll: () => post("/wb-auth/poll", {}),
   authLogout: () => post("/wb-auth/logout", {})
 };
-async function summonExpertInNewSession(entry) {
+async function summonExpertInNewSession(entry, workspaceId) {
   const ensure = await hub.expertPresetEnsure(entry.name);
+  console.info("[wbh] summonExpert: ensure ->", JSON.stringify(ensure));
   if (!ensure?.ok || !ensure.presetId) return { ok: false, error: ensure?.error || "\u65E0\u6CD5\u521B\u5EFA\u4E13\u5BB6\u9884\u8BBE" };
-  const before = composerSession() || "";
-  startNewSession();
-  let target = "";
-  for (let i = 0; i < 24; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    const now = composerSession();
-    if (now && now !== before) {
-      target = now;
-      break;
-    }
+  let created;
+  try {
+    created = await post("/expert-new-session", { presetId: ensure.presetId, workspaceId });
+  } catch (error) {
+    return { ok: false, error: `\u521B\u5EFA\u4E13\u5BB6\u4F1A\u8BDD\u5931\u8D25\uFF1A${String(error?.message || error)}` };
   }
-  if (!target) target = composerSession() || "";
-  if (!target) return { ok: false, error: "\u6CA1\u6709\u7B49\u5230\u65B0\u4F1A\u8BDD\uFF0C\u8BF7\u624B\u52A8\u65B0\u5EFA\u5BF9\u8BDD\u540E\u91CD\u8BD5" };
-  const picked = await selectPreset(target, ensure.presetId);
-  if (!picked?.ok) {
-    const detail = picked?.error?.details?.reason ?? picked?.error?.message ?? picked?.error;
-    return { ok: false, error: typeof detail === "string" ? detail : "\u5207\u6362 agent preset \u88AB\u62D2\u7EDD" };
+  if (!created?.ok || !created.sessionId) {
+    return { ok: false, error: created?.error || "\u521B\u5EFA\u4E13\u5BB6\u4F1A\u8BDD\u5931\u8D25" };
   }
-  addSelection(entry, target);
-  return { ok: true, presetId: ensure.presetId, sessionId: target };
+  console.info("[wbh] summonExpert: created ->", created.sessionId);
+  addSelection(entry, created.sessionId);
+  openSessionById(created.sessionId);
+  return { ok: true, presetId: ensure.presetId, sessionId: created.sessionId };
 }
 
 // src/insert-prompt.js
@@ -3467,7 +3452,7 @@ function WbAuthCard({ onClose, onDone }) {
 }
 
 // src/MarketPage.jsx
-function MarketPage({ sessionId, runCommand: runCommand2 }) {
+function MarketPage({ sessionId, workspaceId, runCommand: runCommand2 }) {
   const [kind, setKind] = (0, import_react7.useState)("expert");
   const [query, setQuery] = (0, import_react7.useState)("");
   const [installed, setInstalled] = (0, import_react7.useState)({});
@@ -3509,7 +3494,7 @@ function MarketPage({ sessionId, runCommand: runCommand2 }) {
           setNotice(`\u5DF2\u8FDE\u63A5\u300C${entry.displayName}\u300D\uFF08\u5DE5\u5177\u547D\u540D\u7A7A\u95F4 ${r.serverName}\uFF09\uFF0C\u4E0B\u4E00\u6B21\u6A21\u578B\u6B65\u9AA4\u8D77\u53EF\u7528\u3002`);
         }
       } else if (entry.kind === "expert") {
-        const r = await summonExpertInNewSession(entry);
+        const r = await summonExpertInNewSession(entry, workspaceId);
         setNotice(r.ok ? `\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u4EE5\u300C${entry.displayName}\u300D\u8EAB\u4EFD\u5F00\u59CB` : `\u5931\u8D25\uFF1A${r.error}`);
       } else {
         await hub.mount(sessionId, entry.kind, entry.name);
@@ -3533,7 +3518,7 @@ function MarketPage({ sessionId, runCommand: runCommand2 }) {
     if (entry.kind === "expert") {
       setBusy(`${entry.kind}/${entry.name}`);
       setNotice("");
-      void summonExpertInNewSession(entry).then((r) => {
+      void summonExpertInNewSession(entry, workspaceId).then((r) => {
         setNotice(r.ok ? `\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u4EE5\u300C${entry.displayName}\u300D\u8EAB\u4EFD\u5F00\u59CB` : `\u5931\u8D25\uFF1A${r.error}`);
         setBusy("");
       });
@@ -3569,7 +3554,7 @@ function MarketPage({ sessionId, runCommand: runCommand2 }) {
       onQuickPrompt: (text) => {
         const picked = summoning;
         setSummoning(null);
-        void summonExpertInNewSession(picked).then((r) => {
+        void summonExpertInNewSession(picked, workspaceId).then((r) => {
           setNotice(r.ok ? `\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u4EE5\u300C${picked.displayName}\u300D\u8EAB\u4EFD\u5F00\u59CB` : `\u5931\u8D25\uFF1A${r.error}`);
           if (r.ok) setTimeout(() => {
             try {
@@ -3972,16 +3957,41 @@ var MAIN_SESSION_SELECTOR = (state) => {
   if (current && mainOf(current)) return current;
   return Object.values(byId).find((session) => (session?.retainedBy?.mainView ?? 0) > 0)?.id;
 };
-function HubPageWithSessions({ useSessions, sessionId }) {
+function resolveWorkspaceId(workspaces, sessionsById, currentSessionId) {
+  const items = Array.isArray(workspaces?.items) ? workspaces.items : [];
+  if (currentSessionId) {
+    const ws = items.find((w) => Array.isArray(w?.sessionIds) && w.sessionIds.includes(currentSessionId));
+    if (ws?.workspaceId) return ws.workspaceId;
+  }
+  let selected = null;
+  let selectedTime = Number.NEGATIVE_INFINITY;
+  for (const w of items) {
+    let latest = Number.NEGATIVE_INFINITY;
+    for (const sid of Array.isArray(w?.sessionIds) ? w.sessionIds : []) {
+      const s = sessionsById?.[sid];
+      if (s?.updatedAt != null) latest = Math.max(latest, s.updatedAt);
+    }
+    if (latest === Number.NEGATIVE_INFINITY && w?.createdAt) latest = Date.parse(w.createdAt);
+    if (selected === null || latest > selectedTime) {
+      selected = w.workspaceId;
+      selectedTime = latest;
+    }
+  }
+  return selected || void 0;
+}
+function HubPageWithSessions({ useSessions, useWorkspaces, sessionId }) {
   const mainSessionId = useSessions(MAIN_SESSION_SELECTOR);
-  return /* @__PURE__ */ import_react11.default.createElement(MarketPage, { sessionId: sessionId || mainSessionId, runCommand });
+  const sessionsById = useSessions((state) => state?.byId ?? {});
+  const workspaces = typeof useWorkspaces === "function" ? useWorkspaces((state) => state) : null;
+  const workspaceId = resolveWorkspaceId(workspaces, sessionsById, mainSessionId);
+  return /* @__PURE__ */ import_react11.default.createElement(MarketPage, { sessionId: sessionId || mainSessionId, workspaceId, runCommand });
 }
 function HubPage(props) {
   const useSessions = props?.useSessions;
   if (typeof useSessions !== "function") {
     return /* @__PURE__ */ import_react11.default.createElement(MarketPage, { sessionId: props?.sessionId, runCommand });
   }
-  return /* @__PURE__ */ import_react11.default.createElement(HubPageWithSessions, { useSessions, sessionId: props?.sessionId });
+  return /* @__PURE__ */ import_react11.default.createElement(HubPageWithSessions, { useSessions, useWorkspaces: props?.useWorkspaces, sessionId: props?.sessionId });
 }
 var SIDEBAR_ENTRIES = [
   { id: "expert", label: "\u4E13\u5BB6", icon: "menuExpert" },

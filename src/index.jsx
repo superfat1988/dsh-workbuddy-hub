@@ -39,9 +39,31 @@ const MAIN_SESSION_SELECTOR = state => {
   return Object.values(byId).find(session => (session?.retainedBy?.mainView ?? 0) > 0)?.id
 }
 
-function HubPageWithSessions({ useSessions, sessionId }) {
+function resolveWorkspaceId(workspaces, sessionsById, currentSessionId) {
+  const items = Array.isArray(workspaces?.items) ? workspaces.items : []
+  if (currentSessionId) {
+    const ws = items.find(w => Array.isArray(w?.sessionIds) && w.sessionIds.includes(currentSessionId))
+    if (ws?.workspaceId) return ws.workspaceId
+  }
+  let selected = null; let selectedTime = Number.NEGATIVE_INFINITY
+  for (const w of items) {
+    let latest = Number.NEGATIVE_INFINITY
+    for (const sid of (Array.isArray(w?.sessionIds) ? w.sessionIds : [])) {
+      const s = sessionsById?.[sid]
+      if (s?.updatedAt != null) latest = Math.max(latest, s.updatedAt)
+    }
+    if (latest === Number.NEGATIVE_INFINITY && w?.createdAt) latest = Date.parse(w.createdAt)
+    if (selected === null || latest > selectedTime) { selected = w.workspaceId; selectedTime = latest }
+  }
+  return selected || undefined
+}
+
+function HubPageWithSessions({ useSessions, useWorkspaces, sessionId }) {
   const mainSessionId = useSessions(MAIN_SESSION_SELECTOR)
-  return <MarketPage sessionId={sessionId || mainSessionId} runCommand={runCommand} />
+  const sessionsById = useSessions(state => state?.byId ?? {})
+  const workspaces = typeof useWorkspaces === 'function' ? useWorkspaces(state => state) : null
+  const workspaceId = resolveWorkspaceId(workspaces, sessionsById, mainSessionId)
+  return <MarketPage sessionId={sessionId || mainSessionId} workspaceId={workspaceId} runCommand={runCommand} />
 }
 
 function HubPage(props) {
@@ -50,7 +72,7 @@ function HubPage(props) {
   if (typeof useSessions !== 'function') {
     return <MarketPage sessionId={props?.sessionId} runCommand={runCommand} />
   }
-  return <HubPageWithSessions useSessions={useSessions} sessionId={props?.sessionId} />
+  return <HubPageWithSessions useSessions={useSessions} useWorkspaces={props?.useWorkspaces} sessionId={props?.sessionId} />
 }
 
 // 侧栏入口：图标与悬停弹出的三项，都照官方（官方入口图标就是「专家」那枚，

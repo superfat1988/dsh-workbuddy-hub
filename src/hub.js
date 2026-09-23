@@ -23,8 +23,9 @@ let _presetSelector = null
 export function setPresetSelector(fn) { _presetSelector = fn }
 export function selectPreset(sessionId, presetId) {
   const fn = _presetSelector
+  console.info('[wbh] selectPreset ->', sessionId, presetId, 'selector:', typeof fn)
   if (typeof fn !== 'function') return Promise.resolve({ ok: false, error: 'agentPresets remote 不可用' })
-  try { return Promise.resolve(fn(sessionId, presetId)) } catch (error) {
+  try { return Promise.resolve(fn(sessionId, presetId)).then(r => { console.info('[wbh] selectPreset result ->', JSON.stringify(r)); return r }) } catch (error) {
     return Promise.resolve({ ok: false, error: String(error?.message || error) })
   }
 }
@@ -35,6 +36,7 @@ export function setSessionStarter(fn) { _sessionStarter = fn }
 export function startNewSession() {
   try { return Boolean(_sessionStarter?.()) } catch { return false }
 }
+
 
 // 当前会话 id：composer 槽由框架注入 props.sessionId，是权威来源
 let _composerSession = ''
@@ -216,25 +218,24 @@ export const hub = {
  * 完全不动：不挂载、不注入、不 chip。
  * @returns {Promise<{ok:true, presetId, sessionId} | {ok:false, error}>}
  */
-export async function summonExpertInNewSession(entry) {
+export async function summonExpertInNewSession(entry, workspaceId) {
   const ensure = await hub.expertPresetEnsure(entry.name)
+  console.info('[wbh] summonExpert: ensure ->', JSON.stringify(ensure))
   if (!ensure?.ok || !ensure.presetId) return { ok: false, error: ensure?.error || '无法创建专家预设' }
-  const before = composerSession() || ''
-  startNewSession()
-  let target = ''
-  for (let i = 0; i < 24; i += 1) {
-    await new Promise(resolve => setTimeout(resolve, 250))
-    const now = composerSession()
-    if (now && now !== before) { target = now; break }
+
+  // 建会话时就把 preset 带上（sessionController.create {agentPreset}），一步到位，
+  // 没有「新建→select」的竞态、也没有 writer-held。建完直接 openSession 打开。
+  let created
+  try {
+    created = await post('/expert-new-session', { presetId: ensure.presetId, workspaceId })
+  } catch (error) {
+    return { ok: false, error: `创建专家会话失败：${String(error?.message || error)}` }
   }
-  if (!target) target = composerSession() || ''
-  if (!target) return { ok: false, error: '没有等到新会话，请手动新建对话后重试' }
-  const picked = await selectPreset(target, ensure.presetId)
-  if (!picked?.ok) {
-    const detail = picked?.error?.details?.reason ?? picked?.error?.message ?? picked?.error
-    return { ok: false, error: typeof detail === 'string' ? detail : '切换 agent preset 被拒绝' }
+  if (!created?.ok || !created.sessionId) {
+    return { ok: false, error: created?.error || '创建专家会话失败' }
   }
-  // chip 只挂在「这个新会话」名下
-  addSelection(entry, target)
-  return { ok: true, presetId: ensure.presetId, sessionId: target }
+  console.info('[wbh] summonExpert: created ->', created.sessionId)
+  addSelection(entry, created.sessionId)
+  openSessionById(created.sessionId)
+  return { ok: true, presetId: ensure.presetId, sessionId: created.sessionId }
 }
