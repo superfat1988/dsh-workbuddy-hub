@@ -185,3 +185,10 @@
 .wbh-pinBtn.is-pinned{opacity:1;color:var(--wb-color-text-primary)}
 .wbh-notice{padding:6px 10px;margin-bottom:6px;border-radius:8px;background:var(--wb-bg-tertiary,#f4f4f4);font-size:12px;line-height:18px;color:var(--wb-color-text-secondary)}
 .wbh-notice--page{margin:8px var(--ec-page-gutter) 0}
+
+/* 连接器 tab 的图标盒放大到 28px、行高 48px（原先 24/44 显得拥挤） */
+.wbh-flyoutRow .wbh-flyoutIcon{width:28px;height:28px;flex:0 0 28px}
+.wbh-flyoutRow{height:48px}
+.wbh-authLink{display:inline-flex;margin:0 0 6px 8px;padding:6px 12px;border-radius:8px;background:#eef4ff;color:#1a56db;font-size:12px;text-decoration:none}
+.wbh-authLink:hover{background:#e2ecff}
+.wbh-authLink--page{margin:8px var(--ec-page-gutter) 0}

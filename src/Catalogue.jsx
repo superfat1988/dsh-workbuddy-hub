@@ -178,6 +178,7 @@ export default function Catalogue({
   const [detail, setDetail] = useState(null)   // 技能/连接器的二级界面
   const [bound, setBound] = useState([])       // 官方已绑定的连接器（真实连接态）
   const [notice, setNotice] = useState('')     // 操作结果提示（连接/解绑失败等）
+  const [pendingAuth, setPendingAuth] = useState(null)  // 待完成的授权（含可点链接）
   const [pinned, setPinned] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem('wbh-pinned') || '[]')) } catch { return new Set() }
   })
@@ -250,6 +251,23 @@ export default function Catalogue({
   }, [rows, sort, kind])
 
   // 连接器：已绑定=解绑；未绑定=发起官方 OAuth 并打开授权页；失败明确报错
+  const pollOauth = useCallback(async entry => {
+    for (let i = 0; i < 40; i++) {
+      await new Promise(r => setTimeout(r, 3000))
+      try {
+        const st = await hub.connectorOauthStatus(entry.name)
+        if (st?.connected) {
+          const fresh = await hub.boundConnectors().catch(() => [])
+          setBound(fresh.map(x => x.name))
+          setPendingAuth(null)
+          setNotice(`「${entry.displayName}」已连接`)
+          return
+        }
+      } catch { /* 继续轮询 */ }
+    }
+    setNotice(`「${entry.displayName}」授权尚未完成，可稍后重试`)
+  }, [])
+
   const connectorAction = useCallback(async entry => {
     const key = `${entry.kind}/${entry.name}`
     setBusy(key); setNotice('')
@@ -266,8 +284,10 @@ export default function Catalogue({
         const r = await hub.connectorAuthStart(entry.name)
         if (r?.ok && r.url) {
           if (authWindow && !authWindow.closed) authWindow.location.href = r.url
-          else window.location.href = r.url          // 被拦截时退化为当前页跳转
-          setNotice(`已打开「${entry.displayName}」的授权页，完成后点连接器行刷新状态`)
+          setPendingAuth({ name: entry.name, displayName: entry.displayName, url: r.url })
+          setNotice(`请在打开的页面完成「${entry.displayName}」授权；若没有自动打开，点下面链接`)
+          // 官方同样是 start 之后轮询 status 等授权完成
+          void pollOauth(entry)
         } else {
           try { authWindow?.close() } catch { /* 忽略 */ }
           setNotice(`连接「${entry.displayName}」失败：${r?.message || '官方未返回授权链接'}`)
@@ -681,6 +701,11 @@ export default function Catalogue({
     return (
       <div className="wbh-flyout" role="dialog" aria-label={`选择${kindMeta.label}`}>
         {notice ? <div className="wbh-notice">{notice}</div> : null}
+        {pendingAuth ? (
+          <a className="wbh-authLink" href={pendingAuth.url} target="_blank" rel="noreferrer">
+            打开「{pendingAuth.displayName}」授权页
+          </a>
+        ) : null}
         <div className="wbh-flyoutSearch">
           <WbIcon name="search" size={15} />
           <input value={query} placeholder={`搜索${kindMeta.label}`} aria-label={`搜索${kindMeta.label}`}
@@ -711,6 +736,11 @@ export default function Catalogue({
         </div>
       </header>
       {notice ? <div className="wbh-notice wbh-notice--page">{notice}</div> : null}
+      {pendingAuth ? (
+        <a className="wbh-authLink wbh-authLink--page" href={pendingAuth.url} target="_blank" rel="noreferrer">
+          打开「{pendingAuth.displayName}」授权页
+        </a>
+      ) : null}
       <div className="ec-page-layout">
         <div className="ec-main-content">
           {view !== 'market' && (

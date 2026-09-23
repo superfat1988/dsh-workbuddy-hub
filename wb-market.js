@@ -191,3 +191,10 @@ export async function connectorRevoke(name, stateDir) {
   const { status, json } = await call('POST', `/console/as/connector/oauth/${encodeURIComponent(name)}/revoke`, { token, body: {} })
   return { status, ok: json?.code === 0, message: json?.msg || '' }
 }
+
+/** Official OAuth completion poll (the app waits on this after /start). */
+export async function connectorOauthStatus(name, stateDir) {
+  const token = await bearer(stateDir)
+  const { status, json } = await call('GET', `/console/as/connector/oauth/${encodeURIComponent(name)}/status`, { token })
+  return { status, payload: json }
+}

@@ -17,7 +17,7 @@
  */
 import { homedir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
-import { loginStart, loginPoll, loadAuth, saveAuth, marketList, marketCategories, connectorRegistry, connectorBound, connectorAuthStart, connectorRevoke } from './wb-market.js'
+import { loginStart, loginPoll, loadAuth, saveAuth, marketList, marketCategories, connectorRegistry, connectorBound, connectorAuthStart, connectorRevoke, connectorOauthStatus } from './wb-market.js'
 import { listExperts, categories as officialCategories, installExpert } from './wb-experts.js'
 import { skillDetails } from './wb-market.js'
 import { unzip } from './wb-unzip.js'
@@ -839,6 +839,18 @@ export function apply(ctx, config = {}) {
     if (route === 'GET /connectors/bound') {
       try { json(res, 200, { ok: true, items: await connectorBound(P.state) }) }
       catch (error) { json(res, 200, { ok: false, items: [], error: String(error?.message || error) }) }
+      return true
+    }
+
+    // 授权完成轮询（官方在 /start 之后轮询同一路径）
+    if (route === 'GET /connectors/oauth-status') {
+      const entryName = url.searchParams.get('name') || ''
+      if (!/^[\w.-]+$/.test(entryName)) { json(res, 400, { error: 'invalid name' }); return true }
+      try {
+        const { payload } = await connectorOauthStatus(entryName, P.state)
+        const data = payload?.data ?? {}
+        json(res, 200, { ok: true, code: payload?.code, connected: data.connected === true || data.status === 1, raw: payload })
+      } catch (error) { json(res, 200, { ok: false, connected: false, message: String(error?.message || error) }) }
       return true
     }
 
