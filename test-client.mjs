@@ -20,7 +20,7 @@ const plugin = registration.factory(name => {
   throw new Error(`unexpected browser require: ${name}`)
 })
 assert.equal(typeof plugin.apply, 'function')
-assert.deepEqual([...plugin.inject], ['slots'])
+assert.deepEqual([...plugin.inject], ['slots', 'remote', 'remote.agentPresets'])
 
 plugin.apply({
   get: () => undefined,

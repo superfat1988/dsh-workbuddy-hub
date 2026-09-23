@@ -6,7 +6,7 @@ import AttachedRail from './AttachedRail.jsx'
 import SettingsPage from './SettingsPage.jsx'
 import {
   setMarketNavigator, setSessionOpener, setSessionStarter, setPresetSelector, openMarket,
-  openSessionById, startNewSession, composerSession,
+  openSessionById, startNewSession, composerSession, summonExpertInNewSession,
 } from './hub.js'
 
 let pluginCtx = null
@@ -167,7 +167,7 @@ const plugin = {
     // （vConsole 里敲 __wbh.openSessionById('session-…')）
     try {
       // 只暴露只读/导航类排查口；归档这类会改状态的入口不随插件发布
-      window.__wbh = { openSessionById, startNewSession, composerSession }
+      window.__wbh = { openSessionById, startNewSession, composerSession, summonExpertInNewSession }
     } catch { /* 非浏览器环境忽略 */ }
     ctx.slots.inject('main', () => reg('main', { name: 'main', key: 'workbuddy-hub' }, HubPage))
     ctx.slots.inject('sidebar.panellist', () => reg('sidebar.panellist', { name: 'sidebar.panellist', id: 'workbuddy-hub', order: -90, label: () => '专家·技能·连接器' }, PanelIcon))
@@ -187,6 +187,6 @@ const plugin = {
     }, SettingsPage))
   },
 }
-plugin.inject = ['slots']
+plugin.inject = ['slots', 'remote', 'remote.agentPresets']
 
 module.exports = plugin

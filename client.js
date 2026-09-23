@@ -4100,7 +4100,7 @@ var plugin = {
       }
     });
     try {
-      window.__wbh = { openSessionById, startNewSession, composerSession };
+      window.__wbh = { openSessionById, startNewSession, composerSession, summonExpertInNewSession };
     } catch {
     }
     ctx.slots.inject("main", () => reg("main", { name: "main", key: "workbuddy-hub" }, HubPage));
@@ -4125,7 +4125,7 @@ var plugin = {
     }, SettingsPage));
   }
 };
-plugin.inject = ["slots"];
+plugin.inject = ["slots", "remote", "remote.agentPresets"];
 module.exports = plugin;
 
 return module.exports; } });
