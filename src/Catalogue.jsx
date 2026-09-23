@@ -181,6 +181,7 @@ export default function Catalogue({
   const [busyLocal, setBusyLocal] = useState('')  // 本组件内发起的连接/解绑进行中态
   const [pendingAuth, setPendingAuth] = useState(null)  // 待完成的授权（含可点链接）
   const [nativeRow, setNativeRow] = useState(null)      // 只读导出的原生 mcp-client 行
+  const [toolInfo, setToolInfo] = useState(null)        // 连接器暴露的工具清单
   const [pinned, setPinned] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem('wbh-pinned') || '[]')) } catch { return new Set() }
   })
@@ -274,6 +275,15 @@ export default function Catalogue({
       if (r?.ok) { setNativeRow(r); setNotice(r.conflict ? '注意：该 serverName 已在 profile 中声明，粘贴前请改名' : '') }
       else setNotice(`导出失败：${r?.error || '未知错误'}`)
     } catch (error) { setNotice(`导出失败：${String(error?.message || error)}`) } finally { setBusyLocal('') }
+  }, [])
+
+  const loadTools = useCallback(async entry => {
+    setBusyLocal(`${entry.kind}/${entry.name}`); setNotice('')
+    try {
+      const r = await hub.connectorTools(entry.name)
+      if (r?.ok) setToolInfo(r)
+      else setNotice(`读取工具清单失败：${r?.error || '未知错误'}`)
+    } catch (error) { setNotice(`读取工具清单失败：${String(error?.message || error)}`) } finally { setBusyLocal('') }
   }, [])
 
   const connectorRevoke = useCallback(async entry => {
@@ -595,6 +605,20 @@ export default function Catalogue({
           </div>
           <div className="wbh-detailName">{detail.displayName}</div>
           <p className="wbh-detailDesc">{detail.description || detail.name}</p>
+          {toolInfo ? (
+            <div className="wbh-toolBox">
+              <div className="wbh-toolHead">该连接器向模型暴露 <b>{toolInfo.count}</b> 个工具 · 命名空间 <code>{toolInfo.namespace}</code></div>
+              <div className="wbh-toolList">
+                {toolInfo.labelled.slice(0, 40).map(t => (
+                  <div className="wbh-toolRow" key={t.name}>
+                    <code>{t.name}</code>
+                    <span>{t.description}</span>
+                  </div>
+                ))}
+              </div>
+              {toolInfo.count > 40 ? <div className="wbh-toolMore">仅显示前 40 个，共 {toolInfo.count} 个</div> : null}
+            </div>
+          ) : null}
           {nativeRow ? (
             <div className="wbh-nativeRowBox">
               <pre className="wbh-nativeRow">{nativeRow.row}</pre>
@@ -617,6 +641,11 @@ export default function Catalogue({
               disabled={busyLocal === `${detail.kind}/${detail.name}`}
               onClick={() => void exportNativeRow(detail)}>
               导出原生 MCP 配置
+            </button>
+            <button type="button" className="wb-button wb-button--secondary wb-button--medium"
+              disabled={busyLocal === `${detail.kind}/${detail.name}`}
+              onClick={() => void loadTools(detail)}>
+              {toolInfo ? `可用工具 ${toolInfo.count}` : '查看可用工具'}
             </button>
           </div>
         </div>

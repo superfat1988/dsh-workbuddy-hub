@@ -205,3 +205,11 @@
 .wbh-nativeRow{max-height:220px;overflow:auto;margin:0;padding:10px 12px;border-radius:10px;background:var(--wb-bg-tertiary,#f6f6f6);font-size:11px;line-height:16px;white-space:pre;color:var(--wb-color-text-secondary)}
 .wbh-nativeRowFoot{display:flex;align-items:center;gap:10px;margin-top:8px}
 .wbh-nativeRowNote{font-size:11px;color:var(--wb-color-text-tertiary)}
+
+.wbh-toolBox{margin:12px 0 4px;text-align:left}
+.wbh-toolHead{font-size:12px;color:var(--wb-color-text-secondary);margin-bottom:6px}
+.wbh-toolList{max-height:200px;overflow:auto;display:flex;flex-direction:column;gap:4px}
+.wbh-toolRow{display:flex;gap:8px;font-size:11px;line-height:16px}
+.wbh-toolRow code{flex:0 0 auto;color:var(--wb-color-text-primary);font-family:var(--font-mono,monospace)}
+.wbh-toolRow span{color:var(--wb-color-text-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wbh-toolMore{margin-top:6px;font-size:11px;color:var(--wb-color-text-tertiary)}

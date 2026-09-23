@@ -862,6 +862,51 @@ export function apply(ctx, config = {}) {
       return true
     }
 
+    // 连接器暴露的工具清单：宿主按 mcp.json 的 url + 凭据引用真调一次 tools/list。
+    if (route === 'GET /connectors/tools') {
+      const entryName = url.searchParams.get('name') || ''
+      if (!/^[\w.-]+$/.test(entryName)) { json(res, 400, { error: 'invalid name' }); return true }
+      try {
+        const registry = loadJson(P.registry, { version: 1, installed: {} })
+        const record = registry.installed?.[`connector/${entryName}`]
+        if (!record) { json(res, 404, { error: `connector not installed locally: ${entryName}` }); return true }
+        const mcpPath = join(record.dest, 'mcp.json')
+        if (!existsSync(mcpPath)) { json(res, 400, { error: 'connector has no mcp.json' }); return true }
+        const raw = JSON.parse(readFileSync(mcpPath, 'utf8'))
+        const server = Object.values(raw.mcpServers ?? {})[0] ?? {}
+        if (!server.url) { json(res, 400, { error: 'connector has no http url' }); return true }
+        let token = ''
+        try { token = await bearer(P.state) } catch { token = '' }
+        const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }
+        for (const [key, value] of Object.entries(server.headers ?? {})) {
+          headers[key] = String(value).replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, () => token)
+        }
+        const upstream = await fetch(server.url, {
+          method: 'POST', headers,
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+        })
+        const text = await upstream.text()
+        if (upstream.status !== 200) { json(res, 502, { error: `mcp gateway HTTP ${upstream.status}`, detail: text.slice(0, 200) }); return true }
+        // streamable-http 可能回 SSE（data: 行）也可能回纯 JSON，两种都解析。
+        let payload = null
+        try { payload = JSON.parse(text) } catch {
+          const line = text.split('\n').filter(l => l.startsWith('data:')).pop()
+          if (line) { try { payload = JSON.parse(line.slice(5).trim()) } catch { payload = null } }
+        }
+        const tools = payload?.result?.tools ?? []
+        json(res, 200, {
+          ok: true, connector: entryName,
+          count: tools.length,
+          names: tools.map(t => t.name),
+          labelled: tools.map(t => ({ name: t.name, description: String(t.description || '').slice(0, 120) })),
+          namespace: `mcp__${record.serverName || entryName}__`,
+        })
+      } catch (error) {
+        json(res, 502, { error: `tool listing failed: ${String(error?.message || error)}` })
+      }
+      return true
+    }
+
     // 只读导出：把已安装连接器渲染成可粘贴的原生 mcp-client overlay 行，
     // 并扫描 profile 里已声明的 serverName 供冲突提示。绝不写 profile。
     if (route === 'GET /connectors/native-row') {

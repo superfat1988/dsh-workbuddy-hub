@@ -158,6 +158,7 @@ export const hub = {
   connectorUnbind: name => post('/connectors/unbind', { name }),
   connectorInstall: name => post('/connectors/install', { name }),
   connectorNativeRow: name => api(`/connectors/native-row?name=${encodeURIComponent(name)}`),
+  connectorTools: name => api(`/connectors/tools?name=${encodeURIComponent(name)}`),
   connectorOauthStatus: name => api(`/connectors/oauth-status?name=${encodeURIComponent(name)}`),
   enableConnector: name => post('/connectors/enable', { name }).then(r => { _emitChange(); return r }),
   disableConnector: name => post('/connectors/disable', { name }).then(r => { _emitChange(); return r }),
