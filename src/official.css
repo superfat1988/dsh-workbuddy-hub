@@ -1033,7 +1033,7 @@
 .ec-search-wrapper .wb-input-wrapper:hover:not(.wb-input-wrapper--disabled) { border-color:var(--wb-border-hover) }
 .ec-search-wrapper .wb-input-wrapper:focus-within:not(.wb-input-wrapper--disabled) { border-color:var(--wb-border-popover-strong) }
 .ec-search-wrapper { width:100%;min-width:0;flex-shrink:1 }
-.ec-category-tabs { padding:0 var(--ec-page-gutter) }
+.ec-category-tabs { padding:0 0 2px }
 .ec-category-tab { padding:4px 10px;font-size:12px }
 .ec-modal-overlay { position:fixed;inset:0;z-index:1000;background:var(--wb-color-mask-color);display:flex;align-items:center;justify-content:center;padding:20px;animation:ec-overlay-in .15s ease }
 .ec-modal-card { background:var(--wb-bg-primary);border-radius:16px;width:520px;max-width:90vw;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--wb-shadow-dialog-md);opacity:0;transition:opacity .12s ease-out;position:relative;overflow:hidden;animation:ec-modal-in .2s ease forwards }

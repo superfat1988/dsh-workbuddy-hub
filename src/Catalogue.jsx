@@ -21,6 +21,16 @@ const SORTS = [
   { id: 'new', label: '最新' },
 ]
 
+// 官方顶栏三个 tab 的图标（取自官方 .um-tab 内联 SVG 原文）
+const TAB_ICON = { expert: 'tabExpert', skill: 'tabSkill', connector: 'tabConnector' }
+
+// 官方每个页面的搜索占位文案（CDP 实测：专家页更长）
+const SEARCH_PLACEHOLDER = {
+  expert: '搜索专家职称或描述',
+  skill: '搜索技能',
+  connector: '搜索连接器',
+}
+
 const FALLBACK_COLORS = 6
 
 /** 官方按条目稳定取一个 fallback 底色（--ec-avatar-fallback-bg-N）。 */
@@ -455,24 +465,32 @@ export default function Catalogue({
     ))}</>
   )
 
+  // 官方 tab：.um-tab 28px / p 0 10 / gap 4 / r8 / 14px 600；激活态黑底白字
+  // (rgba(0,0,0,.75))，图标用官方 SVG（14px）
   const kindTabs = (
-    <div className="um-header__tabs" role="tablist">
+    <div className="um-header__tabs ec-topbar__left" role="tablist">
       {KINDS.map(k => (
         <button key={k.id} type="button" role="tab" aria-selected={kind === k.id}
           className={`um-tab${kind === k.id ? ' um-tab--active' : ''}`}
+          data-track-name="专家/技能/连接器"
           onClick={() => onKind(k.id)}>
-          <WbIcon name={k.icon} size={14} />
+          <PickIcon name={TAB_ICON[k.id]} size={14} />
           <span>{k.label}</span>
         </button>
       ))}
     </div>
   )
 
+  // 官方搜索框：.ec-search-wrapper 220x32 > .wb-input-wrapper--medium
+  // (p 0 8 / gap 4 / r8 / #f2f2f2 / border 1px rgba(0,0,0,.08)) + prefix 图标 14px
+  // + input 16px + placeholder rgba(0,0,0,.3)；占位文案官方每页不同
   const searchBox = (
     <div className="ec-search-wrapper">
-      <WbIcon name="search" size={14} />
-      <input value={query} placeholder={`搜索${kindMeta.label}`} aria-label={`搜索${kindMeta.label}`}
-        onChange={e => onQuery(e.target.value)} />
+      <span className="wb-input-wrapper wb-input-wrapper--medium">
+        <span className="wb-input__prefix"><PickIcon name="searchFilled" size={14} /></span>
+        <input className="wb-input__inner" value={query} placeholder={SEARCH_PLACEHOLDER[kind]}
+          aria-label={`搜索${kindMeta.label}`} onChange={e => onQuery(e.target.value)} />
+      </span>
     </div>
   )
 
@@ -897,10 +915,12 @@ export default function Catalogue({
             </div>
           )}
           {view === 'market' && (
-            <div className="wbh-filterRow">
-              {categoryChips}
-              {sortGroup}
-            </div>
+            <>
+              {/* 官方版面：排序控件独占一行（高 28、右对齐），分类栏在其下 12px，
+                  两者不是同一行左右分列 */}
+              {sortGroup ? <div className="wbh-sortRow">{sortGroup}</div> : null}
+              <div className="wbh-filterRow">{categoryChips}</div>
+            </>
           )}
           <div className="ec-main-scroll" ref={scrollRef} onScroll={onScroll}>
             {view === 'installed' ? installedGrid : view === 'local' ? localGrid : (

@@ -88,7 +88,7 @@
 .ec-list-tab:hover{color:var(--wb-color-text-secondary)}
 .ec-list-tab.is-active{color:var(--wb-color-text-primary);font-weight:600}
 .ec-list-tab.is-active::after{content:"";position:absolute;left:0;right:0;bottom:-3px;height:2px;border-radius:2px;background:var(--wb-color-text-primary)}
-.ec-category-tabs-wrap{padding:0 var(--ec-page-gutter);margin-bottom:8px}
+.ec-category-tabs-wrap{margin:0 0 12px}
 .ec-category-tab{font-size:12.5px;padding:4px 12px}
 .ec-category-tab-count{margin-left:1px;opacity:.6}
 .ec-picker-scroll{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--wb-border-default) transparent}
@@ -104,7 +104,11 @@
 .ec-modal-card.is-expert-view .ec-modal-close{padding:0}
 
 /* --- 过滤行 / 视图切换 / 添加技能菜单 / 我安装的（官方入口的落地样式）--- */
-.wbh-filterRow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px var(--ec-page-gutter);flex-wrap:wrap}
+/* 内容区左右内边距：官方实测 .ec-main-scroll{padding:0 20px 0 24px}
+   （面板边缘 264 → 内容 288），排序行/分类行/网格都吃这一条 */
+.ec-market-panel .ec-main-content{padding:0 20px 0 24px}
+.wbh-sortRow{display:flex;align-items:center;justify-content:flex-end;height:28px;margin:0 0 12px}
+.wbh-filterRow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0;flex-wrap:wrap}
 .ec-market-panel .ec-category-tabs-wrap{padding:0}
 .wbh-filterRow .ec-category-tabs-wrap{padding:0}
 .wbh-viewBar{display:flex;align-items:center;gap:10px;padding:10px var(--ec-page-gutter) 4px}
@@ -144,11 +148,18 @@
 
 /* 连接器/技能/专家页导航栏：按官方实测对齐（topbar 高 56px，搜索框宽 184px，
    搜索控件位于 ec-topbar__right 内并用 wb-input 基建） */
-.ec-market-panel .ec-topbar{height:56px;min-height:56px;padding:0 var(--ec-page-gutter);display:flex;align-items:center;justify-content:space-between}
-.ec-market-panel .ec-topbar .ec-search-wrapper{width:184px;height:32px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 12px;border:1px solid var(--wb-border-default,#e5e5e5);border-radius:8px;background:var(--wb-bg-primary,#fff)}
-.ec-market-panel .ec-topbar .ec-search-wrapper input{flex:1;min-width:0;border:none;outline:none;background:transparent;font-size:14px;color:var(--wb-color-text-primary)}
-.ec-market-panel .ec-topbar .ec-search-wrapper input::placeholder{color:var(--wb-color-text-tertiary)}
+/* 顶栏：官方 .ec-topbar 高 56 / padding 0 24 / margin 0 0 20 / **背景透明** */
+.ec-market-panel .ec-topbar{height:56px;min-height:56px;padding:0 24px;margin:0 0 20px;display:flex;align-items:center;justify-content:space-between;background:transparent}
 .ec-market-panel .ec-topbar__right{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+
+/* 搜索框：官方 .ec-search-wrapper 220x32（min-width 120，自身无边框/内边距），
+   外壳由 .wb-input-wrapper--medium 承担：p 0 8 / gap 4 / r8 / #f2f2f2 / border 1px rgba(0,0,0,.08) */
+.ec-market-panel .ec-topbar .ec-search-wrapper{position:relative;width:220px;min-width:120px;height:32px;flex:0 0 auto;padding:0;border:none;background:transparent;border-radius:0;display:block}
+.ec-market-panel .ec-topbar .wb-input-wrapper{display:inline-flex;align-items:center;gap:4px;width:100%;height:32px;padding:0 8px;box-sizing:border-box;border-radius:8px;background:#f2f2f2;border:1px solid rgba(0,0,0,.08)}
+.ec-market-panel .ec-topbar .wb-input__prefix{flex:0 0 14px;width:14px;height:14px;display:flex;align-items:center;justify-content:center;color:rgba(0,0,0,.5)}
+.ec-market-panel .ec-topbar .wb-input__prefix svg{display:block;width:14px;height:14px}
+.ec-market-panel .ec-topbar .ec-search-wrapper input{flex:1 1 auto;min-width:0;height:30px;padding:0;margin:0;border:none;outline:none;background:transparent;font-size:16px;line-height:normal;color:#000;font-family:inherit}
+.ec-market-panel .ec-topbar .ec-search-wrapper input::placeholder{color:rgba(0,0,0,.3)}
 
 .wbh-nativeRowBox{margin:12px 0 4px}
 .wbh-nativeRow{max-height:220px;overflow:auto;margin:0;padding:10px 12px;border-radius:10px;background:var(--wb-bg-tertiary,#f6f6f6);font-size:11px;line-height:16px;white-space:pre;color:var(--wb-color-text-secondary)}
