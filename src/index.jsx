@@ -41,10 +41,22 @@ const MAIN_SESSION_SELECTOR = state => {
 
 function resolveWorkspaceId(workspaces, sessionsById, currentSessionId) {
   const items = Array.isArray(workspaces?.items) ? workspaces.items : []
+  // 1) 当前主会话所属 workspace
   if (currentSessionId) {
     const ws = items.find(w => Array.isArray(w?.sessionIds) && w.sessionIds.includes(currentSessionId))
     if (ws?.workspaceId) return ws.workspaceId
   }
+  // 2) 最近活跃会话的 cwd 精确匹配 workspace.path（比 updatedAt 排序更稳）
+  let latestCwd = null; let latestTime = Number.NEGATIVE_INFINITY
+  for (const id of Object.keys(sessionsById || {})) {
+    const s = sessionsById?.[id]
+    if (s?.cwd && (s.updatedAt ?? 0) > latestTime) { latestTime = s.updatedAt; latestCwd = s.cwd }
+  }
+  if (latestCwd) {
+    const ws = items.find(w => w?.path === latestCwd)
+    if (ws?.workspaceId) return ws.workspaceId
+  }
+  // 3) 兜底：updatedAt 排序
   let selected = null; let selectedTime = Number.NEGATIVE_INFINITY
   for (const w of items) {
     let latest = Number.NEGATIVE_INFINITY

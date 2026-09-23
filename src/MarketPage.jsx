@@ -76,8 +76,9 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
       setBusy(`${entry.kind}/${entry.name}`); setNotice('')
       void summonExpertInNewSession(entry, workspaceId).then(r => {
         setNotice(r.ok ? `已在新会话中以「${entry.displayName}」身份开始` : `失败：${r.error}`)
-        setBusy('')
-      })
+      }).catch(error => {
+        setNotice(`失败：${String(error?.message || error)}`)
+      }).finally(() => setBusy(''))
     } else void attach(entry)
   }, [attach])
 
@@ -99,9 +100,8 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
             setSummoning(null)
             void summonExpertInNewSession(picked, workspaceId).then(r => {
               setNotice(r.ok ? `已在新会话中以「${picked.displayName}」身份开始` : `失败：${r.error}`)
-              // 官方会把示例问题预填进新会话输入框
               if (r.ok) setTimeout(() => { try { insertPromptIntoComposer(text) } catch { /* 忽略 */ } }, 800)
-            })
+            }).catch(error => { setNotice(`失败：${String(error?.message || error)}`) })
           }} />
       )}
       {authorising && (

@@ -86,8 +86,19 @@ const _changeListeners = new Set()
 export const onCatalogChange = fn => { _changeListeners.add(fn); return () => { _changeListeners.delete(fn) } }
 const _emitChange = () => { for (const fn of _changeListeners) { try { fn() } catch {} } }
 
+const API_TIMEOUT_MS = 30000
 async function api(path, options) {
-  const response = await fetch(API + path, options)
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+  const timer = controller ? setTimeout(() => controller.abort(), API_TIMEOUT_MS) : null
+  let response
+  try {
+    response = await fetch(API + path, { ...options, signal: controller?.signal })
+  } catch (error) {
+    if (controller?.signal?.aborted) throw new Error('请求超时（30s）')
+    throw error
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
   const body = await response.json().catch(() => ({}))
   if (!response.ok) {
     const error = new Error(body.error || `HTTP ${response.status}`)
@@ -219,23 +230,34 @@ export const hub = {
  * @returns {Promise<{ok:true, presetId, sessionId} | {ok:false, error}>}
  */
 export async function summonExpertInNewSession(entry, workspaceId) {
-  const ensure = await hub.expertPresetEnsure(entry.name)
-  console.info('[wbh] summonExpert: ensure ->', JSON.stringify(ensure))
-  if (!ensure?.ok || !ensure.presetId) return { ok: false, error: ensure?.error || '无法创建专家预设' }
-
-  // 建会话时就把 preset 带上（sessionController.create {agentPreset}），一步到位，
-  // 没有「新建→select」的竞态、也没有 writer-held。建完直接 openSession 打开。
-  let created
   try {
-    created = await post('/expert-new-session', { presetId: ensure.presetId, workspaceId })
+    // 先确保已安装（未安装则下载，人设文件是 preset 的前置）
+    const key = `expert/${entry.name}`
+    let already = false
+    try { already = Boolean((await hub.installed())[key]) } catch { /* 读不到则走安装 */ }
+    if (!already) {
+      try {
+        await hub.install('expert', entry.name, entry.official ? 'official' : undefined)
+      } catch (error) {
+        // 已装过后端会 400；再确认一次，避免把「已安装」当失败
+        const fresh = await hub.installed().catch(() => ({}))
+        if (!fresh[key]) return { ok: false, error: `安装专家失败：${String(error?.message || error)}` }
+      }
+    }
+    const ensure = await hub.expertPresetEnsure(entry.name)
+    console.info('[wbh] summonExpert: ensure ->', JSON.stringify(ensure))
+    if (!ensure?.ok || !ensure.presetId) return { ok: false, error: ensure?.error || '无法创建专家预设' }
+
+    // 建会话时就把 preset 带上（sessionController.create {agentPreset}），一步到位。
+    const created = await post('/expert-new-session', { presetId: ensure.presetId, workspaceId })
+    if (!created?.ok || !created.sessionId) {
+      return { ok: false, error: created?.error || '创建专家会话失败' }
+    }
+    console.info('[wbh] summonExpert: created ->', created.sessionId)
+    addSelection(entry, created.sessionId)
+    openSessionById(created.sessionId)
+    return { ok: true, presetId: ensure.presetId, sessionId: created.sessionId }
   } catch (error) {
-    return { ok: false, error: `创建专家会话失败：${String(error?.message || error)}` }
+    return { ok: false, error: String(error?.message || error) }
   }
-  if (!created?.ok || !created.sessionId) {
-    return { ok: false, error: created?.error || '创建专家会话失败' }
-  }
-  console.info('[wbh] summonExpert: created ->', created.sessionId)
-  addSelection(entry, created.sessionId)
-  openSessionById(created.sessionId)
-  return { ok: true, presetId: ensure.presetId, sessionId: created.sessionId }
 }

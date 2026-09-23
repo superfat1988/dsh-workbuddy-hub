@@ -167,7 +167,7 @@ export default function ComposerAdd({ sessionId, runCommand }) {
         }
       } else if (entry.kind === 'expert') {
         // 官方语义：召唤 = 新建会话 + 该专家成为那个会话的 agent（当前会话不动）。
-        const r = await summonExpertInNewSession(entry)  /* picker 侧无 workspaceId，走回退轮询 */
+        const r = await summonExpertInNewSession(entry).catch(error => ({ ok: false, error: String(error?.message || error) }))
         setNotice(r.ok ? `已在新会话中以「${entry.displayName}」身份开始` : `失败：${r.error}`)
       } else {
         await hub.mount(sessionId, entry.kind, entry.name)

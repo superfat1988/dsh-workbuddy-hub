@@ -2273,8 +2273,19 @@ var _emitChange = () => {
     }
   }
 };
+var API_TIMEOUT_MS = 3e4;
 async function api(path, options) {
-  const response = await fetch(API + path, options);
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), API_TIMEOUT_MS) : null;
+  let response;
+  try {
+    response = await fetch(API + path, { ...options, signal: controller?.signal });
+  } catch (error) {
+    if (controller?.signal?.aborted) throw new Error("\u8BF7\u6C42\u8D85\u65F6\uFF0830s\uFF09");
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(body.error || `HTTP ${response.status}`);
@@ -2411,22 +2422,35 @@ var hub = {
   authLogout: () => post("/wb-auth/logout", {})
 };
 async function summonExpertInNewSession(entry, workspaceId) {
-  const ensure = await hub.expertPresetEnsure(entry.name);
-  console.info("[wbh] summonExpert: ensure ->", JSON.stringify(ensure));
-  if (!ensure?.ok || !ensure.presetId) return { ok: false, error: ensure?.error || "\u65E0\u6CD5\u521B\u5EFA\u4E13\u5BB6\u9884\u8BBE" };
-  let created;
   try {
-    created = await post("/expert-new-session", { presetId: ensure.presetId, workspaceId });
+    const key = `expert/${entry.name}`;
+    let already = false;
+    try {
+      already = Boolean((await hub.installed())[key]);
+    } catch {
+    }
+    if (!already) {
+      try {
+        await hub.install("expert", entry.name, entry.official ? "official" : void 0);
+      } catch (error) {
+        const fresh = await hub.installed().catch(() => ({}));
+        if (!fresh[key]) return { ok: false, error: `\u5B89\u88C5\u4E13\u5BB6\u5931\u8D25\uFF1A${String(error?.message || error)}` };
+      }
+    }
+    const ensure = await hub.expertPresetEnsure(entry.name);
+    console.info("[wbh] summonExpert: ensure ->", JSON.stringify(ensure));
+    if (!ensure?.ok || !ensure.presetId) return { ok: false, error: ensure?.error || "\u65E0\u6CD5\u521B\u5EFA\u4E13\u5BB6\u9884\u8BBE" };
+    const created = await post("/expert-new-session", { presetId: ensure.presetId, workspaceId });
+    if (!created?.ok || !created.sessionId) {
+      return { ok: false, error: created?.error || "\u521B\u5EFA\u4E13\u5BB6\u4F1A\u8BDD\u5931\u8D25" };
+    }
+    console.info("[wbh] summonExpert: created ->", created.sessionId);
+    addSelection(entry, created.sessionId);
+    openSessionById(created.sessionId);
+    return { ok: true, presetId: ensure.presetId, sessionId: created.sessionId };
   } catch (error) {
-    return { ok: false, error: `\u521B\u5EFA\u4E13\u5BB6\u4F1A\u8BDD\u5931\u8D25\uFF1A${String(error?.message || error)}` };
+    return { ok: false, error: String(error?.message || error) };
   }
-  if (!created?.ok || !created.sessionId) {
-    return { ok: false, error: created?.error || "\u521B\u5EFA\u4E13\u5BB6\u4F1A\u8BDD\u5931\u8D25" };
-  }
-  console.info("[wbh] summonExpert: created ->", created.sessionId);
-  addSelection(entry, created.sessionId);
-  openSessionById(created.sessionId);
-  return { ok: true, presetId: ensure.presetId, sessionId: created.sessionId };
 }
 
 // src/insert-prompt.js
@@ -3520,8 +3544,9 @@ function MarketPage({ sessionId, workspaceId, runCommand: runCommand2 }) {
       setNotice("");
       void summonExpertInNewSession(entry, workspaceId).then((r) => {
         setNotice(r.ok ? `\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u4EE5\u300C${entry.displayName}\u300D\u8EAB\u4EFD\u5F00\u59CB` : `\u5931\u8D25\uFF1A${r.error}`);
-        setBusy("");
-      });
+      }).catch((error) => {
+        setNotice(`\u5931\u8D25\uFF1A${String(error?.message || error)}`);
+      }).finally(() => setBusy(""));
     } else void attach(entry);
   }, [attach]);
   const loggedIn = auth?.configured === true;
@@ -3562,6 +3587,8 @@ function MarketPage({ sessionId, workspaceId, runCommand: runCommand2 }) {
             } catch {
             }
           }, 800);
+        }).catch((error) => {
+          setNotice(`\u5931\u8D25\uFF1A${String(error?.message || error)}`);
         });
       }
     }
@@ -3761,7 +3788,7 @@ function ComposerAdd({ sessionId, runCommand: runCommand2 }) {
           setNotice(`\u5DF2\u8FDE\u63A5\u300C${entry.displayName}\u300D\uFF08\u5DE5\u5177\u547D\u540D\u7A7A\u95F4 ${r.serverName}\uFF09\uFF0C\u4E0B\u4E00\u6B21\u6A21\u578B\u6B65\u9AA4\u8D77\u53EF\u7528\u3002`);
         }
       } else if (entry.kind === "expert") {
-        const r = await summonExpertInNewSession(entry);
+        const r = await summonExpertInNewSession(entry).catch((error) => ({ ok: false, error: String(error?.message || error) }));
         setNotice(r.ok ? `\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u4EE5\u300C${entry.displayName}\u300D\u8EAB\u4EFD\u5F00\u59CB` : `\u5931\u8D25\uFF1A${r.error}`);
       } else {
         await hub.mount(sessionId, entry.kind, entry.name);
@@ -3961,6 +3988,19 @@ function resolveWorkspaceId(workspaces, sessionsById, currentSessionId) {
   const items = Array.isArray(workspaces?.items) ? workspaces.items : [];
   if (currentSessionId) {
     const ws = items.find((w) => Array.isArray(w?.sessionIds) && w.sessionIds.includes(currentSessionId));
+    if (ws?.workspaceId) return ws.workspaceId;
+  }
+  let latestCwd = null;
+  let latestTime = Number.NEGATIVE_INFINITY;
+  for (const id of Object.keys(sessionsById || {})) {
+    const s = sessionsById?.[id];
+    if (s?.cwd && (s.updatedAt ?? 0) > latestTime) {
+      latestTime = s.updatedAt;
+      latestCwd = s.cwd;
+    }
+  }
+  if (latestCwd) {
+    const ws = items.find((w) => w?.path === latestCwd);
     if (ws?.workspaceId) return ws.workspaceId;
   }
   let selected = null;
