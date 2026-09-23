@@ -849,7 +849,10 @@ export function apply(ctx, config = {}) {
       try {
         const { payload } = await connectorOauthStatus(entryName, P.state)
         const data = payload?.data ?? {}
-        json(res, 200, { ok: true, code: payload?.code, connected: data.connected === true || data.status === 1, raw: payload })
+        // 官方成功态是字符串 "connected"（实测），不是布尔/数字。
+        const status = data.status
+        const connected = data.connected === true || status === 1 || status === 'connected' || status === 'connected_ok'
+        json(res, 200, { ok: true, code: payload?.code, connected, status: status ?? null, raw: payload })
       } catch (error) { json(res, 200, { ok: false, connected: false, message: String(error?.message || error) }) }
       return true
     }

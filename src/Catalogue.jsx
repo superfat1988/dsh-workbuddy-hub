@@ -654,11 +654,13 @@ export default function Catalogue({
         : visible
     const pinnedOfKind = pinnedEntries.filter(x => x.kind === kind)
     const merged = [...pinnedOfKind, ...baseRows.filter(b => !pinnedOfKind.some(p => p.name === b.name && p.kind === b.kind))]
-    const visibleRows = [...merged].sort((a, b) => {
-      const pa = pinned.has(`${a.kind}/${a.name}`) ? 0 : 1
-      const pb = pinned.has(`${b.kind}/${b.name}`) ? 0 : 1
-      return pa - pb
-    })
+    // 排序与官方一致：已连接的连接器置顶（带开关），其次是被图钉置顶的条目，其余保持原序。
+    const rowRank = x => {
+      if (x.kind === 'connector' && bound.includes(x.name)) return 0
+      if (pinned.has(`${x.kind}/${x.name}`)) return 1
+      return 2
+    }
+    const visibleRows = [...merged].sort((a, b) => rowRank(a) - rowRank(b))
 
     const rowNode = entry => {
       const key = `${entry.kind}/${entry.name}`
