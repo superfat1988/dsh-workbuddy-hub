@@ -192,3 +192,11 @@
 .wbh-authLink{display:inline-flex;margin:0 0 6px 8px;padding:6px 12px;border-radius:8px;background:#eef4ff;color:#1a56db;font-size:12px;text-decoration:none}
 .wbh-authLink:hover{background:#e2ecff}
 .wbh-authLink--page{margin:8px var(--ec-page-gutter) 0}
+
+/* 连接器/技能/专家页导航栏：按官方实测对齐（topbar 高 56px，搜索框宽 184px，
+   搜索控件位于 ec-topbar__right 内并用 wb-input 基建） */
+.ec-market-panel .ec-topbar{height:56px;min-height:56px;padding:0 var(--ec-page-gutter);display:flex;align-items:center;justify-content:space-between}
+.ec-market-panel .ec-topbar .ec-search-wrapper{width:184px;height:32px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 12px;border:1px solid var(--wb-border-default,#e5e5e5);border-radius:8px;background:var(--wb-bg-primary,#fff)}
+.ec-market-panel .ec-topbar .ec-search-wrapper input{flex:1;min-width:0;border:none;outline:none;background:transparent;font-size:14px;color:var(--wb-color-text-primary)}
+.ec-market-panel .ec-topbar .ec-search-wrapper input::placeholder{color:var(--wb-color-text-tertiary)}
+.ec-market-panel .ec-topbar__right{display:flex;align-items:center;gap:8px;flex:0 0 auto}
