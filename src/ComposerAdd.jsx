@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react'
-import { hub, addSelection, summonExpertInNewSession, onCatalogChange, onMarketRequest, setComposerSession } from './hub.js'
+import { hub, addSelection, onCatalogChange, onMarketRequest, setComposerSession } from './hub.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
 import Catalogue from './Catalogue.jsx'
@@ -166,9 +166,10 @@ export default function ComposerAdd({ sessionId, runCommand }) {
           setNotice(`已连接「${entry.displayName}」（工具命名空间 ${r.serverName}），下一次模型步骤起可用。`)
         }
       } else if (entry.kind === 'expert') {
-        // 官方语义：召唤 = 新建会话 + 该专家成为那个会话的 agent（当前会话不动）。
-        const r = await summonExpertInNewSession(entry).catch(error => ({ ok: false, error: String(error?.message || error) }))
-        setNotice(r.ok ? `已在新会话中以「${entry.displayName}」身份开始` : `失败：${r.error}`)
+        // 方案 C：挂到当前会话，宿主接管人设（不建新会话、不写 preset）。
+        await hub.mount(sessionId, entry.kind, entry.name)
+        addSelection(entry, sessionId)
+        setNotice(`已选中「${entry.displayName}」，下一步起以该专家身份回答`)
       } else {
         await hub.mount(sessionId, entry.kind, entry.name)
         addSelection(entry, sessionId)

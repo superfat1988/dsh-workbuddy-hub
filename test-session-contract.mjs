@@ -111,41 +111,26 @@ const mountsRaw = JSON.parse((await import('node:fs')).readFileSync(join(root, '
 assert.ok(Object.prototype.hasOwnProperty.call(mountsRaw.sessions, 'session-from-client'), 'mount must be keyed by the client session')
 assert.ok(!Object.prototype.hasOwnProperty.call(mountsRaw.sessions, 'session-new'), 'mount must not silently land on the fallback session')
 
-// ---- 1b. 专家人设注入（阶段 1 / 方案 A）----
-// 未挂载专家时：只读路由必须返回 injected:false 且不抛错（preStep 的 assemble 没有
-// try/catch，所以注入链路任何一环失败都只能是「空串」，绝不能冒泡）。
+// ---- 1b. 专家人设注入（方案 C：system-prompt/assemble 接管）----
+// 未挂载专家时：只读路由返回 injected:false 且不抛错
 const noInject = await call('GET', '/expert-injection?sessionId=session-from-client')
 assert.equal(noInject.status, 200)
 assert.equal(noInject.json.ok, true)
 assert.equal(noInject.json.disabled, false)
 assert.equal(noInject.json.expert, '')
 assert.equal(noInject.json.injected, false)
-assert.equal(noInject.json.text, '')
-assert.equal(noInject.json.chars, 0)
 
-// 有 systemPrompt 服务时必须注册 section：name 唯一、order 紧邻部署人设之后、
-// interpolate:false（人设正文里的 {{ }} 必须保持字面量），text 回调对任何输入都
-// 返回字符串且绝不抛错。
-let registered = null
+// 注册的是 system-prompt/assemble waterfall 监听：把 deployment:persona-prefix 段替换成专家人设
+let assembleHandler = null
 const spCtx = {
   ...ctx,
-  systemPrompt: {
-    getSectionOrder: n => (n === 'DEPLOYMENT_PERSONA_PREFIX' ? 0 : 99),
-    section: spec => { registered = spec; return () => {} },
-  },
+  on: (event, handler) => { if (event === 'system-prompt/assemble') assembleHandler = handler; return () => {} },
   webServer: { register: () => () => {} },
 }
 apply(spCtx, { storeRoot: root })
-assert.ok(registered, 'a systemPrompt service must get the expert persona section')
-assert.equal(registered.name, 'workbuddy-expert-persona')
-assert.equal(registered.order, 1, 'the section must sit right after DEPLOYMENT_PERSONA_PREFIX')
-assert.equal(registered.interpolate, false, 'expert prose must not be template-interpolated')
-assert.equal(registered.text(undefined), '')
-assert.equal(registered.text({}), '')
-assert.equal(registered.text({ scope: { id: 'session-from-client' } }), '', 'no mounted expert → empty text')
-assert.equal(registered.text({ scope: { id: 'no-such-session' } }), '')
+assert.ok(assembleHandler, 'must register a system-prompt/assemble listener')
 
-// 正例：挂载专家后注入「剥掉 frontmatter + 声明包裹」的正文，卸载后立刻回到空串。
+// 正例：挂载专家后，handler 把 deployment:persona-prefix 替换成剥了 frontmatter 的正文
 const expertDir = join(root, 'experts', 'demo-expert')
 mkdirSync(join(expertDir, '.codebuddy-plugin'), { recursive: true })
 mkdirSync(join(expertDir, 'agents'), { recursive: true })
@@ -160,16 +145,26 @@ assert.equal(injected.json.expert, 'expert/demo-expert')
 assert.equal(injected.json.injected, true)
 assert.ok(injected.json.text.includes('你是演示专家'), 'the persona body must be injected')
 assert.ok(!injected.json.text.includes('name: demo'), 'the YAML frontmatter must be stripped')
-assert.ok(injected.json.text.includes('【已选专家角色】'), 'the injection must carry its scope declaration')
 assert.equal(injected.json.chars, injected.json.text.length)
 
-const viaCallback = registered.text({ scope: { id: 'session-from-client' } })
-assert.equal(viaCallback, injected.json.text, 'the section callback must agree with the read-only route')
+// 模拟一次 assembly：handler 应把 deployment:persona-prefix 段替换成专家正文
+const asm = { sections: [
+  { name: 'deployment:persona-prefix', text: 'You are a coding agent.', interpolate: true },
+  { name: 'tool:x', text: 'tool guidance' },
+] }
+const result = await assembleHandler(asm, { scope: { id: 'session-from-client' } }, async () => asm)
+assert.equal(result.sections[0].text, injected.json.text, 'the deployment persona must be replaced by the expert persona')
+assert.equal(result.sections[0].interpolate, false)
+assert.equal(result.sections[1].text, 'tool guidance', 'other sections must be untouched')
 
+// 未挂载专家的会话：不改动部署人设
+const baseAsm = { sections: [{ name: 'deployment:persona-prefix', text: 'base persona' }] }
+const untouched = await assembleHandler(baseAsm, { scope: { id: 'no-such-session' } }, async () => baseAsm)
+assert.equal(untouched.sections[0].text, 'base persona', 'no expert mounted → no takeover')
+
+// 卸载后回空
 await call('POST', '/unmount', { kind: 'expert', name: 'demo-expert', sessionId: 'session-from-client' })
-const afterUnmount = await call('GET', '/expert-injection?sessionId=session-from-client')
-assert.equal(afterUnmount.json.injected, false, 'unmounting must drop the persona on the next assembly')
-assert.equal(registered.text({ scope: { id: 'session-from-client' } }), '')
+assert.equal((await call('GET', '/expert-injection?sessionId=session-from-client')).json.injected, false)
 
 // ---- 2. 活工具表：只取 mcp__<serverName>__ 前缀，来自 tools 服务 ----
 const live = await call('GET', '/connectors/live-tools?name=demo')

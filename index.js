@@ -459,7 +459,8 @@ function injectedExpertPersona(paths, sessionId, disabled) {
     const cached = expertCache.get(expertName)
     if (cached !== undefined) return cached
     const read = readExpertPersona(paths.experts, expertName)
-    const body = read.ok ? sanitizePersonaBody(extractPersonaBody(read.persona), read.title) : ''
+    // 接管语义：直接注入专家人设正文（替换部署人设），不加「仅作参考」声明
+    const body = read.ok ? presetPersonaText(read.persona) : ''
     expertCache.set(expertName, body)
     return body
   } catch {
@@ -587,26 +588,25 @@ export function apply(ctx, config = {}) {
   // 专家人设注入：只在 apply() 里注册一次（section 的 name 在同一层唯一，重复注册
   // 会抛错）。text 是回调 → 每个 step 的 assembly 都会重算，因此挂载/切换专家
   // 「下一步生效」。order 紧邻部署人设之后；interpolate:false 保证人设正文里的
-  // {{ }} 保持字面量。没有 systemPrompt 服务的环境直接跳过，不影响其它功能。
+  // 方案 C：注入 + 接管。挂 system-prompt/assemble 的 waterfall 监听，在每次
+  // assembly 完成后、把 deployment:persona-prefix 段**替换**成专家人设正文（而非叠加）。
+  // 这样「你是谁」干净答「我是专家」，且动态换专家下一步生效、不建新会话、不写 preset。
   const injectExperts = cfg.injectExperts !== false
   try {
-    if (ctx.systemPrompt && typeof ctx.systemPrompt.section === 'function') {
-      ctx.effect(() => {
-        try {
-          const disposer = ctx.systemPrompt.section({
-            name: 'workbuddy-expert-persona',
-            order: ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX') + 1,
-            interpolate: false,
-            text: context => injectedExpertPersona(P, context?.scope?.id, !injectExperts),
-          })
-          if (typeof disposer === 'function') personaSectionRegistered = true
-          return disposer
-        } catch {
-          return () => {}
-        }
-      }, 'workbuddy-hub: expert persona injection')
-    }
-  } catch { /* 环境没有 systemPrompt 服务：跳过注入 */ }
+    ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
+      const assembly = await next()
+      const sessionId = context?.scope?.id
+      if (!injectExperts || !sessionId) return assembly
+      const body = injectedExpertPersona(P, sessionId, false)
+      if (body === '') return assembly
+      const idx = Array.isArray(assembly?.sections) ? assembly.sections.findIndex(item => item?.name === 'deployment:persona-prefix') : -1
+      if (idx >= 0) {
+        assembly.sections[idx] = { ...assembly.sections[idx], text: body, interpolate: false }
+        personaSectionRegistered = true
+      }
+      return assembly
+    }, { prepend: true })
+  } catch { /* 环境没有 system-prompt 事件：跳过注入 */ }
 
   // Connector MCP fibers are owned here; unloading the plugin (or HMR) tears
   // every transport down instead of leaving orphaned registrations behind.
