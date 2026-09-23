@@ -76,16 +76,6 @@ export default function MarketPage({ sessionId, runCommand }) {
   const loggedIn = auth?.configured === true
   return (
     <div className="expert-center-page wbh-page">
-      <div className="wbh-authBar">
-        <span className="wbh-authState">
-          <i className={`wbh-dot${loggedIn ? '' : ' off'}`} />
-          {loggedIn ? `官方账号已登录${auth?.nickname ? ' · ' + auth.nickname : ''}`
-                    : '官方账号未登录（技能/用量数据需登录）'}
-        </span>
-        {loggedIn
-          ? <button type="button" className="wbh-btnGhost" onClick={async () => { await hub.authLogout(); await refresh() }}>注销</button>
-          : <button type="button" className="wbh-btnPrimary" onClick={() => setShowAuth(true)}>扫码登录</button>}
-      </div>
       <Catalogue
         sessionId={sessionId} kind={kind} onKind={setKind} query={query} onQuery={setQuery}
         onDetail={onDetail} onAction={onAction} installed={installed} mounted={mounted} busy={busy}

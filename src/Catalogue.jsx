@@ -178,6 +178,7 @@ export default function Catalogue({
   const [detail, setDetail] = useState(null)   // 技能/连接器的二级界面
   const [bound, setBound] = useState([])       // 官方已绑定的连接器（真实连接态）
   const [notice, setNotice] = useState('')     // 操作结果提示（连接/解绑失败等）
+  const [busyLocal, setBusyLocal] = useState('')  // 本组件内发起的连接/解绑进行中态
   const [pendingAuth, setPendingAuth] = useState(null)  // 待完成的授权（含可点链接）
   const [pinned, setPinned] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem('wbh-pinned') || '[]')) } catch { return new Set() }
@@ -270,7 +271,7 @@ export default function Catalogue({
 
   const connectorAction = useCallback(async entry => {
     const key = `${entry.kind}/${entry.name}`
-    setBusy(key); setNotice('')
+    setBusyLocal(key); setNotice('')
     // 浏览器只允许在「用户手势」的同步阶段开窗；await 之后再 window.open 会被拦截。
     // 因此这里先同步开一个空窗，拿到授权链接后再把地址写进去。
     let authWindow = null
@@ -299,7 +300,7 @@ export default function Catalogue({
     } catch (error) {
       try { authWindow?.close() } catch { /* 忽略 */ }
       setNotice(`操作失败：${String(error?.message || error)}`)
-    } finally { setBusy('') }
+    } finally { setBusyLocal('') }
   }, [isBound, onRefresh])
 
   const handleDetail = useCallback(entry => {
@@ -346,6 +347,8 @@ export default function Catalogue({
   }, [rows])
 
   const kindMeta = KINDS.find(k => k.id === kind) || KINDS[0]
+
+  const busyAll = busyLocal || busy
 
   const skeletonCards = (
     <>{Array.from({ length: 6 }).map((_, i) => (
@@ -437,7 +440,7 @@ export default function Catalogue({
         {!loading && failed && <div className="wbh-state">读取失败：{failed}</div>}
         {!loading && !failed && visible.length === 0 && <div className="wbh-state"><p>暂无{kindMeta.label}</p></div>}
         {visible.map(entry => kind === 'connector'
-          ? <ConnectorCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={handleDetail} onAction={onAction} onConnectorAction={connectorAction} bound={bound} />
+          ? <ConnectorCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busyAll} onDetail={handleDetail} onAction={onAction} onConnectorAction={connectorAction} bound={bound} />
           : <SkillCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={handleDetail} onAction={onAction} />)}
         {loadingMore && skeletonCards}
       </div>
@@ -534,7 +537,7 @@ export default function Catalogue({
           <p className="wbh-detailDesc">{detail.description || detail.name}</p>
           <div className="wbh-detailActions">
             <button type="button" className="wb-button wb-button--secondary wb-button--medium"
-              disabled={busy === `${detail.kind}/${detail.name}`}
+              disabled={busyLocal === `${detail.kind}/${detail.name}`}
               onClick={() => void connectorAction(detail)}>
               {isBound(detail) ? '解绑' : '连接'}
             </button>
@@ -693,7 +696,7 @@ export default function Catalogue({
                 </span>
               )
           )}
-          {busy === key && <span className="wbh-flyoutBusy">…</span>}
+          {busyLocal === key && <span className="wbh-flyoutBusy">…</span>}
         </div>
       )
     }
