@@ -26,10 +26,13 @@ import {
   symlinkSync, unlinkSync, lstatSync, statSync,
 } from 'node:fs'
 import { createConnectorManager, validateConnectorMcp, buildNativeRow, declaredServerNames } from './mcp-manager.js'
-import { readExpertPersona, buildPersonaLine, buildSummonPrompt } from './expert-persona.js'
+import {
+  readExpertPersona, buildPersonaLine, buildSummonPrompt,
+  extractPersonaBody, sanitizePersonaBody,
+} from './expert-persona.js'
 
 export const name = 'workbuddy-hub'
-export const inject = ['webServer', 'connection', 'loader', 'commands', 'subagents', 'credentials', 'sessions', 'agents']
+export const inject = ['webServer', 'connection', 'loader', 'commands', 'subagents', 'credentials', 'sessions', 'agents', 'systemPrompt']
 
 const PREFIX = '/workbuddy-hub'
 const GH_RAW = 'https://raw.githubusercontent.com'
@@ -397,6 +400,7 @@ export function mountEntry(paths, sessionId, key) {
   if (!list.includes(key)) list.push(key)
   store.sessions[sessionId] = list
   saveJson(paths.mounts, store)
+  invalidateExpertCache() // 挂载变化后，下一步 assembly 即按新状态重算人设注入
   return list
 }
 
@@ -405,7 +409,61 @@ export function unmountEntry(paths, sessionId, key) {
   const list = (Array.isArray(store.sessions[sessionId]) ? store.sessions[sessionId] : []).filter(k => k !== key)
   store.sessions[sessionId] = list
   saveJson(paths.mounts, store)
+  invalidateExpertCache()
   return list
+}
+
+/* ------------------------------------------------------------------ *
+ * 专家人设注入 — 阶段 1 / 方案 A
+ *
+ * 用户选中专家后，把该专家的人设正文作为一段 system prompt section 动态注入
+ * **当前会话**：section 的 text 是回调，每个 step 的 prompt assembly 都会重算，
+ * 所以「切换专家 → 下一步生效」，不建子会话、也不写 agent preset。
+ * ------------------------------------------------------------------ */
+
+/** name -> 已剥 frontmatter 并 sanitize 过的人设正文。挂载变化时整体清空。 */
+let expertCache = new Map()
+
+/** 是否成功向 DSH 注册了 system prompt section（排障关键：为 false 说明注入整体没生效）。 */
+let personaSectionRegistered = false
+
+/** 清空人设缓存（挂载/卸载成功后调用）。 */
+function invalidateExpertCache() {
+  expertCache = new Map()
+}
+
+/** 从 mounts.json 取该会话挂载的第一个专家目录名；轻量、容错，读不到就返回 ''。 */
+function firstMountedExpert(mountsPath, sessionId) {
+  const store = loadJson(mountsPath, null)
+  const list = Array.isArray(store?.sessions?.[sessionId]) ? store.sessions[sessionId] : []
+  for (const key of list) {
+    const hit = /^expert\/([\w.-]+)$/.exec(String(key))
+    if (hit) return hit[1]
+  }
+  return ''
+}
+
+/**
+ * 该会话当前应注入的专家人设正文。
+ * 参数为空 / 未挂载专家 / 文件缺失 / 解析失败 / 被配置禁用 → 一律返回 ''。
+ * preStep 的 assemble 没有 try/catch，所以这里**任何异常都必须吞掉**。
+ */
+function injectedExpertPersona(paths, sessionId, disabled) {
+  try {
+    if (disabled) return ''
+    const id = String(sessionId || '').trim()
+    if (id === '') return ''
+    const expertName = firstMountedExpert(paths.mounts, id)
+    if (expertName === '') return ''
+    const cached = expertCache.get(expertName)
+    if (cached !== undefined) return cached
+    const read = readExpertPersona(paths.experts, expertName)
+    const body = read.ok ? sanitizePersonaBody(extractPersonaBody(read.persona), read.title) : ''
+    expertCache.set(expertName, body)
+    return body
+  } catch {
+    return ''
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -423,6 +481,30 @@ export function apply(ctx, config = {}) {
   for (const d of [P.root, P.store, P.skills, P.experts, P.connectors, P.meta, P.icons]) {
     mkdirSync(d, { recursive: true })
   }
+
+  // 专家人设注入：只在 apply() 里注册一次（section 的 name 在同一层唯一，重复注册
+  // 会抛错）。text 是回调 → 每个 step 的 assembly 都会重算，因此挂载/切换专家
+  // 「下一步生效」。order 紧邻部署人设之后；interpolate:false 保证人设正文里的
+  // {{ }} 保持字面量。没有 systemPrompt 服务的环境直接跳过，不影响其它功能。
+  const injectExperts = cfg.injectExperts !== false
+  try {
+    if (ctx.systemPrompt && typeof ctx.systemPrompt.section === 'function') {
+      ctx.effect(() => {
+        try {
+          const disposer = ctx.systemPrompt.section({
+            name: 'workbuddy-expert-persona',
+            order: ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX') + 1,
+            interpolate: false,
+            text: context => injectedExpertPersona(P, context?.scope?.id, !injectExperts),
+          })
+          if (typeof disposer === 'function') personaSectionRegistered = true
+          return disposer
+        } catch {
+          return () => {}
+        }
+      }, 'workbuddy-hub: expert persona injection')
+    }
+  } catch { /* 环境没有 systemPrompt 服务：跳过注入 */ }
 
   // Connector MCP fibers are owned here; unloading the plugin (or HMR) tears
   // every transport down instead of leaving orphaned registrations behind.
@@ -1248,6 +1330,29 @@ export function apply(ctx, config = {}) {
       return true
     }
 
+    // 只读：当前会话的专家人设注入状态（排障用：能看到命中哪个专家、注入了多少字）。
+    if (route === 'GET /expert-injection') {
+      try {
+        const sessionId = String(url.searchParams.get('sessionId') || '').trim()
+        const disabled = cfg.injectExperts === false
+        const expertName = disabled ? '' : firstMountedExpert(P.mounts, sessionId)
+        const text = injectedExpertPersona(P, sessionId, disabled)
+        json(res, 200, {
+          ok: true,
+          sessionId,
+          disabled,
+          sectionRegistered: personaSectionRegistered,
+          expert: expertName ? `expert/${expertName}` : '',
+          injected: text !== '',
+          text,
+          chars: text.length,
+        })
+      } catch (error) {
+        json(res, 500, { ok: false, error: String(error?.message || error) })
+      }
+      return true
+    }
+
     if (route === 'POST /mount' || route === 'POST /unmount') {
       const body = JSON.parse((await readBody(req)) || '{}')
       const kind = String(body.kind || '')
@@ -1394,6 +1499,7 @@ export function apply(ctx, config = {}) {
           officialMeta = await installExpert(entryName, P.experts, skillPrefix)
           dest = officialMeta.dest
           report = { files: officialMeta.files, bytes: officialMeta.bytes, flags: officialMeta.flags }
+          invalidateExpertCache() // 人设文件更新过，缓存作废
         } catch (error) {
           if (body.source === 'official') throw error
           officialMeta = null // fall through to the mirror

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { hub, addSelection, openSessionById, startNewSession, composerSession } from './hub.js'
+import { hub, addSelection } from './hub.js'
 import { insertPromptIntoComposer } from './insert-prompt.js'
 import { WbIcon } from './icons.js'
 import Catalogue from './Catalogue.jsx'
@@ -29,6 +29,7 @@ export default function MarketPage({ sessionId, runCommand }) {
   }, [sessionId])
   useEffect(() => { void refresh() }, [refresh])
 
+  // task 由召唤模态框传入；阶段 1 只做挂载，任务文本暂不消费（保留签名兼容调用方）。
   const attach = useCallback(async (entry, task = '') => {
     const key = `${entry.kind}/${entry.name}`
     setBusy(key); setNotice('')
@@ -49,33 +50,12 @@ export default function MarketPage({ sessionId, runCommand }) {
           setNotice(`已连接「${entry.displayName}」（工具命名空间 ${r.serverName}），下一次模型步骤起可用。`)
         }
       } else if (entry.kind === 'expert') {
-        // 官方：点「召唤」= 新建对话并选中该专家（实测会跳到 /app 并给出专家 chip）。
-        // DSH 里对应「专家的会话」——宿主为该专家建一个带人设的 durable 子会话，
-        // 再把它打开到主视图，用户直接就在专家的对话里。
-        // 官方语义：召唤 = **先新建一个对话**，再把这位专家放进那个新对话。
-        // 关键点：startSession() 之后 composerSession() 会有一小段时间仍返回旧会话，
-        // 若此时就发 summon，专家会落到**上一个**会话（用户看到的「专家加载到当前会话、
-        // 当前会话还自动发了指令」就是这么来的）。所以这里等会话 id 真正换掉再继续。
-        const before = composerSession() || sessionId || ''
-        startNewSession()
-        let target = ''
-        for (let i = 0; i < 24; i++) {
-          await new Promise(resolve => setTimeout(resolve, 250))
-          const now = composerSession()
-          if (now && now !== before) { target = now; break }
-        }
-        // 没等到新 id（当前会话本就是空会话、DSH 直接复用它）就落到当前会话
-        if (!target) target = composerSession() || sessionId || ''
-        if (!target) { setNotice('召唤失败：没有可用会话，且新建对话未就绪'); return }
-        await hub.mount(target, entry.kind, entry.name)
-        const r = await hub.summon(entry.name, task, target)
-        if (!r.ok) { setNotice(`召唤失败：${r.error}`); return }
-        // 专家的会话就是宿主为该专家建的 durable 会话（人设在其 composition 里），
-        // 把它打开到主视图 —— 用户看到的就是「新对话里就是这位专家」。
-        const opened = openSessionById(r.childId)
-        setNotice(opened
-          ? `已召唤「${entry.displayName}」，已在新对话中打开`
-          : `已召唤「${entry.displayName}」（会话 ${r.childId}；导航不可用，未能自动打开）`)
+        // 阶段 1 / 方案 A：召唤 = 把这位专家挂到**当前会话**，宿主把它的人设作为
+        // 一段 system prompt section 动态注入，每个 step 的 assembly 都会重算，
+        // 因此「下一步起」就以该专家身份回答（不建子会话、不写 agent preset）。
+        await hub.mount(sessionId, entry.kind, entry.name)
+        addSelection(entry)
+        setNotice(`已选中「${entry.displayName}」，下一步起以该专家身份回答`)
       } else {
         await hub.mount(sessionId, entry.kind, entry.name)
         addSelection(entry)
@@ -93,7 +73,8 @@ export default function MarketPage({ sessionId, runCommand }) {
     if (entry.kind === 'expert') setSummoning(entry)
     else void attach(entry)
   }, [attach])
-  // 专家卡片右上角的「召唤」：官方即新建对话并选中该专家（打开模态的是点卡片本体）
+  // 专家卡片右上角的「召唤」：把该专家挂到当前会话（人设下一步注入）；
+  // 打开模态框的是点卡片本体。
   const onAction = useCallback(entry => {
     if (entry.kind === 'expert') { setSummoning(null); void attach(entry) }
     else void attach(entry)
@@ -115,8 +96,8 @@ export default function MarketPage({ sessionId, runCommand }) {
           onQuickPrompt={text => {
             setSummoning(null)
             void attach(summoning, text)
-            // 官方把示例预填进新对话的输入框；新会话的 composer 挂载需要一点时间
-            setTimeout(() => { try { insertPromptIntoComposer(text) } catch { /* 忽略 */ } }, 600)
+            // 不再新建会话：composer 已挂载，示例文本直接预填进输入框
+            try { insertPromptIntoComposer(text) } catch { /* 忽略 */ }
           }} />
       )}
       {authorising && (

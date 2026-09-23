@@ -3453,30 +3453,9 @@ function MarketPage({ sessionId, runCommand: runCommand2 }) {
           setNotice(`\u5DF2\u8FDE\u63A5\u300C${entry.displayName}\u300D\uFF08\u5DE5\u5177\u547D\u540D\u7A7A\u95F4 ${r.serverName}\uFF09\uFF0C\u4E0B\u4E00\u6B21\u6A21\u578B\u6B65\u9AA4\u8D77\u53EF\u7528\u3002`);
         }
       } else if (entry.kind === "expert") {
-        const before = composerSession() || sessionId || "";
-        startNewSession();
-        let target = "";
-        for (let i = 0; i < 24; i++) {
-          await new Promise((resolve) => setTimeout(resolve, 250));
-          const now = composerSession();
-          if (now && now !== before) {
-            target = now;
-            break;
-          }
-        }
-        if (!target) target = composerSession() || sessionId || "";
-        if (!target) {
-          setNotice("\u53EC\u5524\u5931\u8D25\uFF1A\u6CA1\u6709\u53EF\u7528\u4F1A\u8BDD\uFF0C\u4E14\u65B0\u5EFA\u5BF9\u8BDD\u672A\u5C31\u7EEA");
-          return;
-        }
-        await hub.mount(target, entry.kind, entry.name);
-        const r = await hub.summon(entry.name, task, target);
-        if (!r.ok) {
-          setNotice(`\u53EC\u5524\u5931\u8D25\uFF1A${r.error}`);
-          return;
-        }
-        const opened = openSessionById(r.childId);
-        setNotice(opened ? `\u5DF2\u53EC\u5524\u300C${entry.displayName}\u300D\uFF0C\u5DF2\u5728\u65B0\u5BF9\u8BDD\u4E2D\u6253\u5F00` : `\u5DF2\u53EC\u5524\u300C${entry.displayName}\u300D\uFF08\u4F1A\u8BDD ${r.childId}\uFF1B\u5BFC\u822A\u4E0D\u53EF\u7528\uFF0C\u672A\u80FD\u81EA\u52A8\u6253\u5F00\uFF09`);
+        await hub.mount(sessionId, entry.kind, entry.name);
+        addSelection(entry);
+        setNotice(`\u5DF2\u9009\u4E2D\u300C${entry.displayName}\u300D\uFF0C\u4E0B\u4E00\u6B65\u8D77\u4EE5\u8BE5\u4E13\u5BB6\u8EAB\u4EFD\u56DE\u7B54`);
       } else {
         await hub.mount(sessionId, entry.kind, entry.name);
         addSelection(entry);
@@ -3530,12 +3509,10 @@ function MarketPage({ sessionId, runCommand: runCommand2 }) {
       onQuickPrompt: (text) => {
         setSummoning(null);
         void attach(summoning, text);
-        setTimeout(() => {
-          try {
-            insertPromptIntoComposer(text);
-          } catch {
-          }
-        }, 600);
+        try {
+          insertPromptIntoComposer(text);
+        } catch {
+        }
       }
     }
   ), authorising && /* @__PURE__ */ import_react7.default.createElement(
@@ -3735,8 +3712,8 @@ function ComposerAdd({ sessionId, runCommand: runCommand2 }) {
         }
       } else if (entry.kind === "expert") {
         await hub.mount(sessionId, entry.kind, entry.name);
-        const r = await hub.summon(entry.name, task, sessionId);
-        setNotice(r.ok ? `\u5DF2\u53EC\u5524\u300C${entry.displayName}\u300D\uFF1A\u5B50\u4F1A\u8BDD ${r.childId}` : `\u5DF2\u6302\u8F7D\uFF0C\u4F46\u53EC\u5524\u5931\u8D25\uFF1A${r.error}`);
+        addSelection(entry);
+        setNotice(`\u5DF2\u9009\u4E2D\u300C${entry.displayName}\u300D\uFF0C\u4E0B\u4E00\u6B65\u8D77\u4EE5\u8BE5\u4E13\u5BB6\u8EAB\u4EFD\u56DE\u7B54`);
       } else {
         await hub.mount(sessionId, entry.kind, entry.name);
         addSelection(entry);

@@ -167,11 +167,11 @@ export default function ComposerAdd({ sessionId, runCommand }) {
           setNotice(`已连接「${entry.displayName}」（工具命名空间 ${r.serverName}），下一次模型步骤起可用。`)
         }
       } else if (entry.kind === 'expert') {
-        // 宿主侧解析会话，客户端不需要 sessionId
+        // 方案 A：挂载即可。宿主把该专家人设作为 system prompt section 注入当前会话，
+        // 每个 step 的 assembly 重算 → 下一步起以该专家身份回答（不建子会话）。
         await hub.mount(sessionId, entry.kind, entry.name)
-        const r = await hub.summon(entry.name, task, sessionId)
-        setNotice(r.ok ? `已召唤「${entry.displayName}」：子会话 ${r.childId}`
-                       : `已挂载，但召唤失败：${r.error}`)
+        addSelection(entry)
+        setNotice(`已选中「${entry.displayName}」，下一步起以该专家身份回答`)
       } else {
         await hub.mount(sessionId, entry.kind, entry.name)
         addSelection(entry)
