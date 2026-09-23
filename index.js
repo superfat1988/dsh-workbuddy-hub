@@ -1269,6 +1269,31 @@ export function apply(ctx, config = {}) {
     return true
   }
 
+  // 启动时恢复用户已启用的连接器：enable 只作用于当前运行时的 MCP 挂载，
+  // 所以重启后必须按 registry 记录重新挂载，否则「已启用」的连接器会静默失效。
+  ctx.effect(() => {
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      try {
+        const registry = loadJson(P.registry, { version: 1, installed: {} })
+        const rows = Object.entries(registry.installed ?? {}).filter(([, r]) => r?.kind === 'connector' && r.enabled === true)
+        for (const [key, record] of rows) {
+          if (cancelled) return
+          try {
+            const mcpPath = join(record.dest, 'mcp.json')
+            if (!existsSync(mcpPath)) continue
+            const raw = JSON.parse(readFileSync(mcpPath, 'utf8'))
+            const result = await connectors.enable(key, raw, record.name)
+            noteConnectorStatus(key, { enabled: true, status: 'enabled', lastError: '', serverName: result.serverName, credentialRefs: result.refs, transport: result.summary.transport })
+          } catch (error) {
+            noteConnectorStatus(key, { enabled: false, status: 'failed', lastError: String(error?.message || error).slice(0, 300) })
+          }
+        }
+      } catch { /* 没有可恢复的记录 */ }
+    }, 1500)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, 'workbuddy-hub: restore enabled connectors')
+
   // 任何路由未捕获的异常都返回可诊断的 JSON（此前会得到空体 400，无法定位）。
   const guardedHandler = async (req, res) => {
     try {
