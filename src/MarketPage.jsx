@@ -51,7 +51,7 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
       } else if (entry.kind === 'expert') {
         // 官方语义：召唤 = 新建一个会话 + 该专家加载进去（方案 C 的注入+接管，不写 preset）。
         // 新会话落在**当前会话所属工作区**（workspaceId 由 main 槽解析），避免落错工作区。
-        const r = await summonExpertInNewSession(entry, workspaceId)
+        const r = await summonExpertInNewSession(entry, sessionId)
         setNotice(r.ok ? `已在新会话中加载「${entry.displayName}」，下一步起以该专家身份回答` : `失败：${r.error}`)
       } else {
         await hub.mount(sessionId, entry.kind, entry.name)
@@ -74,7 +74,7 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
   const onAction = useCallback(entry => {
     if (entry.kind === 'expert') {
       setBusy(`${entry.kind}/${entry.name}`); setNotice('')
-      void summonExpertInNewSession(entry, workspaceId).then(r => {
+      void summonExpertInNewSession(entry, sessionId).then(r => {
         setNotice(r.ok ? `已在新会话中加载「${entry.displayName}」，下一步起以该专家身份回答` : `失败：${r.error}`)
       }).catch(error => { setNotice(`失败：${String(error?.message || error)}`) })
         .finally(() => setBusy(''))
@@ -97,7 +97,7 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
           onQuickPrompt={text => {
             const picked = summoning
             setSummoning(null)
-            void summonExpertInNewSession(picked, workspaceId).then(r => {
+            void summonExpertInNewSession(picked, sessionId).then(r => {
               setNotice(r.ok ? `已在新会话中加载「${picked.displayName}」` : `失败：${r.error}`)
               if (r.ok) setTimeout(() => { try { insertPromptIntoComposer(text) } catch { /* 忽略 */ } }, 900)
             }).catch(error => { setNotice(`失败：${String(error?.message || error)}`) })

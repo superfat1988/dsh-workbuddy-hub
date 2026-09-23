@@ -229,7 +229,7 @@ export const hub = {
  * 完全不动：不挂载、不注入、不 chip。
  * @returns {Promise<{ok:true, presetId, sessionId} | {ok:false, error}>}
  */
-export async function summonExpertInNewSession(entry, workspaceId, nearSessionId) {
+export async function summonExpertInNewSession(entry, nearSessionId) {
   try {
     // 先确保已安装（人设文件是注入的前置）
     const key = `expert/${entry.name}`
@@ -245,10 +245,7 @@ export async function summonExpertInNewSession(entry, workspaceId, nearSessionId
     }
     // 官方语义：召唤 = 新建一个会话；工作区用**当前会话所属工作区**（可靠），
     // 专家用方案 C 的注入+接管加载进这个新会话（不写 preset）。
-    const created = await post('/expert-new-session', {
-      ...(workspaceId ? { workspaceId } : {}),
-      ...(!workspaceId && nearSessionId ? { nearSessionId } : {}),
-    })
+    const created = await post('/expert-new-session', { nearSessionId: nearSessionId || undefined })
     if (!created?.ok || !created.sessionId) {
       return { ok: false, error: created?.error || '创建新会话失败' }
     }

@@ -168,7 +168,7 @@ export default function ComposerAdd({ sessionId, runCommand }) {
       } else if (entry.kind === 'expert') {
         // 官方语义：新建会话 + 该专家加载进去；picker 没有 useWorkspaces，
         // 由宿主从当前会话的 header.cwd 解析工作区。
-        const r = await summonExpertInNewSession(entry, undefined, sessionId)
+        const r = await summonExpertInNewSession(entry, sessionId)
         setNotice(r.ok ? `已在新会话中加载「${entry.displayName}」` : `失败：${r.error}`)
       } else {
         await hub.mount(sessionId, entry.kind, entry.name)

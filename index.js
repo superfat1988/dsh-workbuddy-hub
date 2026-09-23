@@ -1489,6 +1489,25 @@ export function apply(ctx, config = {}) {
       return true
     }
 
+    // 排障：读某会话的 header.cwd 与所属工作区（验收工作区落点用）
+    if (route === 'GET /expert-session-cwd') {
+      try {
+        const sessionId = String(url.searchParams.get('sessionId') || '').trim()
+        const near = ctx.sessions?.get?.(sessionId)
+        const cwd = near?.header?.cwd
+        let wsId = ''
+        if (cwd) {
+          try {
+            const reg = ctx.get?.('workspaceRegistry') ?? ctx.workspaceRegistry
+            const ws = typeof reg?.resolveByPath === 'function' ? await reg.resolveByPath(cwd) : null
+            wsId = ws?.workspaceId || ''
+          } catch { /* ignore */ }
+        }
+        json(res, 200, { ok: true, sessionId, cwd: cwd || '', workspaceId: wsId, hasWorkspaceRegistry: Boolean(ctx.get?.('workspaceRegistry') ?? ctx.workspaceRegistry) })
+      } catch (error) { json(res, 500, { ok: false, error: String(error?.message || error) }) }
+      return true
+    }
+
     // 排障/验收：用 agent preset 直接建一个会话（等价于官方「新会话 + 选 preset」），
     // 返回会话 id 与 assemble 出的 deployment persona 片段，用来确认 preset 真的
     // 把 agent 的人设换成了专家（无需真实模型回合）。
@@ -1499,16 +1518,21 @@ export function apply(ctx, config = {}) {
         if (presetId && !/^[\w.-]+$/.test(presetId)) { json(res, 400, { ok: false, error: 'invalid presetId' }); return true }
         const sc = ctx.get?.('sessionController') ?? ctx.sessionController
         if (!sc || typeof sc.create !== 'function') { json(res, 503, { ok: false, error: 'sessionController unavailable' }); return true }
-        const workspaceId = body.workspaceId ? String(body.workspaceId) : undefined
-        // 没给 workspaceId 时，用 nearSessionId 所属会话的 cwd 落同一工作区
-        // （picker 场景拿不到 useWorkspaces，只能靠宿主从会话头解析）。
-        let cwd = body.cwd ? String(body.cwd) : undefined
-        if (!workspaceId && !cwd && body.nearSessionId) {
+        let workspaceId = body.workspaceId ? String(body.workspaceId) : undefined
+        let cwd
+        // 没给 workspaceId 时，用 nearSessionId 所属会话的 cwd 精确匹配工作区（最稳：
+        // cwd 就是会话落的工作区路径）。这样新会话一定和当前会话在同一工作区，不会落错。
+        if (!workspaceId && body.nearSessionId) {
           try {
             const near = ctx.sessions?.get?.(String(body.nearSessionId))
             const nearCwd = near?.header?.cwd
-            if (typeof nearCwd === 'string' && nearCwd !== '') cwd = nearCwd
-          } catch { /* 解析不到就退回 defaultCwd */ }
+            if (typeof nearCwd === 'string' && nearCwd !== '') {
+              cwd = nearCwd
+              const reg = ctx.get?.('workspaceRegistry') ?? ctx.workspaceRegistry
+              const ws = typeof reg?.resolveByPath === 'function' ? await reg.resolveByPath(nearCwd) : null
+              if (ws?.workspaceId) workspaceId = ws.workspaceId
+            }
+          } catch { /* 解析不到则退回 defaultCwd */ }
         }
         const created = await sc.create({
           ...(presetId ? { agentPreset: presetId } : {}),
