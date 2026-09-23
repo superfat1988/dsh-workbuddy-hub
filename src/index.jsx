@@ -1,10 +1,10 @@
-import React, { useState } from 'react'
-import { WbIcon } from './icons.js'
+import React, { useEffect, useRef, useState } from 'react'
+import { PickIcon } from './picker-icons.js'
 import MarketPage from './MarketPage.jsx'
 import ComposerAdd from './ComposerAdd.jsx'
 import AttachedRail from './AttachedRail.jsx'
 import SettingsPage from './SettingsPage.jsx'
-import { setMarketNavigator } from './hub.js'
+import { setMarketNavigator, openMarket } from './hub.js'
 
 let pluginCtx = null
 
@@ -50,8 +50,63 @@ function HubPage(props) {
   return <HubPageWithSessions useSessions={useSessions} sessionId={props?.sessionId} />
 }
 
+// 侧栏入口：图标与悬停弹出的三项，都照官方（官方入口图标就是「专家」那枚，
+// 悬停弹出 placement-right 的 162px 面板：专家/技能/连接器，点击进入对应页）。
+const SIDEBAR_ENTRIES = [
+  { id: 'expert', label: '专家', icon: 'menuExpert' },
+  { id: 'skill', label: '技能', icon: 'menuSkill' },
+  { id: 'connector', label: '连接器', icon: 'menuConnector' },
+]
+
 function PanelIcon() {
-  return <WbIcon name="grid" size={16} />
+  const [anchor, setAnchor] = useState(null)
+  const ref = useRef(null)
+  const open = () => {
+    // 官方是「整行悬停」出浮层，而本组件的 DOM 只有图标那一小块，
+    // 所以把监听挂到最近的 button 祖先（侧栏那一行）上。
+    const host = ref.current?.closest?.('button') || ref.current
+    const rect = host?.getBoundingClientRect?.()
+    if (rect) setAnchor({ top: Math.round(rect.top), left: Math.round(rect.right - 12) })
+  }
+  useEffect(() => {
+    const host = ref.current?.closest?.('button') || ref.current
+    if (!host) return undefined
+    const onEnter = () => open()
+    const onLeave = event => {
+      // 鼠标移进浮层不算离开（浮层是我们的 DOM 后代，但仍做一次兜底判断）
+      const pop = ref.current?.querySelector?.('.wbh-sideEntryPop')
+      if (pop && event.relatedTarget && pop.contains(event.relatedTarget)) return
+      setAnchor(null)
+    }
+    host.addEventListener('mouseenter', onEnter)
+    host.addEventListener('mouseleave', onLeave)
+    return () => {
+      host.removeEventListener('mouseenter', onEnter)
+      host.removeEventListener('mouseleave', onLeave)
+    }
+  }, [])
+  return (
+    <span className="wbh-sideEntry" ref={ref}>
+      <PickIcon name="menuExpert" size={16} />
+      {anchor && (
+        <span className="wbh-sideEntryPop" style={{ top: `${anchor.top}px`, left: `${anchor.left}px` }}>
+          <span className="wbh-sideEntryList" role="menu" aria-label="专家·技能·连接器">
+            {SIDEBAR_ENTRIES.map(item => (
+              <span key={item.id} className="wbh-sideEntryItem" role="menuitem" tabIndex={0}
+                onClick={() => { setAnchor(null); openMarket({ kind: item.id, view: 'market' }) }}
+                onKeyDown={event => {
+                  if (event.key !== 'Enter') return
+                  setAnchor(null); openMarket({ kind: item.id, view: 'market' })
+                }}>
+                <span className="wbh-sideEntryIcon"><PickIcon name={item.icon} size={16} /></span>
+                <span className="wbh-sideEntryLabel">{item.label}</span>
+              </span>
+            ))}
+          </span>
+        </span>
+      )}
+    </span>
+  )
 }
 
 function ComposerSlot(props) {

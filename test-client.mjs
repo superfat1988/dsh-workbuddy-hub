@@ -78,4 +78,18 @@ assert.ok(src.includes('fill=\"none\"') || src.includes("fill=\"none\""), 'offic
 assert.ok(src.includes('data-wbh-session'), 'session id surfaced for verification')
 assert.ok(src.includes('useSessions'), 'root-scope session resolution via official standard prop')
 
+// 侧栏入口：官方图标 + 悬停弹出的三项（官方 wb-popover--placement-right 规格）
+assert.ok(src.includes('wbh-sideEntry'), 'sidebar entry wrapper present')
+assert.ok(src.includes('wbh-sideEntryPop'), 'sidebar hover popover present')
+for (const [needle, why] of [
+  ['width: 162px', 'official sidebar popover width'],
+  ['border: 1px solid #f2f2f2', 'official sidebar popover border'],
+  ['padding: 5px 8px', 'official sidebar popover row padding'],
+  ['height: 32px', 'official sidebar popover row height'],
+]) {
+  assert.ok(src.includes(needle), `official sidebar popover rule present: ${why}`)
+}
+// 侧栏入口用的官方图标（与官方 button[data-track-name="专家中心入口"] 的 path 同源）
+assert.ok(src.includes('M7.1035 0C8.6643 0 10.7053 0.0099'), 'official sidebar entry icon inlined')
+
 console.log('client bundle: ModuleLoader shape, slots and official structure: OK')

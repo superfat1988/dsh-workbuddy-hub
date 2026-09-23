@@ -486,6 +486,10 @@ export default function Catalogue({
     </div>
   ) : null
 
+  // 官方三页的分类栏各不相同，逐页对齐（CDP 实测）：
+  //   专家页 → .ec-category-tabs，带条目数（技术工程(826)）
+  //   技能页 → .category-chip（全部/OPC·一人公司/办公协同/…）
+  //   连接器页 → 没有分类栏（此前误用了专家分类，且点哪个都不生效）
   const categoryChips = kind === 'skill'
     ? (
       <div className="category-chip-list">
@@ -497,16 +501,20 @@ export default function Catalogue({
         ))}
       </div>
     )
-    : (
-      <div className="ec-category-tabs-wrap">
-        <div className="ec-category-tabs">
-          <button type="button" className={`ec-category-tab${category === '' ? ' is-active' : ''}`} onClick={() => setCategory('')}>全部</button>
-          {categories.map(c => (
-            <button key={c.id} type="button" className={`ec-category-tab${category === c.id ? ' is-active' : ''}`} onClick={() => setCategory(c.id)}>{c.label}</button>
-          ))}
+    : kind === 'expert'
+      ? (
+        <div className="ec-category-tabs-wrap">
+          <div className="ec-category-tabs">
+            <button type="button" className={`ec-category-tab${category === '' ? ' is-active' : ''}`} onClick={() => setCategory('')}>全部</button>
+            {categories.map(c => (
+              <button key={c.id} type="button" className={`ec-category-tab${category === c.id ? ' is-active' : ''}`} onClick={() => setCategory(c.id)}>
+                {c.label}{c.count != null ? <span className="ec-category-tab-count">({c.count})</span> : null}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
-    )
+      )
+      : null
 
   const cardGrid = kind === 'expert'
     ? (

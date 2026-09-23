@@ -90,6 +90,7 @@
 .ec-list-tab.is-active::after{content:"";position:absolute;left:0;right:0;bottom:-3px;height:2px;border-radius:2px;background:var(--wb-color-text-primary)}
 .ec-category-tabs-wrap{padding:0 var(--ec-page-gutter);margin-bottom:8px}
 .ec-category-tab{font-size:12.5px;padding:4px 12px}
+.ec-category-tab-count{margin-left:1px;opacity:.6}
 .ec-picker-scroll{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--wb-border-default) transparent}
 
 /* picker 一级菜单/二级面板的样式全部在 official-picker.css（官方规则照抄） */
@@ -161,3 +162,13 @@
 .wbh-toolRow code{flex:0 0 auto;color:var(--wb-color-text-primary);font-family:var(--font-mono,monospace)}
 .wbh-toolRow span{color:var(--wb-color-text-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wbh-toolMore{margin-top:6px;font-size:11px;color:var(--wb-color-text-tertiary)}
+
+/* --- 侧栏入口：官方图标 + 悬停弹出的三项（官方 wb-popover--placement-right 规格：
+   宽 162 / padding 8 / r16 / border 1px #f2f2f2 / 官方阴影；行 32px p5-8 gap8 r8）--- */
+.wbh-sideEntry{position:relative;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px}
+.wbh-sideEntryPop{position:fixed;z-index:6400;width:162px;padding:8px;box-sizing:border-box;border-radius:16px;background:#fff;border:1px solid #f2f2f2;box-shadow:0 4px 12px -4px rgba(0,0,0,.04),0 3px 6px -8px rgba(0,0,0,.04);font-size:14px;line-height:22px}
+.wbh-sideEntryList{display:flex;flex-direction:column;gap:2px;width:144px}
+.wbh-sideEntryItem{position:relative;display:flex;align-items:center;gap:8px;height:32px;padding:5px 8px;box-sizing:border-box;border-radius:8px;cursor:pointer;color:#333;font-size:14px;line-height:22px}
+.wbh-sideEntryItem:hover{background:#f0f0f0}
+.wbh-sideEntryIcon{flex:0 0 16px;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;color:rgba(0,0,0,.7)}
+.wbh-sideEntryLabel{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

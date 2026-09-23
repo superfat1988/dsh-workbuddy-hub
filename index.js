@@ -870,6 +870,39 @@ export function apply(ctx, config = {}) {
           : record.status === 'failed' ? 'failed' : 'disabled'
         if (live.serverName) record.serverName = live.serverName
       }
+      // 图标回填：官方 icon 能取到的就取，取不到保持原样（前端用官方 fallback）。
+      //  · 专家：expert_center.json（按 name，其次按 displayName）
+      //  · 技能：按记录里的 officialId 查官方 skill 详情；拿到后写回 registry，
+      //    所以只有第一次会走网络
+      const backfilled = []
+      const expertMissing = Object.values(registry.installed ?? {})
+        .filter(r => r.kind === 'expert' && !r.icon)
+      if (expertMissing.length > 0) {
+        try {
+          const all = await listExperts({ limit: 5000 })
+          const byName = new Map(all.rows.map(r => [r.name, r.icon]))
+          const byLabel = new Map(all.rows.map(r => [r.displayName, r.icon]))
+          for (const record of expertMissing) {
+            const icon = byName.get(record.name) || byLabel.get(record.displayName)
+            if (icon) { record.icon = icon; backfilled.push(record) }
+          }
+        } catch { /* 取不到就算了 */ }
+      }
+      const skillMissing = Object.values(registry.installed ?? {})
+        .filter(r => r.kind === 'skill' && r.officialId && (!r.icon || r.icon === 'letter:auto'))
+      if (skillMissing.length > 0) {
+        try {
+          const details = await skillDetails(skillMissing.map(r => r.officialId), P.state)
+          for (const record of skillMissing) {
+            const hit = details.find(d => d.skill_id === record.officialId || d.skillId === record.officialId)
+            const icon = hit?.icon || hit?.icon_url || ''
+            if (icon) { record.icon = icon; backfilled.push(record) }
+          }
+        } catch { /* 未登录/网络失败都不影响其它字段 */ }
+      }
+      if (backfilled.length > 0) {
+        try { saveJson(P.registry, registry) } catch { /* 只读场景也能返回 */ }
+      }
       json(res, 200, registry)
       return true
     }
@@ -1037,21 +1070,41 @@ export function apply(ctx, config = {}) {
     if (route === 'GET /local-skills') {
       const rows = []
       try {
+        const registry = loadJson(P.registry, { version: 1, installed: {} })
         const dshSkills = join(homedir(), '.dsh', 'skills')
         for (const dirent of readdirSync(dshSkills, { withFileTypes: true })) {
-          if (!dirent.isDirectory()) continue
-          if (!skillPrefix || dirent.name.startsWith(skillPrefix)) continue
+          // 目录与符号链接都要（hub 装的技能是 workbuddy-* 软链）
+          if (!dirent.isDirectory() && !dirent.isSymbolicLink()) continue
           const dir = join(dshSkills, dirent.name)
           const skillMd = join(dir, 'SKILL.md')
           if (!existsSync(skillMd)) continue
           let description = ''
+          let frontName = ''
           try {
             const head = readFileSync(skillMd, 'utf8').slice(0, 2000)
             const m = head.match(/^description:\s*(.+)$/m)
             if (m) description = m[1].replace(/^["']|["']$/g, '').slice(0, 160)
+            // DSH 用 SKILL.md 的 frontmatter name 作为 /调用名（packages/skill/skill-filesystem: parsed.name）
+            const n = head.match(/^name:\s*(.+)$/m)
+            if (n) frontName = n[1].replace(/^["']|["']$/g, '').trim()
           } catch { /* unreadable description is fine */ }
-          rows.push({ kind: 'skill', name: dirent.name, displayName: dirent.name, description, local: true, dir })
+          const bare = skillPrefix && dirent.name.startsWith(skillPrefix)
+            ? dirent.name.slice(skillPrefix.length) : dirent.name
+          const record = registry.installed?.[`skill/${bare}`]
+            ?? registry.installed?.[`skill/${frontName}`]
+            ?? null
+          rows.push({
+            kind: 'skill',
+            name: frontName || bare,
+            displayName: record?.displayName || frontName || bare,
+            description: record?.description || description,
+            icon: record?.icon && record.icon !== 'letter:auto' ? record.icon : '',
+            local: !record,
+            hub: Boolean(record),
+            dir,
+          })
         }
+        rows.sort((a, b) => (a.hub === b.hub ? a.name.localeCompare(b.name) : (a.hub ? -1 : 1)))
       } catch { /* no dsh skills dir */ }
       json(res, 200, { ok: true, rows })
       return true

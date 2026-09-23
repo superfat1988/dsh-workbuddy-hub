@@ -6,7 +6,7 @@
 //    mcp__<serverName>__* 的真实工具名 —— 这是「连接器工具真的进了本进程」的证据。
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { apply } from './index.js'
 
@@ -137,5 +137,22 @@ const bareJson = JSON.parse(bareRes.body)
 assert.equal(bareJson.status ?? bareRes.statusCode, 200)
 assert.equal(bareJson.live.available, false, 'a missing tools service must degrade, not throw')
 assert.equal(bareJson.live.count, 0)
+
+// ---- 3. 分类栏与图标来源：契约级断言（防止回退到旧行为）----
+const hostSource = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
+// 分类栏由客户端按 kind 分派（Catalogue.jsx 的 categoryChips），分类数据源也必须分类型：
+// 连接器页此前误用了专家分类，点了也不生效。
+const hubSource = readFileSync(new URL('./src/hub.js', import.meta.url), 'utf8')
+assert.ok(hubSource.includes('official-expert-categories'), 'expert categories come from the official expert registry')
+assert.ok(hubSource.includes('market-categories?kind=${kind}'), 'skill/connector categories are requested per kind')
+const catalogueSource = readFileSync(new URL('./src/Catalogue.jsx', import.meta.url), 'utf8')
+assert.ok(catalogueSource.includes(": kind === 'expert'"), 'the category strip is dispatched per kind (connector gets none)')
+// /local-skills 必须包含 hub 装的软链技能（带官方 icon），不再按 skillPrefix 一律跳过
+assert.ok(hostSource.includes('dirent.isSymbolicLink()'), 'local-skills must accept hub symlinks')
+assert.ok(hostSource.includes('hub: Boolean(record)'), 'local-skills must mark hub-installed rows')
+assert.ok(hostSource.includes('record?.icon && record.icon !== \'letter:auto\''), 'letter:auto is not a usable icon URL')
+// /installed 必须回填官方图标（专家按 name/displayName，技能按 officialId）
+assert.ok(hostSource.includes('byLabel'), 'expert icon backfill must fall back to displayName')
+assert.ok(hostSource.includes('r.officialId && (!r.icon || r.icon === \'letter:auto\')'), 'skill icon backfill keyed by officialId')
 
 console.log('session resolution + live MCP tool registry: OK')
