@@ -34,14 +34,23 @@ plugin.apply({
 
 assert.ok(slots.length >= 5, 'expected the five registered surfaces')
 const props = { sessionId: 'session-smoke', onKind() {}, onQuery() {}, onDetail() {}, onAction() {}, installed: {}, mounted: new Set(), busy: '' }
-for (const { options, component } of slots) {
-  const label = `${options.name}#${options.id ?? options.key ?? ''}`
-  try {
-    renderToString(React.createElement(component, props))
-  } catch (error) {
-    assert.fail(`${label} threw during render: ${String(error?.message || error)}`)
-  }
+// The plugin is browser-only, so components legitimately use useLayoutEffect;
+// React's server renderer warns about that and the warning is not a defect.
+const realError = console.error
+console.error = (...args) => {
+  if (String(args[0]).includes('useLayoutEffect does nothing on the server')) return
+  realError(...args)
 }
+try {
+  for (const { options, component } of slots) {
+    const label = `${options.name}#${options.id ?? options.key ?? ''}`
+    try {
+      renderToString(React.createElement(component, props))
+    } catch (error) {
+      assert.fail(`${label} threw during render: ${String(error?.message || error)}`)
+    }
+  }
+} finally { console.error = realError }
 
 // hub.js import completeness: a symbol used in a file must be imported there.
 const hubSource = readFileSync(new URL('./src/hub.js', import.meta.url), 'utf8')

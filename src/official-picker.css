@@ -66,8 +66,11 @@
 
 /* ---------- 二级面板容器（官方 flyout 外层 wrapper） ---------- */
 .wbh-flyoutWrap{position:absolute;left:194px;z-index:1110}
+/* 视口自适应：几何由 ComposerAdd 按「官方 8px 边距夹取」写入 --wbh-maxh/--wbh-maxw
+   （官方实测：面板高度上限 = vh − 16，宽度 = min(自然宽, vw − 8 − 面板左缘)，不翻转） */
 .wbh-flyout{
   box-sizing:border-box;display:flex;flex-direction:column;padding:8px;border-radius:16px;
+  max-height:var(--wbh-maxh,none);max-width:var(--wbh-maxw,none);
   background:#fff;border:.5px solid rgba(0,0,0,.08);
   box-shadow:0 4px 12px -4px rgba(0,0,0,.04),0 3px 6px -8px rgba(0,0,0,.04);
   user-select:none;z-index:40;outline:none!important;
@@ -75,7 +78,7 @@
 }
 .wbh-flyout.is-expert{width:200px;gap:0}
 .wbh-flyout.is-skill{width:320px;gap:0;overflow:hidden}
-.wbh-flyout.is-connector{width:240px;gap:8px;max-height:392px}
+.wbh-flyout.is-connector{width:240px;gap:8px;max-height:min(392px,var(--wbh-maxh,392px))}
 
 /* ---------- 搜索框（官方 _search_1mrhu：32px / p 0 8 / r8 / #f7f7f7） ---------- */
 .wbh-flyoutSearch{
@@ -150,8 +153,9 @@
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-size:12px;line-height:20px;color:rgba(0,0,0,.5);
 }
-/* 本机技能较多时给列表兜一个上限（官方样例只有 3 行，未触发该上限） */
-.wbh-flyout.is-skill .wbh-flyoutList{max-height:320px}
+/* 本机技能较多时给列表兜一个上限（官方样例只有 3 行，未触发该上限）；
+   同时受视口上限约束，保证面板永远放得下。 */
+.wbh-flyout.is-skill .wbh-flyoutList{max-height:min(320px,var(--wbh-maxh,320px))}
 
 /* ---------- 行尾：图钉 / 连接 / 开关 ---------- */
 .wbh-pinBtn{

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react'
 import { hub, addSelection, onCatalogChange, onMarketRequest } from './hub.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
@@ -8,6 +8,9 @@ import ConnectorAuthModal from './ConnectorAuthModal.jsx'
 import AttachedRail from './AttachedRail.jsx'
 import { insertPromptIntoComposer } from './insert-prompt.js'
 import './official-picker.css'
+
+// 官方二级面板的自然宽度（与 official-picker.css 的 .is-* 规则同源）
+const PANEL_WIDTH = { expert: 200, skill: 320, connector: 240 }
 
 // 图标名取自官方一级菜单 _itemIcon_1h7yd_144 的 SVG 原文
 const KINDS = [
@@ -33,9 +36,13 @@ export default function ComposerAdd({ sessionId, runCommand }) {
   const [summoning, setSummoning] = useState(null)
   const [authorising, setAuthorising] = useState(null)
   const [recent, setRecent] = useState([])
-  const [flyoutTop, setFlyoutTop] = useState(8)
+  // 二级面板几何：官方做法是把面板「夹」进视口（8px 边距）——高度上限 vh−16、
+  // 宽度 min(自然宽, vw−8−面板左缘)，先按悬停行对齐，放不下就整体上移，永不翻转。
+  const [geom, setGeom] = useState({ top: 8, maxH: 0, maxW: 0, shift: 0 })
   const anchor = useRef(null)
   const itemRefs = useRef({})
+  const wrapRef = useRef(null)
+  const layerRef = useRef(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -65,11 +72,64 @@ export default function ComposerAdd({ sessionId, runCommand }) {
 
   const openPicker = useCallback(k => {
     setKind(k); setQuery('')
-    // 官方：二级面板 top 对齐「当前悬停的那一行」的顶边（实测 transform 位移 = 行 offsetTop）
+    // 官方：二级面板 top 先对齐「当前悬停的那一行」的顶边（实测 transform 位移 = 行 offsetTop），
+    // 随后按视口夹取（见下面的 layout effect）。
     const row = itemRefs.current[k]
-    if (row) setFlyoutTop(row.offsetTop)
+    if (row) setGeom(prev => ({ ...prev, top: row.offsetTop }))
     setMenuOpen(true); setPickerOpen(true)
   }, [])
+
+  // 面板几何随内容/视口变化重算（ResizeObserver 覆盖「加载完行数后才变高」的情况）。
+  useLayoutEffect(() => {
+    if (!pickerOpen) return undefined
+    const MARGIN = 8
+    const shift = geom.shift
+    const compute = () => {
+      const wrapEl = wrapRef.current
+      const menuEl = anchor.current ? anchor.current.querySelector('.wbh-menu') : null
+      const rowEl = itemRefs.current[kind]
+      if (!wrapEl || !menuEl || !rowEl) return
+      const vw = window.innerWidth || document.documentElement.clientWidth || 0
+      const vh = window.innerHeight || document.documentElement.clientHeight || 0
+      if (!vw || !vh) return
+      const menuRect = menuEl.getBoundingClientRect()
+      const menuTop = menuRect.top
+      const limit = vw - MARGIN
+      // 面板左缘 = 菜单右缘 − 5（官方实测）；layer 可能已被整体左移，这里先还原再算
+      const naturalW = PANEL_WIDTH[kind] || 240
+      const unshiftedMenuLeft = menuRect.left + shift
+      const desiredWrapLeft = unshiftedMenuLeft + 194
+      // 官方只夹宽度、不翻转；但 DSH 的「+」比官方靠右，窄窗时右侧空间会不足，
+      // 这时把整个 picker（一级菜单+面板）一起左移，保证两边都不出窗。
+      const overflow = desiredWrapLeft + naturalW - limit
+      const nextShift = overflow > 0
+        ? Math.max(0, Math.round(Math.min(overflow, Math.max(0, unshiftedMenuLeft - MARGIN))))
+        : 0
+      const wrapLeft = desiredWrapLeft - nextShift
+      const maxH = Math.max(140, Math.round(vh - MARGIN * 2))
+      const maxW = Math.max(140, Math.round(limit - wrapLeft))
+      // 当前（可能已被上限夹住的）高度；上限生效时高度就是 maxH
+      const h = Math.min(wrapEl.offsetHeight || 0, maxH)
+      let top = rowEl.offsetTop
+      if (menuTop + top + h > vh - MARGIN) top = (vh - MARGIN - h) - menuTop
+      if (menuTop + top < MARGIN) top = MARGIN - menuTop
+      top = Math.round(top)
+      setGeom(prev => (prev.top === top && prev.maxH === maxH && prev.maxW === maxW && prev.shift === nextShift
+        ? prev : { top, maxH, maxW, shift: nextShift }))
+    }
+    compute()
+    let observer = null
+    const wrapEl = wrapRef.current
+    if (wrapEl && typeof ResizeObserver === 'function') {
+      observer = new ResizeObserver(compute)
+      observer.observe(wrapEl)
+    }
+    window.addEventListener('resize', compute)
+    return () => {
+      if (observer) observer.disconnect()
+      window.removeEventListener('resize', compute)
+    }
+  }, [pickerOpen, kind, geom.maxH, geom.shift])
 
   const attach = useCallback(async (entry, task = '') => {
     const key = `${entry.kind}/${entry.name}`
@@ -163,7 +223,8 @@ export default function ComposerAdd({ sessionId, runCommand }) {
       {menuOpen && (
         <>
           <div className="wbh-popScrim" onClick={() => { setMenuOpen(false); setPickerOpen(false) }} />
-          <div className="wbh-pickerLayer">
+          <div className="wbh-pickerLayer" ref={layerRef}
+            style={geom.shift ? { transform: `translateX(-${geom.shift}px)` } : undefined}>
           <div className="wbh-menu" role="menu">
             <div className="wbh-menu-group">
               {KINDS.map(k => (
@@ -183,7 +244,12 @@ export default function ComposerAdd({ sessionId, runCommand }) {
               ))}
             </div>
             {pickerOpen && (
-              <div className="wbh-flyoutWrap" style={{ top: `${flyoutTop}px` }}>
+              <div className="wbh-flyoutWrap" ref={wrapRef}
+                style={{
+                  top: `${geom.top}px`,
+                  '--wbh-maxh': geom.maxH ? `${geom.maxH}px` : 'none',
+                  '--wbh-maxw': geom.maxW ? `${geom.maxW}px` : 'none',
+                }}>
                 <Catalogue
                   variant="picker" sessionId={sessionId} kind={kind} onKind={setKind}
                   query={query} onQuery={setQuery} onDetail={onDetail} onAction={onAction}
