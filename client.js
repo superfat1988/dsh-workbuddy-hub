@@ -3518,8 +3518,10 @@ function MarketPage({ sessionId, workspaceId, runCommand: runCommand2 }) {
           setNotice(`\u5DF2\u8FDE\u63A5\u300C${entry.displayName}\u300D\uFF08\u5DE5\u5177\u547D\u540D\u7A7A\u95F4 ${r.serverName}\uFF09\uFF0C\u4E0B\u4E00\u6B21\u6A21\u578B\u6B65\u9AA4\u8D77\u53EF\u7528\u3002`);
         }
       } else if (entry.kind === "expert") {
-        await hub.mount(sessionId, entry.kind, entry.name);
-        addSelection(entry, sessionId);
+        const r = await hub.mount(sessionId, entry.kind, entry.name);
+        const target = r?.sessionId || sessionId || "";
+        addSelection(entry, target);
+        if (target) openSessionById(target);
         setNotice(`\u5DF2\u9009\u4E2D\u300C${entry.displayName}\u300D\uFF0C\u4E0B\u4E00\u6B65\u8D77\u4EE5\u8BE5\u4E13\u5BB6\u8EAB\u4EFD\u56DE\u7B54`);
       } else {
         await hub.mount(sessionId, entry.kind, entry.name);
@@ -3779,8 +3781,8 @@ function ComposerAdd({ sessionId, runCommand: runCommand2 }) {
           setNotice(`\u5DF2\u8FDE\u63A5\u300C${entry.displayName}\u300D\uFF08\u5DE5\u5177\u547D\u540D\u7A7A\u95F4 ${r.serverName}\uFF09\uFF0C\u4E0B\u4E00\u6B21\u6A21\u578B\u6B65\u9AA4\u8D77\u53EF\u7528\u3002`);
         }
       } else if (entry.kind === "expert") {
-        await hub.mount(sessionId, entry.kind, entry.name);
-        addSelection(entry, sessionId);
+        const r = await hub.mount(sessionId, entry.kind, entry.name);
+        addSelection(entry, r?.sessionId || sessionId);
         setNotice(`\u5DF2\u9009\u4E2D\u300C${entry.displayName}\u300D\uFF0C\u4E0B\u4E00\u6B65\u8D77\u4EE5\u8BE5\u4E13\u5BB6\u8EAB\u4EFD\u56DE\u7B54`);
       } else {
         await hub.mount(sessionId, entry.kind, entry.name);

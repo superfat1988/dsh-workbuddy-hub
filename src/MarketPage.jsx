@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { hub, addSelection } from './hub.js'
+import { hub, addSelection, openSessionById } from './hub.js'
 import { insertPromptIntoComposer } from './insert-prompt.js'
 import { WbIcon } from './icons.js'
 import Catalogue from './Catalogue.jsx'
@@ -49,10 +49,13 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
           setNotice(`已连接「${entry.displayName}」（工具命名空间 ${r.serverName}），下一次模型步骤起可用。`)
         }
       } else if (entry.kind === 'expert') {
-        // 方案 C：把专家挂到**当前会话**，宿主在 system-prompt/assemble 里把部署
-        // 人设段替换成专家人设（接管，非叠加）。动态换专家下一步生效、不建新会话。
-        await hub.mount(sessionId, entry.kind, entry.name)
-        addSelection(entry, sessionId)
+        // 方案 C：把专家挂到当前会话（宿主在 system-prompt/assemble 里把部署人设段
+        // 替换成专家人设 = 接管）。挂载后用**宿主返回的真实会话 id** 跳到该会话 ——
+        // 否则用户停在世界市场页，看不到专家已就位。
+        const r = await hub.mount(sessionId, entry.kind, entry.name)
+        const target = r?.sessionId || sessionId || ''
+        addSelection(entry, target)
+        if (target) openSessionById(target)
         setNotice(`已选中「${entry.displayName}」，下一步起以该专家身份回答`)
       } else {
         await hub.mount(sessionId, entry.kind, entry.name)
