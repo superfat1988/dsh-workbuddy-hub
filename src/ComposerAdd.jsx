@@ -56,6 +56,8 @@ export default function ComposerAdd({ sessionId, runCommand }) {
     return () => document.removeEventListener('mousedown', onDown)
   }, [menuOpen, pickerOpen])
 
+  useEffect(() => onMarketRequest(() => { setMenuOpen(false); setPickerOpen(false) }), [])
+
   const openPicker = useCallback(k => {
     setKind(k); setQuery('')
     setMenuOpen(true); setPickerOpen(true)

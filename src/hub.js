@@ -5,6 +5,16 @@ const API = '/workbuddy-hub'
 // Tiny module-level event bus: the composer picker (input.left) and the
 // attached rail (composer.dock) are separate slot instances, so a mount /
 // unmount made by one must notify the other to re-read.
+// 市场导航桥：底部项（召唤更多专家/管理技能/…）需要切到主面板的市场页。
+let _marketNavigator = null
+const _marketListeners = new Set()
+export function setMarketNavigator(fn) { _marketNavigator = fn }
+export function onMarketRequest(fn) { _marketListeners.add(fn); return () => { _marketListeners.delete(fn) } }
+export function openMarket(request) {
+  try { _marketNavigator?.() } catch { /* 导航不可用时仍发出请求 */ }
+  for (const fn of _marketListeners) { try { fn(request) } catch { /* 忽略单个订阅者 */ } }
+}
+
 // 已选条目（专家/技能/连接器）：composer 的 chip 直接读这份客户端状态，
 // 因此「选中即显示、悬停删除、取消即移除」不依赖槽组件能否拿到 sessionId。
 let _selected = []

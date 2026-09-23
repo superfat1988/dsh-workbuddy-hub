@@ -2155,6 +2155,29 @@ var import_react6 = __toESM(require("react"), 1);
 
 // src/hub.js
 var API = "/workbuddy-hub";
+var _marketNavigator = null;
+var _marketListeners = /* @__PURE__ */ new Set();
+function setMarketNavigator(fn) {
+  _marketNavigator = fn;
+}
+function onMarketRequest2(fn) {
+  _marketListeners.add(fn);
+  return () => {
+    _marketListeners.delete(fn);
+  };
+}
+function openMarket(request) {
+  try {
+    _marketNavigator?.();
+  } catch {
+  }
+  for (const fn of _marketListeners) {
+    try {
+      fn(request);
+    } catch {
+    }
+  }
+}
 var _selected = [];
 var _selListeners = /* @__PURE__ */ new Set();
 function selectedItems() {
@@ -2634,6 +2657,10 @@ function Catalogue({
     setPage(1);
     void load(1, true);
   }, [load]);
+  (0, import_react2.useEffect)(() => onMarketRequest2((req) => {
+    if (req?.kind) onKind?.(req.kind);
+    setView(req?.view || "market");
+  }), [onKind]);
   (0, import_react2.useEffect)(() => onCatalogChange(() => {
     void load(1, true);
     hub.boundConnectors().then((r) => setBound(r.map((x) => x.name))).catch(() => {
@@ -2973,7 +3000,27 @@ function Catalogue({
     "\u7BA1\u7406\u6280\u80FD"
   ))))) : null;
   if (variant === "picker") {
-    const footerNode = kind === "connector" ? /* @__PURE__ */ import_react2.default.createElement("div", { className: "wbh-flyoutFooterItem", role: "menuitem", tabIndex: 0, onClick: () => setView("installed") }, /* @__PURE__ */ import_react2.default.createElement("span", { className: "wbh-flyoutFooterIcon" }, /* @__PURE__ */ import_react2.default.createElement("svg", { width: "14", height: "14", viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" }, /* @__PURE__ */ import_react2.default.createElement("path", { d: "M5 11L11 5", stroke: "currentColor", strokeWidth: "1.4", strokeLinecap: "round" }), /* @__PURE__ */ import_react2.default.createElement("path", { d: "M6.5 5H11V9.5", stroke: "currentColor", strokeWidth: "1.4", strokeLinecap: "round", strokeLinejoin: "round" }))), /* @__PURE__ */ import_react2.default.createElement("span", null, "\u7BA1\u7406\u8FDE\u63A5\u5668")) : kind === "expert" ? /* @__PURE__ */ import_react2.default.createElement("div", { className: "wbh-flyoutFooterItem", role: "menuitem", tabIndex: 0, onClick: () => setView("market") }, /* @__PURE__ */ import_react2.default.createElement("span", { className: "wbh-flyoutFooterIcon" }, /* @__PURE__ */ import_react2.default.createElement("svg", { width: "14", height: "14", viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" }, /* @__PURE__ */ import_react2.default.createElement("path", { d: "M5 11L11 5", stroke: "currentColor", strokeWidth: "1.4", strokeLinecap: "round" }), /* @__PURE__ */ import_react2.default.createElement("path", { d: "M6.5 5H11V9.5", stroke: "currentColor", strokeWidth: "1.4", strokeLinecap: "round", strokeLinejoin: "round" }))), /* @__PURE__ */ import_react2.default.createElement("span", null, "\u53EC\u5524\u66F4\u591A\u4E13\u5BB6")) : /* @__PURE__ */ import_react2.default.createElement(import_react2.default.Fragment, null, /* @__PURE__ */ import_react2.default.createElement(
+    const footerNode = kind === "connector" ? /* @__PURE__ */ import_react2.default.createElement(
+      "div",
+      {
+        className: "wbh-flyoutFooterItem",
+        role: "menuitem",
+        tabIndex: 0,
+        onClick: () => openMarket({ kind: "connector", view: "market" })
+      },
+      /* @__PURE__ */ import_react2.default.createElement("span", { className: "wbh-flyoutFooterIcon" }, /* @__PURE__ */ import_react2.default.createElement("svg", { width: "14", height: "14", viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" }, /* @__PURE__ */ import_react2.default.createElement("path", { d: "M5 11L11 5", stroke: "currentColor", strokeWidth: "1.4", strokeLinecap: "round" }), /* @__PURE__ */ import_react2.default.createElement("path", { d: "M6.5 5H11V9.5", stroke: "currentColor", strokeWidth: "1.4", strokeLinecap: "round", strokeLinejoin: "round" }))),
+      /* @__PURE__ */ import_react2.default.createElement("span", null, "\u7BA1\u7406\u8FDE\u63A5\u5668")
+    ) : kind === "expert" ? /* @__PURE__ */ import_react2.default.createElement(
+      "div",
+      {
+        className: "wbh-flyoutFooterItem",
+        role: "menuitem",
+        tabIndex: 0,
+        onClick: () => openMarket({ kind: "expert", view: "market" })
+      },
+      /* @__PURE__ */ import_react2.default.createElement("span", { className: "wbh-flyoutFooterIcon" }, /* @__PURE__ */ import_react2.default.createElement("svg", { width: "14", height: "14", viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true" }, /* @__PURE__ */ import_react2.default.createElement("path", { d: "M5 11L11 5", stroke: "currentColor", strokeWidth: "1.4", strokeLinecap: "round" }), /* @__PURE__ */ import_react2.default.createElement("path", { d: "M6.5 5H11V9.5", stroke: "currentColor", strokeWidth: "1.4", strokeLinecap: "round", strokeLinejoin: "round" }))),
+      /* @__PURE__ */ import_react2.default.createElement("span", null, "\u53EC\u5524\u66F4\u591A\u4E13\u5BB6")
+    ) : /* @__PURE__ */ import_react2.default.createElement(import_react2.default.Fragment, null, /* @__PURE__ */ import_react2.default.createElement(
       "div",
       {
         className: "wbh-flyoutFooterItem",
@@ -2981,7 +3028,7 @@ function Catalogue({
         tabIndex: 0,
         onClick: (e) => {
           e.stopPropagation();
-          setLocalOnly(true);
+          openMarket({ kind: "skill", view: "local" });
         }
       },
       /* @__PURE__ */ import_react2.default.createElement("span", { className: "wbh-flyoutFooterIcon" }, /* @__PURE__ */ import_react2.default.createElement(WbIcon, { name: "download", size: 14 })),
@@ -2994,8 +3041,7 @@ function Catalogue({
         tabIndex: 0,
         onClick: (e) => {
           e.stopPropagation();
-          setLocalOnly(false);
-          setView("installed");
+          openMarket({ kind: "skill", view: "installed" });
         }
       },
       /* @__PURE__ */ import_react2.default.createElement("span", { className: "wbh-flyoutFooterIcon" }, /* @__PURE__ */ import_react2.default.createElement(WbIcon, { name: "gear", size: 14 })),
@@ -3372,6 +3418,10 @@ function ComposerAdd({ sessionId, runCommand: runCommand2 }) {
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [menuOpen, pickerOpen]);
+  (0, import_react8.useEffect)(() => onMarketRequest(() => {
+    setMenuOpen(false);
+    setPickerOpen(false);
+  }), []);
   const openPicker = (0, import_react8.useCallback)((k) => {
     setKind(k);
     setQuery("");
@@ -3591,6 +3641,21 @@ var plugin = {
   apply(ctx) {
     pluginCtx = ctx;
     const reg = (name, options, component) => ctx.slots.register(options, component);
+    setMarketNavigator(() => {
+      let layout = null;
+      try {
+        layout = ctx.get?.("layout") ?? null;
+      } catch {
+        layout = null;
+      }
+      const ok = typeof layout?.selectPanel === "function";
+      try {
+        if (ok) layout.selectPanel("workbuddy-hub");
+      } catch (error) {
+        console.warn("[wbh] selectPanel failed:", String(error?.message || error));
+      }
+      console.info("[wbh] openMarket -> layout:", Boolean(layout), "selectPanel:", ok);
+    });
     ctx.slots.inject("main", () => reg("main", { name: "main", key: "workbuddy-hub" }, HubPage));
     ctx.slots.inject("sidebar.panellist", () => reg("sidebar.panellist", { name: "sidebar.panellist", id: "workbuddy-hub", order: -90, label: () => "\u4E13\u5BB6\xB7\u6280\u80FD\xB7\u8FDE\u63A5\u5668" }, PanelIcon));
     ctx.slots.inject("conversation.input.left", () => reg("conversation.input.left", {

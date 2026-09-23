@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { hub, onCatalogChange, addSelection } from './hub.js'
+import { hub, onCatalogChange, addSelection, openMarket, onMarketRequest } from './hub.js'
 import { insertPromptIntoComposer } from './insert-prompt.js'
 import { WbIcon } from './icons.js'
 import './official-skill.css'
@@ -228,6 +228,11 @@ export default function Catalogue({
   }, [kind, query, category])
 
   useEffect(() => { setPage(1); void load(1, true) }, [load])
+  useEffect(() => onMarketRequest(req => {
+    if (req?.kind) onKind?.(req.kind)
+    setView(req?.view || 'market')
+  }), [onKind])
+
   useEffect(() => onCatalogChange(() => {
     void load(1, true)
     hub.boundConnectors().then(r => setBound(r.map(x => x.name))).catch(() => {})
@@ -642,7 +647,8 @@ export default function Catalogue({
   // ---------- picker：官方二级面板（行列表 + 搜索 + 分类型底部项） ----------
   if (variant === 'picker') {
     const footerNode = kind === 'connector' ? (
-      <div className="wbh-flyoutFooterItem" role="menuitem" tabIndex={0} onClick={() => setView('installed')}>
+      <div className="wbh-flyoutFooterItem" role="menuitem" tabIndex={0}
+        onClick={() => openMarket({ kind: 'connector', view: 'market' })}>
         <span className="wbh-flyoutFooterIcon">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path d="M5 11L11 5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
@@ -652,7 +658,8 @@ export default function Catalogue({
         <span>管理连接器</span>
       </div>
     ) : kind === 'expert' ? (
-      <div className="wbh-flyoutFooterItem" role="menuitem" tabIndex={0} onClick={() => setView('market')}>
+      <div className="wbh-flyoutFooterItem" role="menuitem" tabIndex={0}
+        onClick={() => openMarket({ kind: 'expert', view: 'market' })}>
         <span className="wbh-flyoutFooterIcon">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <path d="M5 11L11 5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
@@ -664,12 +671,12 @@ export default function Catalogue({
     ) : (
       <>
         <div className="wbh-flyoutFooterItem" role="menuitem" tabIndex={0}
-          onClick={e => { e.stopPropagation(); setLocalOnly(true) }}>
+          onClick={e => { e.stopPropagation(); openMarket({ kind: 'skill', view: 'local' }) }}>
           <span className="wbh-flyoutFooterIcon"><WbIcon name="download" size={14} /></span>
           <span>从本地添加技能</span>
         </div>
         <div className="wbh-flyoutFooterItem" role="menuitem" tabIndex={0}
-          onClick={e => { e.stopPropagation(); setLocalOnly(false); setView('installed') }}>
+          onClick={e => { e.stopPropagation(); openMarket({ kind: 'skill', view: 'installed' }) }}>
           <span className="wbh-flyoutFooterIcon"><WbIcon name="gear" size={14} /></span>
           <span>管理技能</span>
         </div>

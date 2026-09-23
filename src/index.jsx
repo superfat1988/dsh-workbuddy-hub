@@ -4,6 +4,7 @@ import MarketPage from './MarketPage.jsx'
 import ComposerAdd from './ComposerAdd.jsx'
 import AttachedRail from './AttachedRail.jsx'
 import SettingsPage from './SettingsPage.jsx'
+import { setMarketNavigator } from './hub.js'
 
 let pluginCtx = null
 
@@ -40,6 +41,16 @@ const plugin = {
   apply(ctx) {
     pluginCtx = ctx
     const reg = (name, options, component) => ctx.slots.register(options, component)
+    // 用官方 layout 服务切换主面板（侧边栏 selectPanel 走的就是它）
+    setMarketNavigator(() => {
+      let layout = null
+      try { layout = ctx.get?.('layout') ?? null } catch { layout = null }
+      const ok = typeof layout?.selectPanel === 'function'
+      try { if (ok) layout.selectPanel('workbuddy-hub') } catch (error) {
+        console.warn('[wbh] selectPanel failed:', String(error?.message || error))
+      }
+      console.info('[wbh] openMarket -> layout:', Boolean(layout), 'selectPanel:', ok)
+    })
     ctx.slots.inject('main', () => reg('main', { name: 'main', key: 'workbuddy-hub' }, HubPage))
     ctx.slots.inject('sidebar.panellist', () => reg('sidebar.panellist', { name: 'sidebar.panellist', id: 'workbuddy-hub', order: -90, label: () => '专家·技能·连接器' }, PanelIcon))
     ctx.slots.inject('conversation.input.left', () => reg('conversation.input.left', {
