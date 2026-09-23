@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { hub, onCatalogChange, addSelection, openMarket, onMarketRequest, consumePendingMarket } from './hub.js'
 import { insertPromptIntoComposer } from './insert-prompt.js'
 import { WbIcon } from './icons.js'
+import { PickIcon } from './picker-icons.js'
 import './official-skill.css'
 import './official-connector.css'
 import './official-skeleton.css'
@@ -38,17 +39,28 @@ function numeric(value) {
  * 官方图标显示逻辑：有 icon 用 <img>；加载失败或没有 icon 时退化为官方
  * .ec-avatar-sq-fallback（首字 + 稳定底色），不显示破图。
  */
-function EntryIcon({ entry, size = 44, round = true }) {
+/**
+ * 官方「无图标」逻辑分两套，按场景各用各的（都是从线上产物实测得到的值）：
+ *  1) 市场卡片 .ec-avatar-sq-fallback + --ec-avatar-fallback-bg-N 稳定取色（official.css）
+ *  2) picker 小图标（本函数 fallbackTint 传入）：连接器/专家为中性灰底 rgba(0,0,0,.08)
+ *     + rgba(0,0,0,.7) 首字 10px/400（官方 4 例实测）；技能为品牌浅底 #dbe4ff +
+ *     #4263eb 首字 9px/600 圆角 6px（官方 1 例实测，具体调色板未取到，官方疑似按条目着色）
+ */
+function EntryIcon({ entry, size = 44, round = true, radius: radiusOverride, fallbackTint }) {
   const [broken, setBroken] = useState(false)
   const label = entry.displayName || entry.name || '?'
-  const radius = round ? '50%' : `${Math.max(6, Math.round(size * 0.21))}px`
+  // 官方 picker 的圆角：技能 6px、连接器 3px、专家 50%（各自取自官方 _itemIcon_* 规则）
+  const radius = radiusOverride ?? (round ? '50%' : `${Math.max(6, Math.round(size * 0.21))}px`)
   if (!entry.icon || broken) {
+    const tint = fallbackTint || null
     return (
       <div className="ec-avatar-sq-fallback"
         style={{
-          background: `var(--ec-avatar-fallback-bg-${fallbackIndex(entry.name || label)})`,
+          background: tint ? tint.bg : `var(--ec-avatar-fallback-bg-${fallbackIndex(entry.name || label)})`,
+          color: tint ? tint.color : undefined,
+          fontWeight: tint ? tint.fontWeight : undefined,
           borderRadius: radius,
-          fontSize: Math.max(11, Math.round(size * 0.42)),
+          fontSize: tint ? tint.fontSize : (size <= 16 ? 9 : Math.max(11, Math.round(size * 0.42))),
           width: '100%', height: '100%',
         }}>
         {label.slice(0, 1)}
@@ -60,6 +72,13 @@ function EntryIcon({ entry, size = 44, round = true }) {
       onError={() => setBroken(true)}
       style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: radius, flexShrink: 0, background: 'rgba(128,128,128,.15)' }} />
   )
+}
+
+/** 官方 picker 无图标时的着色（取值见 EntryIcon 注释）。 */
+const PICKER_TINT = {
+  expert: { bg: 'rgba(0,0,0,.08)', color: 'rgba(0,0,0,.7)', fontSize: 10, fontWeight: 400 },
+  connector: { bg: 'rgba(0,0,0,.08)', color: 'rgba(0,0,0,.7)', fontSize: 10, fontWeight: 400 },
+  skill: { bg: '#dbe4ff', color: '#4263eb', fontSize: 9, fontWeight: 600 },
 }
 
 function SkillCard({ entry, busy, onDetail, onAction }) {
@@ -709,41 +728,31 @@ export default function Catalogue({
     </>
   ) : null
 
-  // ---------- picker：官方二级面板（行列表 + 搜索 + 分类型底部项） ----------
+  // ---------- picker：官方二级面板（三套官方结构 expert/skill/connector）----------
   if (variant === 'picker') {
     const footerNode = kind === 'connector' ? (
       <div className="wbh-flyoutFooterItem" role="menuitem" tabIndex={0}
         onClick={() => openMarket({ kind: 'connector', view: 'market' })}>
-        <span className="wbh-flyoutFooterIcon">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M5 11L11 5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-            <path d="M6.5 5H11V9.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </span>
-        <span>管理连接器</span>
+        <span className="wbh-flyoutFooterIcon"><PickIcon name="connManage" size={16} /></span>
+        <span className="wbh-flyoutFooterLabel">管理连接器</span>
       </div>
     ) : kind === 'expert' ? (
       <div className="wbh-flyoutFooterItem" role="menuitem" tabIndex={0}
         onClick={() => openMarket({ kind: 'expert', view: 'market' })}>
-        <span className="wbh-flyoutFooterIcon">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M5 11L11 5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-            <path d="M6.5 5H11V9.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </span>
-        <span>召唤更多专家</span>
+        <span className="wbh-flyoutFooterIcon"><PickIcon name="summonMore" size={16} /></span>
+        <span className="wbh-flyoutFooterLabel">召唤更多专家</span>
       </div>
     ) : (
       <>
         <div className="wbh-flyoutFooterItem" role="menuitem" tabIndex={0}
           onClick={e => { e.stopPropagation(); openMarket({ kind: 'skill', view: 'local' }) }}>
-          <span className="wbh-flyoutFooterIcon"><WbIcon name="download" size={14} /></span>
-          <span>从本地添加技能</span>
+          <span className="wbh-flyoutFooterIcon"><PickIcon name="skillUpload" size={16} /></span>
+          <span className="wbh-flyoutFooterLabel">从本地添加技能</span>
         </div>
         <div className="wbh-flyoutFooterItem" role="menuitem" tabIndex={0}
           onClick={e => { e.stopPropagation(); openMarket({ kind: 'skill', view: 'installed' }) }}>
-          <span className="wbh-flyoutFooterIcon"><WbIcon name="gear" size={14} /></span>
-          <span>管理技能</span>
+          <span className="wbh-flyoutFooterIcon"><PickIcon name="skillManage" size={16} /></span>
+          <span className="wbh-flyoutFooterLabel">管理技能</span>
         </div>
       </>
     )
@@ -751,7 +760,7 @@ export default function Catalogue({
     const installedExperts = Object.entries(installed)
       .filter(([, rec]) => rec?.kind === 'expert')
       .map(([key, rec]) => ({ key, kind: 'expert', name: rec.name || key.split('/')[1], displayName: rec.displayName || rec.name, description: rec.description || '', icon: rec.icon || '' }))
-    // 图1：技能面板只列 DSH 本机已装技能，没有就显示「暂无可用技能」。
+    // 技能面板只列 DSH 本机已装技能（官方二级面板列的是本机技能）。
     const localSkills = (query
       ? localRows.filter(e => (e.displayName || e.name || '').toLowerCase().includes(query.toLowerCase()))
       : localRows)
@@ -762,7 +771,7 @@ export default function Catalogue({
         : visible
     const pinnedOfKind = pinnedEntries.filter(x => x.kind === kind)
     const merged = [...pinnedOfKind, ...baseRows.filter(b => !pinnedOfKind.some(p => p.name === b.name && p.kind === b.kind))]
-    // 排序与官方一致：已连接的连接器置顶（带开关），其次是被图钉置顶的条目，其余保持原序。
+    // 官方实测排序：已连接的连接器置顶（带开关）→ 图钉置顶项 → 其余保持原序。
     const rowRank = x => {
       if (x.kind === 'connector' && bound.includes(x.name)) return 0
       if (pinned.has(`${x.kind}/${x.name}`)) return 1
@@ -773,24 +782,35 @@ export default function Catalogue({
     const rowNode = entry => {
       const key = `${entry.kind}/${entry.name}`
       const connected = entry.kind === 'connector' ? isBound(entry) : Boolean(entry._enabled || entry.isConnected)
+      const isPinned = pinned.has(key)
       return (
-        <div key={key} className="wbh-flyoutRow" role="menuitem" tabIndex={0}
+        <div key={key} className={`wbh-flyoutRow is-${entry.kind}`} role="menuitem" tabIndex={0}
           onClick={() => {
             if (entry.kind === 'skill') handleSkillPick(entry)
             else if (entry.kind === 'connector') void connectorAction(entry)
             else onAction?.(entry)
           }}
           onKeyDown={e => { if (e.key === 'Enter') onAction?.(entry) }}>
-          <span className="wbh-flyoutIcon"><EntryIcon entry={entry} size={24} round={entry.kind !== 'skill'} /></span>
-          <span className="wbh-flyoutName">{entry.displayName}</span>
+          <span className={`wbh-flyoutIcon${entry.kind === 'expert' ? ' is-round' : ''}`}>
+            <EntryIcon entry={entry} size={16} round={entry.kind === 'expert'}
+              fallbackTint={PICKER_TINT[entry.kind]}
+              radius={entry.kind === 'expert' ? '50%' : entry.kind === 'skill' ? '6px' : '3px'} />
+          </span>
+          {entry.kind === 'skill' ? (
+            <div className="wbh-rowBody">
+              <div className="wbh-rowTitle"><span className="wbh-rowTitleText">{entry.displayName}</span></div>
+              <div className="wbh-rowDesc">{entry.description || ''}</div>
+            </div>
+          ) : (
+            <span className="wbh-flyoutName">{entry.displayName}</span>
+          )}
           {entry.kind !== 'connector' && (
             <button type="button"
-              className={`wbh-pinBtn${pinned.has(`${entry.kind}/${entry.name}`) ? ' is-pinned' : ''}`}
-              aria-label={pinned.has(`${entry.kind}/${entry.name}`) ? '取消置顶' : '置顶'}
+              className={`wbh-pinBtn${isPinned ? ' is-pinned' : ''}`}
+              aria-label={isPinned ? '取消置顶' : '置顶'}
               onClick={e => { e.stopPropagation(); togglePin(entry) }}>
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M6 2h4l-.6 3.2 2.1 2.1H9.2L9 12.5l-1 1.5-1-1.5-.2-5.2H4.5l2.1-2.1L6 2Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-              </svg>
+              <span className="wbh-pinRest"><PickIcon name="pinRest" size={16} /></span>
+              <span className="wbh-pinHover"><PickIcon name="pinHover" size={16} /></span>
             </button>
           )}
           {entry.kind === 'connector' && (
@@ -798,10 +818,7 @@ export default function Catalogue({
               ? <span className="wbh-toggle is-on" role="switch" aria-checked="true" aria-label="已连接"><i /></span>
               : (
                 <span className="wbh-linkAction" aria-hidden="true">
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                    <path d="M6.5 9.5a2.5 2.5 0 0 0 3.5 0l2-2a2.5 2.5 0 0 0-3.5-3.5l-.8.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-                    <path d="M9.5 6.5a2.5 2.5 0 0 0-3.5 0l-2 2a2.5 2.5 0 0 0 3.5 3.5l.8-.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-                  </svg>
+                  <PickIcon name="connLink" size={14} />
                   <span>连接</span>
                 </span>
               )
@@ -811,27 +828,35 @@ export default function Catalogue({
       )
     }
 
+    const listNode = (
+      <div className="wbh-flyoutList" ref={scrollRef} onScroll={onScroll}>
+        {loading && <div className="wbh-flyoutState">正在读取…</div>}
+        {!loading && !failed && visibleRows.length === 0 && (
+          <div className="wbh-flyoutState">暂无可用{kindMeta.label}</div>
+        )}
+        {visibleRows.map(rowNode)}
+        {loadingMore && <div className="wbh-flyoutState">加载中…</div>}
+      </div>
+    )
+
     return (
-      <div className="wbh-flyout" role="dialog" aria-label={`选择${kindMeta.label}`}>
+      <div className={`wbh-flyout is-${kind}`} role="dialog" aria-label={`选择${kindMeta.label}`}>
         {notice ? <div className="wbh-notice">{notice}</div> : null}
         {pendingAuth ? (
           <a className="wbh-authLink" href={pendingAuth.url} target="_blank" rel="noreferrer">
             打开「{pendingAuth.displayName}」授权页
           </a>
         ) : null}
-        <div className="wbh-flyoutSearch">
-          <WbIcon name="search" size={15} />
-          <input value={query} placeholder={`搜索${kindMeta.label}`} aria-label={`搜索${kindMeta.label}`}
-            onChange={e => onQuery(e.target.value)} />
-        </div>
-        <div className="wbh-flyoutList" ref={scrollRef} onScroll={onScroll}>
-          {loading && <div className="wbh-flyoutState">正在读取…</div>}
-          {!loading && !failed && visibleRows.length === 0 && (
-            <div className="wbh-flyoutState">暂无可用{kindMeta.label}</div>
-          )}
-          {visibleRows.map(rowNode)}
-          {loadingMore && <div className="wbh-flyoutState">加载中…</div>}
-        </div>
+        {/* 官方专家面板没有搜索框，只有技能/连接器面板有 */}
+        {kind !== 'expert' && (
+          <div className="wbh-flyoutSearch">
+            <span className="wbh-flyoutSearchIcon"><PickIcon name="search" size={16} /></span>
+            <input value={query} placeholder={`搜索${kindMeta.label}`} aria-label={`搜索${kindMeta.label}`}
+              onChange={e => onQuery(e.target.value)} />
+          </div>
+        )}
+        {kind === 'skill' ? <div className="wbh-flyoutBody">{listNode}</div> : listNode}
+        <div className="wbh-flyoutDivider" />
         <div className="wbh-flyoutFooter">{footerNode}</div>
       </div>
     )

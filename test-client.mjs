@@ -53,4 +53,27 @@ assert.ok(src.includes('wb-auth/start'), 'device-login flow wired')
 // guard: never register the input overlay
 assert.ok(!/name:\s*['"]conversation\.input\.overlay['"]/.test(src), 'must never register the input overlay slot')
 
+// picker 必须用官方几何（官方 picker 三套面板宽度/行高/搜索框/图标盒）
+for (const [needle, why] of [
+  ['.wbh-flyout.is-expert {', 'official expert panel rule'],
+  ['.wbh-flyout.is-skill {', 'official skill panel rule'],
+  ['.wbh-flyout.is-connector {', 'official connector panel rule'],
+  ['max-height: 392px', 'official connector panel max-height'],
+  ['flex: 0 0 32px', 'official 32px search row'],
+  ['width: 26px', 'official 26px toggle track'],
+  ['height: 16px', 'official 16px toggle track height'],
+  ['font-size: 12px', 'official 12px skill description'],
+  ['line-height: 20px', 'official 20px skill description line'],
+  ['animation: wbhAddPopIn .18s ease-out both', 'official 0.18s menu pop-in'],
+]) {
+  assert.ok(src.includes(needle), `official picker rule present: ${why}`)
+}
+// 官方 SVG 图标必须原样内联（不是自绘近似图形）
+assert.ok(src.includes('M5 3.5 9 7l-4 3.5'), 'official chevron path inlined')
+assert.ok(src.includes('fill=\"none\"') || src.includes("fill=\"none\""), 'official svg fill attribute preserved')
+
+// 会话 id：客户端必须把框架注入的 props.sessionId 传给宿主接口
+assert.ok(src.includes('data-wbh-session'), 'session id surfaced for verification')
+assert.ok(src.includes('useSessions'), 'root-scope session resolution via official standard prop')
+
 console.log('client bundle: ModuleLoader shape, slots and official structure: OK')

@@ -1,16 +1,19 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { hub, addSelection, onCatalogChange, onMarketRequest } from './hub.js'
 import { WbIcon } from './icons.js'
+import { PickIcon } from './picker-icons.js'
 import Catalogue from './Catalogue.jsx'
 import SummonModal from './SummonModal.jsx'
 import ConnectorAuthModal from './ConnectorAuthModal.jsx'
 import AttachedRail from './AttachedRail.jsx'
 import { insertPromptIntoComposer } from './insert-prompt.js'
+import './official-picker.css'
 
+// 图标名取自官方一级菜单 _itemIcon_1h7yd_144 的 SVG 原文
 const KINDS = [
-  { id: 'expert', label: '专家', icon: 'person' },
-  { id: 'skill', label: '技能', icon: 'sparkle' },
-  { id: 'connector', label: '连接器', icon: 'link' },
+  { id: 'expert', label: '专家', icon: 'menuExpert' },
+  { id: 'skill', label: '技能', icon: 'menuSkill' },
+  { id: 'connector', label: '连接器', icon: 'menuConnector' },
 ]
 
 /**
@@ -30,7 +33,9 @@ export default function ComposerAdd({ sessionId, runCommand }) {
   const [summoning, setSummoning] = useState(null)
   const [authorising, setAuthorising] = useState(null)
   const [recent, setRecent] = useState([])
+  const [flyoutTop, setFlyoutTop] = useState(8)
   const anchor = useRef(null)
+  const itemRefs = useRef({})
 
   const refresh = useCallback(async () => {
     try {
@@ -60,6 +65,9 @@ export default function ComposerAdd({ sessionId, runCommand }) {
 
   const openPicker = useCallback(k => {
     setKind(k); setQuery('')
+    // 官方：二级面板 top 对齐「当前悬停的那一行」的顶边（实测 transform 位移 = 行 offsetTop）
+    const row = itemRefs.current[k]
+    if (row) setFlyoutTop(row.offsetTop)
     setMenuOpen(true); setPickerOpen(true)
   }, [])
 
@@ -146,6 +154,7 @@ export default function ComposerAdd({ sessionId, runCommand }) {
     <div className="wbh-anchor" ref={anchor}>
       <button type="button" className="wbh-plus" aria-label="专家·技能·连接器"
         aria-expanded={menuOpen || pickerOpen || undefined} title="专家 · 技能 · 连接器"
+        data-wbh-session={sessionId || ''}
         onClick={() => { setMenuOpen(v => !v); setPickerOpen(false) }}>
         <WbIcon name="plus" size={14} />
       </button>
@@ -156,34 +165,33 @@ export default function ComposerAdd({ sessionId, runCommand }) {
           <div className="wbh-popScrim" onClick={() => { setMenuOpen(false); setPickerOpen(false) }} />
           <div className="wbh-pickerLayer">
           <div className="wbh-menu" role="menu">
-            <div className="wbh-menu-list">
+            <div className="wbh-menu-group">
               {KINDS.map(k => (
                 <div key={k.id}
                   className={`wbh-menu-item${pickerOpen && kind === k.id ? ' is-open' : ''}`}
                   role="menuitem" tabIndex={0}
+                  ref={el => { itemRefs.current[k.id] = el }}
                   onMouseEnter={() => openPicker(k.id)}
                   onClick={() => openPicker(k.id)}
                   onKeyDown={e => { if (e.key === 'Enter') openPicker(k.id) }}>
-                  <span className="wbh-menu-avatar"><WbIcon name={k.icon} size={14} /></span>
+                  <span className="wbh-menu-icon"><PickIcon name={k.icon} size={16} /></span>
                   <span className="wbh-menu-name">{k.label}</span>
                   <span className="wbh-menu-chevron" aria-hidden="true">
-                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
-                      <path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
+                    <PickIcon name="menuChevron" size={14} />
                   </span>
                 </div>
               ))}
             </div>
+            {pickerOpen && (
+              <div className="wbh-flyoutWrap" style={{ top: `${flyoutTop}px` }}>
+                <Catalogue
+                  variant="picker" sessionId={sessionId} kind={kind} onKind={setKind}
+                  query={query} onQuery={setQuery} onDetail={onDetail} onAction={onAction}
+                  installed={installed} mounted={mounted} busy={busy}
+                />
+              </div>
+            )}
           </div>
-          {pickerOpen && (
-            <>
-              <Catalogue
-                variant="picker" sessionId={sessionId} kind={kind} onKind={setKind}
-                query={query} onQuery={setQuery} onDetail={onDetail} onAction={onAction}
-                installed={installed} mounted={mounted} busy={busy}
-              />
-            </>
-          )}
           </div>
           {notice && <div className="wbh-flyoutNotice">{notice}</div>}
         </>

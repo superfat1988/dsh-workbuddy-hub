@@ -75,7 +75,7 @@ export default function MarketPage({ sessionId, runCommand }) {
 
   const loggedIn = auth?.configured === true
   return (
-    <div className="expert-center-page wbh-page">
+    <div className="expert-center-page wbh-page" data-wbh-session={sessionId || ''}>
       <Catalogue
         sessionId={sessionId} kind={kind} onKind={setKind} query={query} onQuery={setQuery}
         onDetail={onDetail} onAction={onAction} installed={installed} mounted={mounted} busy={busy}

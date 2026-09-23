@@ -1,0 +1,209 @@
+/* ============================================================================
+ * picker chrome — 直接从 workbuddy.cn 线上产物提取的官方规则（CSS-modules 哈希类
+ * 重命名到本项目稳定类名），数值与声明逐条照抄，未做主观调整。
+ *
+ * 官方取值（实测）：
+ *   --cb-popover-bg-color / --cb-dropdown-bg-color   #ffffff
+ *   --cb-popover-border                              #e5e5e5   （border .5px）
+ *   --cb-popover-divider                             #f2f2f2
+ *   --cb-shadow-popover  0 4px 12px -4px rgba(0,0,0,.04), 0 3px 6px -8px rgba(0,0,0,.04)
+ *   --cb-text-primary #333333  --cb-text-secondary #666666  --cb-text-muted rgba(26,26,26,.6)
+ *   --cb-dropdown-item-hover-bg-color                #f0f0f0
+ *   --cb-search-input-bg                             #f7f7f7
+ *   --cb-scrollbar-thumb #c1c1c1  --cb-scrollbar-thumb-hover #a8a8a8
+ *   --cb-switch-active-bg #00b96b --cb-toggle-track-off-bg rgba(0,0,0,.06)
+ *   --cb-switch-thumb-bg #ffffff
+ *   --cb-list-item-selected-bg                       #f7f7f7
+ * 官方几何（实测）：一级菜单 200px / p8 / r16 / item 32px / icon 16 / chevron 14；
+ *   flyout 贴到菜单右缘 -5px、top 对齐所悬停的那一行；
+ *   专家面板 200px（无搜索，5 行 + 召唤更多）；技能面板 320px（搜索 + 52px 行 + 2 项动作）；
+ *   连接器面板 240px（搜索 + 32px 行 + 管理连接器，max-height 392px）。
+ * ========================================================================== */
+
+.wbh-pickerLayer{position:absolute;left:0;bottom:calc(100% + 8px);z-index:6250}
+
+/* ---------- 一级菜单（官方 _menu_1h7yd / _group / _item / _divider） ---------- */
+.wbh-menu{
+  position:relative;z-index:1;width:200px;padding:8px;border-radius:16px;
+  background:#fff;border:.5px solid rgba(0,0,0,.08);
+  box-shadow:0 4px 12px -4px rgba(0,0,0,.04),0 3px 6px -8px rgba(0,0,0,.04);
+  user-select:none;box-sizing:border-box;outline:none!important;
+  animation:wbhAddPopIn .18s ease-out both;
+}
+@keyframes wbhAddPopIn{0%{opacity:0}100%{opacity:1}}
+.wbh-menu-group{display:flex;flex-direction:column;gap:2px}
+.wbh-menu-divider{height:1px;margin:6px 4px;background:#f2f2f2}
+.wbh-menu-item{
+  position:relative;display:flex;align-items:center;gap:8px;height:32px;padding:0 8px;
+  border-radius:8px;color:#333;font-size:14px;line-height:22px;cursor:pointer;
+  transition:background-color .15s;box-sizing:border-box;
+  font-family:"PingFang SC",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+.wbh-menu-item:hover,.wbh-menu-item.is-open{background:#f0f0f0}
+/* 官方 _itemActive::after：悬停行右侧的隐形「悬停桥」，保证鼠标横移到二级面板时不掉状态 */
+.wbh-menu-item.is-open::after{
+  content:"";position:absolute;left:100%;top:-4px;width:20px;
+  height:max(140px,100% + 96px);pointer-events:auto;z-index:1;
+}
+.wbh-menu-item.is-empty{color:rgba(26,26,26,.6);font-size:13px;cursor:default}
+.wbh-menu-item.is-empty:hover{background:transparent}
+.wbh-menu-icon{
+  flex:0 0 16px;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;
+  color:#666;
+}
+.wbh-menu-icon svg{width:16px;height:16px}
+.wbh-menu-avatar{
+  flex:0 0 16px;width:16px;height:16px;border-radius:50%;overflow:hidden;display:inline-flex;
+  align-items:center;justify-content:center;color:#fff;font-size:9px;line-height:1;font-weight:600;
+}
+.wbh-menu-avatar img{width:100%;height:100%;object-fit:cover;display:block}
+.wbh-menu-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wbh-menu-chevron{
+  flex:0 0 14px;width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;
+  color:rgba(26,26,26,.6);
+}
+.wbh-menu-chevron svg{width:14px;height:14px}
+
+/* ---------- 二级面板容器（官方 flyout 外层 wrapper） ---------- */
+.wbh-flyoutWrap{position:absolute;left:194px;z-index:1110}
+.wbh-flyout{
+  box-sizing:border-box;display:flex;flex-direction:column;padding:8px;border-radius:16px;
+  background:#fff;border:.5px solid rgba(0,0,0,.08);
+  box-shadow:0 4px 12px -4px rgba(0,0,0,.04),0 3px 6px -8px rgba(0,0,0,.04);
+  user-select:none;z-index:40;outline:none!important;
+  font-family:"PingFang SC",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+.wbh-flyout.is-expert{width:200px;gap:0}
+.wbh-flyout.is-skill{width:320px;gap:0;overflow:hidden}
+.wbh-flyout.is-connector{width:240px;gap:8px;max-height:392px}
+
+/* ---------- 搜索框（官方 _search_1mrhu：32px / p 0 8 / r8 / #f7f7f7） ---------- */
+.wbh-flyoutSearch{
+  flex:0 0 32px;display:flex;align-items:center;height:32px;padding:0 8px;gap:8px;
+  border-radius:8px;background:#f7f7f7;box-sizing:border-box;color:#666;
+}
+.wbh-flyoutSearch .wbh-flyoutSearchIcon{
+  flex:0 0 16px;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;
+  color:#666;
+}
+.wbh-flyoutSearch input{
+  flex:1 1 auto;min-width:0;padding:0;margin:0;border:none;outline:none;background:transparent;
+  height:22px;font-size:14px;line-height:22px;color:#333;
+  font-family:"PingFang SC",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+.wbh-flyoutSearch input::placeholder{color:rgba(0,0,0,.4)}
+
+/* ---------- 列表 / 行 ---------- */
+.wbh-flyoutBody{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.wbh-flyout.is-expert .wbh-flyoutList{max-height:168px}
+.wbh-flyout.is-skill .wbh-flyoutBody{min-height:160px;margin-top:8px}
+.wbh-flyoutList{
+  display:flex;flex-direction:column;gap:2px;min-height:0;overflow-y:auto;flex:1 1 auto;
+}
+.wbh-flyout.is-skill .wbh-flyoutList{flex:0 1 auto}
+.wbh-flyoutList::-webkit-scrollbar{width:4px}
+.wbh-flyoutList::-webkit-scrollbar-track{background:transparent}
+/* 官方：专家/连接器列表滚动条常显 #c1c1c1 */
+.wbh-flyout.is-expert .wbh-flyoutList::-webkit-scrollbar-thumb,
+.wbh-flyout.is-connector .wbh-flyoutList::-webkit-scrollbar-thumb{background:#c1c1c1;border-radius:2px}
+/* 官方：技能列表滚动条默认透明，面板 hover 才显示（_list_1mrhu_31） */
+.wbh-flyout.is-skill .wbh-flyoutList{scrollbar-width:thin;scrollbar-color:transparent transparent}
+.wbh-flyout.is-skill .wbh-flyoutList::-webkit-scrollbar-thumb{background:transparent;border-radius:12px;transition:background-color .2s}
+.wbh-flyout.is-skill:hover .wbh-flyoutList{scrollbar-color:#c1c1c1 transparent}
+.wbh-flyout.is-skill:hover .wbh-flyoutList::-webkit-scrollbar-thumb{background:#c1c1c1}
+.wbh-flyout.is-skill:hover .wbh-flyoutList::-webkit-scrollbar-thumb:hover{background:#a8a8a8}
+
+.wbh-flyoutRow{
+  display:flex;align-items:center;gap:8px;height:32px;flex-shrink:0;padding:0 8px;
+  border-radius:8px;cursor:pointer;box-sizing:border-box;
+}
+.wbh-flyoutRow:hover{background:#f0f0f0}
+.wbh-flyoutRow.is-disabled{cursor:not-allowed;opacity:.5}
+.wbh-flyoutIcon{
+  flex:0 0 16px;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;
+  overflow:hidden;
+}
+.wbh-flyoutIcon img{width:16px;height:16px;border-radius:3px;object-fit:cover;display:block}
+.wbh-flyoutIcon svg,.wbh-flyoutIcon .ec-avatar-sq-fallback{width:16px;height:16px;border-radius:3px}
+.wbh-flyoutIcon.is-round,.wbh-flyoutIcon.is-round img,.wbh-flyoutIcon.is-round svg,.wbh-flyoutIcon.is-round .ec-avatar-sq-fallback{border-radius:50%}
+.wbh-flyoutName{
+  flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:14px;line-height:22px;color:#333;
+}
+
+/* 技能行（官方 _item_fqu65：52px / p 4 8 / 标题 14-22 + 描述 12-20 / 图钉 16） */
+.wbh-flyoutRow.is-skill{height:52px;padding:4px 8px;align-items:flex-start;flex-shrink:0}
+.wbh-flyoutRow.is-skill .wbh-flyoutIcon{margin-top:3px}
+.wbh-flyoutRow.is-skill .wbh-flyoutIcon img,
+.wbh-flyoutRow.is-skill .wbh-flyoutIcon .ec-avatar-sq-fallback,
+.wbh-flyoutRow.is-skill .wbh-flyoutIcon svg{border-radius:6px}
+.wbh-flyoutRow.is-connector .wbh-flyoutIcon .ec-avatar-sq-fallback{border-radius:3px}
+.wbh-rowBody{
+  flex:1 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:center;height:42px;
+}
+.wbh-rowTitle{
+  display:flex;align-items:center;gap:6px;overflow:hidden;white-space:nowrap;
+  font-size:14px;line-height:22px;color:#333;
+}
+.wbh-rowTitleText{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.wbh-rowDesc{
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:12px;line-height:20px;color:rgba(0,0,0,.5);
+}
+/* 本机技能较多时给列表兜一个上限（官方样例只有 3 行，未触发该上限） */
+.wbh-flyout.is-skill .wbh-flyoutList{max-height:320px}
+
+/* ---------- 行尾：图钉 / 连接 / 开关 ---------- */
+.wbh-pinBtn{
+  flex:0 0 16px;width:16px;height:16px;align-self:center;display:inline-flex;align-items:center;
+  justify-content:center;cursor:pointer;background:transparent;border:none;padding:0;
+  color:rgba(26,26,26,.6);opacity:0;transition:opacity .15s,color .15s;
+}
+.wbh-flyoutRow:hover .wbh-pinBtn{opacity:1}
+.wbh-pinBtn.is-pinned{opacity:1;color:#333}
+.wbh-pinBtn:hover{color:#333}
+.wbh-pinBtn svg{width:16px;height:16px}
+.wbh-pinBtn .wbh-pinHover{display:none}
+.wbh-flyoutRow:hover .wbh-pinBtn.is-pinned .wbh-pinRest{display:none}
+.wbh-flyoutRow:hover .wbh-pinBtn.is-pinned .wbh-pinHover{display:inline-flex}
+
+/* 连接器行尾（官方 _suffixConnect_uk91x：图标 14 + 文案 12/22） */
+.wbh-linkAction{flex:0 0 auto;display:inline-flex;align-items:center;gap:4px;user-select:none}
+.wbh-linkAction svg{flex:0 0 14px;width:14px;height:14px;display:block;color:#666}
+.wbh-linkAction span{font-size:12px;line-height:22px;color:#666}
+.wbh-flyoutRow:hover .wbh-linkAction svg,.wbh-flyoutRow:hover .wbh-linkAction span{color:#333}
+.wbh-toggle{
+  flex:0 0 26px;width:26px;height:16px;border-radius:999px;background:rgba(0,0,0,.06);
+  border:none;padding:0;cursor:pointer;position:relative;transition:background .15s;
+  box-sizing:border-box;display:inline-flex;align-items:center;
+}
+.wbh-toggle i{
+  width:12px;height:12px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 2px rgba(0,0,0,.1);position:absolute;top:2px;left:2px;transition:left .15s;
+}
+.wbh-toggle.is-on{background:#00b96b}
+.wbh-toggle.is-on i{left:12px}
+.wbh-flyoutBusy{font-size:12px;line-height:22px;color:rgba(26,26,26,.6);flex:0 0 auto}
+
+/* ---------- 分隔线 + 底部项（官方 _divider/_footer/_footerItem/_actionRow） ---------- */
+.wbh-flyoutDivider{flex:0 0 1px;height:1px;background:#f2f2f2}
+.wbh-flyout.is-expert .wbh-flyoutDivider{margin:8px 0}
+.wbh-flyoutFooter{flex:0 0 auto;display:flex;flex-direction:column;gap:2px}
+.wbh-flyout.is-skill .wbh-flyoutFooter{margin-top:8px}
+.wbh-flyoutFooterItem{
+  display:flex;align-items:center;gap:8px;height:32px;padding:0 8px;border-radius:8px;
+  cursor:pointer;box-sizing:border-box;
+}
+.wbh-flyoutFooterItem:hover{background:#f0f0f0}
+.wbh-flyoutFooterIcon{
+  flex:0 0 16px;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;
+  color:#666;
+}
+.wbh-flyoutFooterIcon svg{width:16px;height:16px}
+.wbh-flyoutFooterLabel{
+  flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:14px;line-height:22px;color:#333;
+}
+
+/* ---------- 面板内的状态/提示（官方无对应物，保持最小侵入） ---------- */
+.wbh-flyoutState{padding:12px 8px;font-size:13px;line-height:20px;color:#666;text-align:center}

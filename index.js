@@ -445,25 +445,69 @@ export function apply(ctx, config = {}) {
    * ---------------------------------------------------------------- */
 
   /* ---------------------------------------------------------------- *
-   * 会话解析（修法 1）：槽组件拿不到 sessionId，因此宿主侧解析——
-   * 显式传入优先，否则取最近创建的会话。mount / summon 都经此解析。
+   * 会话解析：客户端槽组件由 DSH 框架注入 props.sessionId（session scope 标准
+   * props，已实测拿到真实会话 id），因此**客户端显式传值优先**。宿主没有「用户
+   * 正看哪个会话」的概念，只有客户端未上报时才退化为「最近创建的会话」兜底，并
+   * 用 sessionSource 把这次退化如实标出来（避免静默挂错会话）。
    * ---------------------------------------------------------------- */
   const resolveSessionId = explicit => {
     const given = String(explicit || '').trim()
-    if (given) return given
+    if (given) return { id: given, source: 'client' }
     try {
       const list = ctx.sessions?.list?.() ?? []
       let best = null
       for (const item of list) {
+        const id = item?.header?.id ?? item?.id ?? ''
         const createdAt = item?.header?.createdAt ?? 0
-        if (best === null || createdAt > (best?.header?.createdAt ?? 0)) best = item
+        if (!id) continue
+        if (best === null || createdAt > best.createdAt) best = { id, createdAt }
       }
-      return best?.header?.id ?? best?.id ?? ''
-    } catch { return '' }
+      if (best) return { id: best.id, source: 'recent-fallback' }
+    } catch { /* ignore */ }
+    return { id: '', source: 'none' }
   }
   const resolveAgent = sessionId => {
     if (!sessionId) return null
     try { return ctx.agents?.get?.(sessionId) ?? null } catch { return null }
+  }
+
+  /**
+   * 宿主侧「活工具表」视图：DSH 的 tools 服务按 scope chain 每次现算（无缓存），
+   * 所以运行时挂载的连接器工具立刻可见——不需要新会话、不需要模型轮次。
+   * 返回注册表里以 mcp__<serverName>__ 开头的工具名清单。
+   */
+  const liveToolView = serverName => {
+    const prefix = `mcp__${serverName}__`
+    try {
+      const tools = ctx.get?.('tools', false)
+      if (!tools || typeof tools.schemas !== 'function') {
+        return { available: false, reason: 'tools service unavailable', prefix, count: 0, names: [] }
+      }
+      const names = tools.schemas().map(schema => schema?.name).filter(name => typeof name === 'string')
+      const hit = names.filter(name => name.startsWith(prefix))
+      return {
+        available: true, prefix,
+        total: names.length,
+        count: hit.length,
+        names: hit,
+        // 超长名会被 mcp-client 截断并追加 12 位哈希；给出原始名以便核对
+        sample: hit.slice(0, 8),
+      }
+    } catch (error) {
+      return { available: false, reason: String(error?.message || error), prefix, count: 0, names: [] }
+    }
+  }
+
+  // 只读：某个已安装连接器在本进程注册表中的实际工具（配合 /connectors/tools 的
+  // 上游清单，一次调用即可闭合「上游 N 个 → 宿主 N 个」）。
+  const liveToolsRoute = (res, url) => {
+    const entryName = url.searchParams.get('name') || ''
+    if (!/^[\w.-]+$/.test(entryName)) { json(res, 400, { error: 'invalid name' }); return }
+    const registry = loadJson(P.registry, { version: 1, installed: {} })
+    const record = registry.installed?.[`connector/${entryName}`]
+    if (!record) { json(res, 404, { error: `connector not installed locally: ${entryName}` }); return }
+    const serverName = record.serverName || entryName
+    json(res, 200, { ok: true, connector: entryName, serverName, enabled: Boolean(record.enabled), live: liveToolView(serverName) })
   }
 
   const summonExpert = async (invocation, personaStore) => {
@@ -900,10 +944,19 @@ export function apply(ctx, config = {}) {
           names: tools.map(t => t.name),
           labelled: tools.map(t => ({ name: t.name, description: String(t.description || '').slice(0, 120) })),
           namespace: `mcp__${record.serverName || entryName}__`,
+          // 宿主 registry 侧同一份数据的实测视图（证明这些工具真的注册进了本进程，
+          // 而不只是上游网关能枚举出来）。零模型轮次：tools 服务每次调用现算。
+          live: liveToolView(record.serverName || entryName),
         })
       } catch (error) {
         json(res, 502, { error: `tool listing failed: ${String(error?.message || error)}` })
       }
+      return true
+    }
+
+    // 只读：连接器工具在**宿主进程注册表**里的实测视图（零模型轮次）。
+    if (route === 'GET /connectors/live-tools') {
+      liveToolsRoute(res, url)
       return true
     }
 
@@ -1116,12 +1169,13 @@ export function apply(ctx, config = {}) {
     }
 
     if (route === 'GET /mounted') {
-      const sessionId = resolveSessionId(url.searchParams.get('sessionId'))
+      const resolvedSession = resolveSessionId(url.searchParams.get('sessionId'))
+      const sessionId = resolvedSession.id
       const store = readMounts(P)
       const keys = Array.isArray(store.sessions[sessionId]) ? store.sessions[sessionId] : []
       const registry = loadJson(P.registry, { version: 1, installed: {} })
       const entries = keys.map(key => registry.installed?.[key]).filter(Boolean)
-      json(res, 200, { sessionId, keys, entries })
+      json(res, 200, { sessionId, sessionSource: resolvedSession.source, keys, entries })
       return true
     }
 
@@ -1133,14 +1187,15 @@ export function apply(ctx, config = {}) {
       if (!['expert', 'skill', 'connector'].includes(kind) || !/^[\w.-]+$/.test(entryName)) {
         json(res, 400, { error: 'invalid kind or name' }); return true
       }
-      // 槽组件拿不到 sessionId：这里按「显式优先，否则最近会话」解析。
-      const resolved = resolveSessionId(sessionId)
+      // 客户端 props.sessionId 优先；宿主只在缺失时兜底取最近会话（并标注来源）。
+      const resolvedSession = resolveSessionId(sessionId)
+      const resolved = resolvedSession.id
       if (!resolved) { json(res, 409, { error: 'no active session' }); return true }
       const key = `${kind}/${entryName}`
       const list = route === 'POST /mount'
         ? mountEntry(P, resolved, key)
         : unmountEntry(P, resolved, key)
-      json(res, 200, { ok: true, sessionId: resolved, keys: list })
+      json(res, 200, { ok: true, sessionId: resolved, sessionSource: resolvedSession.source, keys: list })
       return true
     }
 
@@ -1150,7 +1205,8 @@ export function apply(ctx, config = {}) {
       const entryName = String(body.name || '')
       const task = String(body.task || '')
       if (!/^[\w.-]+$/.test(entryName)) { json(res, 400, { error: 'invalid name' }); return true }
-      const resolved = resolveSessionId(body.sessionId)
+      const resolvedSession = resolveSessionId(body.sessionId)
+      const resolved = resolvedSession.id
       const agent = resolveAgent(resolved)
       if (!agent) { json(res, 409, { error: 'no active session' }); return true }
       const registry = loadJson(P.registry, { version: 1, installed: {} })
@@ -1175,7 +1231,7 @@ export function apply(ctx, config = {}) {
           },
           signal: controller.signal,
         })
-        json(res, 200, { ok: true, childId: started.childId, sessionId: resolved })
+        json(res, 200, { ok: true, childId: started.childId, sessionId: resolved, sessionSource: resolvedSession.source })
       } catch (error) {
         json(res, 502, { error: String(error?.message || error) })
       }
@@ -1184,8 +1240,13 @@ export function apply(ctx, config = {}) {
 
     // 当前解析到的会话（供界面显示/排障）
     if (route === 'GET /active-session') {
-      const resolved = resolveSessionId('')
-      json(res, 200, { ok: true, sessionId: resolved, hasAgent: Boolean(resolveAgent(resolved)) })
+      const explicit = url.searchParams.get('sessionId')
+      const resolvedSession = resolveSessionId(explicit)
+      const resolved = resolvedSession.id
+      json(res, 200, {
+        ok: true, sessionId: resolved, sessionSource: resolvedSession.source,
+        hasAgent: Boolean(resolveAgent(resolved)),
+      })
       return true
     }
 

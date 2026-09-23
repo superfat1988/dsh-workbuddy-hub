@@ -21,8 +21,33 @@ function runCommand(sessionId, line) {
     .catch(error => ({ ok: false, error: String(error?.message || error) }))
 }
 
+/**
+ * 会话 id 的官方来源（两种 scope 各走各的官方通道）：
+ *  - session scope 槽（conversation.input.left 等）：框架标准 props.sessionId，直接可用
+ *  - root scope 槽（main / sidebar.panellist）：没有 sessionId prop，用官方全局标准
+ *    prop `useSessions` 选「主视图」会话（retainedBy.mainView > 0），与 DSH 自带的
+ *    CordisPanel 用的是同一条选择式（packages/extensions/ui-cordis/src/client/CordisPanel.tsx）。
+ */
+const MAIN_SESSION_SELECTOR = state => {
+  const byId = state?.byId ?? {}
+  const current = state?.current
+  const mainOf = id => (byId[id]?.retainedBy?.mainView ?? 0) > 0
+  if (current && mainOf(current)) return current
+  return Object.values(byId).find(session => (session?.retainedBy?.mainView ?? 0) > 0)?.id
+}
+
+function HubPageWithSessions({ useSessions, sessionId }) {
+  const mainSessionId = useSessions(MAIN_SESSION_SELECTOR)
+  return <MarketPage sessionId={sessionId || mainSessionId} runCommand={runCommand} />
+}
+
 function HubPage(props) {
-  return <MarketPage sessionId={props?.sessionId} runCommand={runCommand} />
+  const useSessions = props?.useSessions
+  // 规则：hook 不能条件调用——只有在官方确实下发了 useSessions 时才渲染订阅子树。
+  if (typeof useSessions !== 'function') {
+    return <MarketPage sessionId={props?.sessionId} runCommand={runCommand} />
+  }
+  return <HubPageWithSessions useSessions={useSessions} sessionId={props?.sessionId} />
 }
 
 function PanelIcon() {
