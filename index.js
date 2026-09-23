@@ -1466,6 +1466,29 @@ export function apply(ctx, config = {}) {
       return true
     }
 
+    // 验收用：向某会话发一条用户消息（走官方 sessionController.prompt），
+    // 之后读会话日志的 system/message 与 assistant/message 验证人设与回复。
+    if (route === 'POST /expert-ask') {
+      try {
+        const body = JSON.parse((await readBody(req)) || '{}')
+        const sessionId = String(body.sessionId || '').trim()
+        const text = String(body.text || '').trim()
+        if (!sessionId || !text) { json(res, 400, { ok: false, error: 'missing sessionId/text' }); return true }
+        const sc = ctx.get?.('sessionController') ?? ctx.sessionController
+        if (!sc || typeof sc.prompt !== 'function') { json(res, 503, { ok: false, error: 'sessionController unavailable' }); return true }
+        const result = await sc.prompt({
+          requestId: `wbh-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          sessionId,
+          mode: 'queue',
+          content: [{ type: 'text', text }],
+        }, new AbortController().signal)
+        json(res, 200, { ok: true, accepted: result?.accepted === true })
+      } catch (error) {
+        json(res, 500, { ok: false, error: String(error?.message || error) })
+      }
+      return true
+    }
+
     // 排障/验收：用 agent preset 直接建一个会话（等价于官方「新会话 + 选 preset」），
     // 返回会话 id 与 assemble 出的 deployment persona 片段，用来确认 preset 真的
     // 把 agent 的人设换成了专家（无需真实模型回合）。
@@ -1473,11 +1496,14 @@ export function apply(ctx, config = {}) {
       try {
         const body = JSON.parse((await readBody(req)) || '{}')
         const presetId = String(body.presetId || '').trim()
-        if (!/^[\w.-]+$/.test(presetId)) { json(res, 400, { ok: false, error: 'invalid presetId' }); return true }
+        if (presetId && !/^[\w.-]+$/.test(presetId)) { json(res, 400, { ok: false, error: 'invalid presetId' }); return true }
         const sc = ctx.get?.('sessionController') ?? ctx.sessionController
         if (!sc || typeof sc.create !== 'function') { json(res, 503, { ok: false, error: 'sessionController unavailable' }); return true }
         const workspaceId = body.workspaceId ? String(body.workspaceId) : undefined
-        const created = await sc.create({ agentPreset: presetId, ...(workspaceId ? { workspaceId } : {}) })
+        const created = await sc.create({
+          ...(presetId ? { agentPreset: presetId } : {}),
+          ...(workspaceId ? { workspaceId } : {}),
+        })
         json(res, 200, { ok: true, sessionId: created.sessionId, agentPreset: created.agentPreset })
       } catch (error) {
         json(res, 500, { ok: false, error: String(error?.message || error) })
