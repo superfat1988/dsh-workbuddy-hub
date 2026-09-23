@@ -181,6 +181,10 @@ export default function Catalogue({
   const [pinned, setPinned] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem('wbh-pinned') || '[]')) } catch { return new Set() }
   })
+  // 置顶条目连数据一起存，保证它会「永远显示」（即使它不在当前列表来源里）
+  const [pinnedEntries, setPinnedEntries] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('wbh-pinned-entries') || '[]') } catch { return [] }
+  })
   const scrollRef = useRef(null)
 
   const PAGE_SIZE = 60
@@ -249,6 +253,10 @@ export default function Catalogue({
   const connectorAction = useCallback(async entry => {
     const key = `${entry.kind}/${entry.name}`
     setBusy(key); setNotice('')
+    // 浏览器只允许在「用户手势」的同步阶段开窗；await 之后再 window.open 会被拦截。
+    // 因此这里先同步开一个空窗，拿到授权链接后再把地址写进去。
+    let authWindow = null
+    if (!isBound(entry)) { try { authWindow = window.open('about:blank', '_blank') } catch { authWindow = null } }
     try {
       if (isBound(entry)) {
         const r = await hub.connectorUnbind(entry.name)
@@ -257,9 +265,11 @@ export default function Catalogue({
       } else {
         const r = await hub.connectorAuthStart(entry.name)
         if (r?.ok && r.url) {
-          window.open(r.url, '_blank', 'noopener')
+          if (authWindow && !authWindow.closed) authWindow.location.href = r.url
+          else window.location.href = r.url          // 被拦截时退化为当前页跳转
           setNotice(`已打开「${entry.displayName}」的授权页，完成后点连接器行刷新状态`)
         } else {
+          try { authWindow?.close() } catch { /* 忽略 */ }
           setNotice(`连接「${entry.displayName}」失败：${r?.message || '官方未返回授权链接'}`)
         }
       }
@@ -267,6 +277,7 @@ export default function Catalogue({
       setBound(fresh.map(x => x.name))
       await onRefresh?.()
     } catch (error) {
+      try { authWindow?.close() } catch { /* 忽略 */ }
       setNotice(`操作失败：${String(error?.message || error)}`)
     } finally { setBusy('') }
   }, [isBound, onRefresh])
@@ -286,8 +297,16 @@ export default function Catalogue({
     const key = `${entry.kind}/${entry.name}`
     setPinned(prev => {
       const next = new Set(prev)
-      if (next.has(key)) next.delete(key); else next.add(key)
+      const on = !next.has(key)
+      if (on) next.add(key); else next.delete(key)
       try { localStorage.setItem('wbh-pinned', JSON.stringify([...next])) } catch { /* 忽略 */ }
+      setPinnedEntries(list => {
+        const nextList = on
+          ? [...list.filter(x => `${x.kind}/${x.name}` !== key), { kind: entry.kind, name: entry.name, displayName: entry.displayName, description: entry.description || '', icon: entry.icon || '' }]
+          : list.filter(x => `${x.kind}/${x.name}` !== key)
+        try { localStorage.setItem('wbh-pinned-entries', JSON.stringify(nextList)) } catch { /* 忽略 */ }
+        return nextList
+      })
       return next
     })
   }, [])
@@ -610,7 +629,9 @@ export default function Catalogue({
       : kind === 'skill'
         ? localSkills
         : visible
-    const visibleRows = [...baseRows].sort((a, b) => {
+    const pinnedOfKind = pinnedEntries.filter(x => x.kind === kind)
+    const merged = [...pinnedOfKind, ...baseRows.filter(b => !pinnedOfKind.some(p => p.name === b.name && p.kind === b.kind))]
+    const visibleRows = [...merged].sort((a, b) => {
       const pa = pinned.has(`${a.kind}/${a.name}`) ? 0 : 1
       const pb = pinned.has(`${b.kind}/${b.name}`) ? 0 : 1
       return pa - pb
