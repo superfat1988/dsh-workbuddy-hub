@@ -216,9 +216,22 @@ export function createConnectorManager(ctx) {
     }
 
     const { createHash } = await import('node:crypto')
-    const serverName = serverNameFor(connectorName, createHash('sha256').update(key).digest('hex'))
-    const config = buildMcpConfig(verdict.server, serverName, resolved)
-    const id = await ctx.loader.create({ name: MCP_CLIENT_PACKAGE, config })
+    const fallback = serverNameFor(connectorName, createHash('sha256').update(key).digest('hex'))
+    // 与 DSH 原生 mcp-client 保持一致：优先采用连接器自己的 MCP 服务名（官方
+    // ide_server_name，也就是 mcp.json 里 mcpServers 的键），这样暴露给模型的工具
+    // 命名空间就是 mcp__<name>__<tool>，与原生配置的服务器完全相同；只有该名字非法
+    // 或已被其它 mcp-client 实例占用时，才退回带哈希的内部名。
+    const declared = Object.keys((rawMcp && rawMcp.mcpServers) || {})
+    const preferred = declared.find(n => n === connectorName && /^[A-Za-z0-9._-]{1,64}$/.test(n))
+    let serverName = preferred ?? fallback
+    let id
+    try {
+      id = await ctx.loader.create({ name: MCP_CLIENT_PACKAGE, config: buildMcpConfig(verdict.server, serverName, resolved) })
+    } catch (error) {
+      if (serverName === fallback) throw error
+      serverName = fallback
+      id = await ctx.loader.create({ name: MCP_CLIENT_PACKAGE, config: buildMcpConfig(verdict.server, serverName, resolved) })
+    }
     const entry = ctx.loader.resolve(id)
     if (entry?.fiber === undefined) {
       ctx.loader.remove(id)
