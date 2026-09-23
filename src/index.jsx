@@ -159,6 +159,7 @@ const plugin = {
     // 排障用：可在控制台直接验证「打开会话 / 新建对话」这两条桥是否可用
     // （vConsole 里敲 __wbh.openSessionById('session-…')）
     try {
+      // 只暴露只读/导航类排查口；归档这类会改状态的入口不随插件发布
       window.__wbh = { openSessionById, startNewSession, composerSession }
     } catch { /* 非浏览器环境忽略 */ }
     ctx.slots.inject('main', () => reg('main', { name: 'main', key: 'workbuddy-hub' }, HubPage))

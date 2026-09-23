@@ -3453,14 +3453,18 @@ function MarketPage({ sessionId, runCommand: runCommand2 }) {
           setNotice(`\u5DF2\u8FDE\u63A5\u300C${entry.displayName}\u300D\uFF08\u5DE5\u5177\u547D\u540D\u7A7A\u95F4 ${r.serverName}\uFF09\uFF0C\u4E0B\u4E00\u6B21\u6A21\u578B\u6B65\u9AA4\u8D77\u53EF\u7528\u3002`);
         }
       } else if (entry.kind === "expert") {
-        let target = sessionId || composerSession();
-        if (!target) {
-          startNewSession();
-          for (let i = 0; i < 20 && !target; i++) {
-            await new Promise((resolve) => setTimeout(resolve, 250));
-            target = composerSession();
+        const before = composerSession() || sessionId || "";
+        startNewSession();
+        let target = "";
+        for (let i = 0; i < 24; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          const now = composerSession();
+          if (now && now !== before) {
+            target = now;
+            break;
           }
         }
+        if (!target) target = composerSession() || sessionId || "";
         if (!target) {
           setNotice("\u53EC\u5524\u5931\u8D25\uFF1A\u6CA1\u6709\u53EF\u7528\u4F1A\u8BDD\uFF0C\u4E14\u65B0\u5EFA\u5BF9\u8BDD\u672A\u5C31\u7EEA");
           return;

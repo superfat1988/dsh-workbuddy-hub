@@ -52,19 +52,26 @@ export default function MarketPage({ sessionId, runCommand }) {
         // 官方：点「召唤」= 新建对话并选中该专家（实测会跳到 /app 并给出专家 chip）。
         // DSH 里对应「专家的会话」——宿主为该专家建一个带人设的 durable 子会话，
         // 再把它打开到主视图，用户直接就在专家的对话里。
-        // 官方召唤时若还没有对话会先开一个新对话；宿主也需要一个真实会话才能建专家会话。
-        let target = sessionId || composerSession()
-        if (!target) {
-          startNewSession()
-          for (let i = 0; i < 20 && !target; i++) {
-            await new Promise(resolve => setTimeout(resolve, 250))
-            target = composerSession()
-          }
+        // 官方语义：召唤 = **先新建一个对话**，再把这位专家放进那个新对话。
+        // 关键点：startSession() 之后 composerSession() 会有一小段时间仍返回旧会话，
+        // 若此时就发 summon，专家会落到**上一个**会话（用户看到的「专家加载到当前会话、
+        // 当前会话还自动发了指令」就是这么来的）。所以这里等会话 id 真正换掉再继续。
+        const before = composerSession() || sessionId || ''
+        startNewSession()
+        let target = ''
+        for (let i = 0; i < 24; i++) {
+          await new Promise(resolve => setTimeout(resolve, 250))
+          const now = composerSession()
+          if (now && now !== before) { target = now; break }
         }
+        // 没等到新 id（当前会话本就是空会话、DSH 直接复用它）就落到当前会话
+        if (!target) target = composerSession() || sessionId || ''
         if (!target) { setNotice('召唤失败：没有可用会话，且新建对话未就绪'); return }
         await hub.mount(target, entry.kind, entry.name)
         const r = await hub.summon(entry.name, task, target)
         if (!r.ok) { setNotice(`召唤失败：${r.error}`); return }
+        // 专家的会话就是宿主为该专家建的 durable 会话（人设在其 composition 里），
+        // 把它打开到主视图 —— 用户看到的就是「新对话里就是这位专家」。
         const opened = openSessionById(r.childId)
         setNotice(opened
           ? `已召唤「${entry.displayName}」，已在新对话中打开`
