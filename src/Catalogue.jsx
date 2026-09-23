@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { hub, onCatalogChange, addSelection, openMarket, onMarketRequest } from './hub.js'
+import { hub, onCatalogChange, addSelection, openMarket, onMarketRequest, consumePendingMarket } from './hub.js'
 import { insertPromptIntoComposer } from './insert-prompt.js'
 import { WbIcon } from './icons.js'
 import './official-skill.css'
@@ -228,6 +228,14 @@ export default function Catalogue({
   }, [kind, query, category])
 
   useEffect(() => { setPage(1); void load(1, true) }, [load])
+  // 面板刚被切过来时，请求是在本组件挂载前发出的：挂载后补消费一次。
+  useEffect(() => {
+    const pending = consumePendingMarket()
+    if (!pending) return
+    if (pending.kind) onKind?.(pending.kind)
+    setView(pending.view || 'market')
+  }, [onKind])
+
   useEffect(() => onMarketRequest(req => {
     if (req?.kind) onKind?.(req.kind)
     setView(req?.view || 'market')

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { hub, addSelection, onCatalogChange } from './hub.js'
+import { hub, addSelection, onCatalogChange, onMarketRequest } from './hub.js'
 import { WbIcon } from './icons.js'
 import Catalogue from './Catalogue.jsx'
 import SummonModal from './SummonModal.jsx'

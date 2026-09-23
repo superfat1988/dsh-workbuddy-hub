@@ -2160,22 +2160,36 @@ var _marketListeners = /* @__PURE__ */ new Set();
 function setMarketNavigator(fn) {
   _marketNavigator = fn;
 }
-function onMarketRequest2(fn) {
+function onMarketRequest(fn) {
   _marketListeners.add(fn);
   return () => {
     _marketListeners.delete(fn);
   };
 }
+var _pendingMarket = null;
+function consumePendingMarket() {
+  const r = _pendingMarket;
+  _pendingMarket = null;
+  return r;
+}
 function openMarket(request) {
+  _pendingMarket = request;
   try {
     _marketNavigator?.();
   } catch {
   }
-  for (const fn of _marketListeners) {
-    try {
-      fn(request);
-    } catch {
+  const emit = () => {
+    for (const fn of _marketListeners) {
+      try {
+        fn(request);
+      } catch {
+      }
     }
+  };
+  emit();
+  try {
+    setTimeout(emit, 0);
+  } catch {
   }
 }
 var _selected = [];
@@ -2657,7 +2671,13 @@ function Catalogue({
     setPage(1);
     void load(1, true);
   }, [load]);
-  (0, import_react2.useEffect)(() => onMarketRequest2((req) => {
+  (0, import_react2.useEffect)(() => {
+    const pending = consumePendingMarket();
+    if (!pending) return;
+    if (pending.kind) onKind?.(pending.kind);
+    setView(pending.view || "market");
+  }, [onKind]);
+  (0, import_react2.useEffect)(() => onMarketRequest((req) => {
     if (req?.kind) onKind?.(req.kind);
     setView(req?.view || "market");
   }), [onKind]);

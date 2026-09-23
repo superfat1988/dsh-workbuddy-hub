@@ -10,9 +10,16 @@ let _marketNavigator = null
 const _marketListeners = new Set()
 export function setMarketNavigator(fn) { _marketNavigator = fn }
 export function onMarketRequest(fn) { _marketListeners.add(fn); return () => { _marketListeners.delete(fn) } }
+let _pendingMarket = null
+export function consumePendingMarket() { const r = _pendingMarket; _pendingMarket = null; return r }
 export function openMarket(request) {
+  // 主面板切换会让市场页「随后」才挂载，此刻它还没订阅，所以先存起来；
+  // 挂载后 consumePendingMarket() 取用，并在下一个任务再广播一次给已挂载的订阅者。
+  _pendingMarket = request
   try { _marketNavigator?.() } catch { /* 导航不可用时仍发出请求 */ }
-  for (const fn of _marketListeners) { try { fn(request) } catch { /* 忽略单个订阅者 */ } }
+  const emit = () => { for (const fn of _marketListeners) { try { fn(request) } catch { /* 忽略单个订阅者 */ } } }
+  emit()
+  try { setTimeout(emit, 0) } catch { /* 无定时器环境 */ }
 }
 
 // 已选条目（专家/技能/连接器）：composer 的 chip 直接读这份客户端状态，

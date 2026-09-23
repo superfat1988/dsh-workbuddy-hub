@@ -43,13 +43,14 @@
   ],
   "scripts": {
     "build:client": "node scripts/build.mjs",
-    "test": "node --check index.js && node --check client.js && node --check mcp-manager.js && node --check expert-persona.js && node test-mcp-manager.mjs && node test-expert-persona.mjs && node test-connector-cli.mjs && node test-summon.mjs && node test-client.mjs",
+    "test": "node --check index.js && node --check client.js && node --check mcp-manager.js && node --check expert-persona.js && node test-mcp-manager.mjs && node test-expert-persona.mjs && node test-connector-cli.mjs && node test-summon.mjs && node test-client.mjs && node test-render.mjs",
     "pack:check": "npm pack --dry-run"
   },
   "license": "MIT",
   "devDependencies": {
     "esbuild": "^0.28.2",
-    "react": "^18.2.0"
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
   },
   "dependencies": {
     "qrcode": "^1.5.4"
