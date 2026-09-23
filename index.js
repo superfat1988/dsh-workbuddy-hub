@@ -472,6 +472,22 @@ export function apply(ctx, config = {}) {
   }
 
   /**
+   * 召唤用的父 agent：优先目标会话自己的 agent；若该会话还没有活跃 agent
+   * （刚建的空会话、用户还没发过消息），退化为最近活跃的 agent —— 否则召唤会
+   * 直接 409，用户看到的就是「点了没反应」。返回来源以便如实告知。
+   */
+  const resolveSummonParent = sessionId => {
+    const own = resolveAgent(sessionId)
+    if (own) return { agent: own, source: 'session' }
+    try {
+      const live = ctx.agents?.list?.() ?? []
+      const last = live.length > 0 ? live[live.length - 1] : null
+      if (last) return { agent: last, source: 'recent-agent' }
+    } catch { /* ignore */ }
+    return { agent: null, source: 'none' }
+  }
+
+  /**
    * 宿主侧「活工具表」视图：DSH 的 tools 服务按 scope chain 每次现算（无缓存），
    * 所以运行时挂载的连接器工具立刻可见——不需要新会话、不需要模型轮次。
    * 返回注册表里以 mcp__<serverName>__ 开头的工具名清单。
@@ -1260,8 +1276,16 @@ export function apply(ctx, config = {}) {
       if (!/^[\w.-]+$/.test(entryName)) { json(res, 400, { error: 'invalid name' }); return true }
       const resolvedSession = resolveSessionId(body.sessionId)
       const resolved = resolvedSession.id
-      const agent = resolveAgent(resolved)
-      if (!agent) { json(res, 409, { error: 'no active session' }); return true }
+      if (!resolved) { json(res, 409, { error: 'no session to summon into' }); return true }
+      const parent = resolveSummonParent(resolved)
+      const agent = parent.agent
+      if (!agent) {
+        json(res, 409, {
+          error: '该会话还没有活跃 agent（先在会话里发一条消息），因此无法为专家建会话',
+          sessionId: resolved, parentSource: parent.source,
+        })
+        return true
+      }
       const registry = loadJson(P.registry, { version: 1, installed: {} })
       const record = registry.installed?.[`expert/${entryName}`]
       const persona = readExpertPersona(P.experts, entryName)
@@ -1284,7 +1308,10 @@ export function apply(ctx, config = {}) {
           },
           signal: controller.signal,
         })
-        json(res, 200, { ok: true, childId: started.childId, sessionId: resolved, sessionSource: resolvedSession.source })
+        json(res, 200, {
+          ok: true, childId: started.childId, sessionId: resolved,
+          sessionSource: resolvedSession.source, parentSource: parent.source,
+        })
       } catch (error) {
         json(res, 502, { error: String(error?.message || error) })
       }

@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { hub, addSelection } from './hub.js'
+import { hub, addSelection, openSessionById, startNewSession, composerSession } from './hub.js'
+import { insertPromptIntoComposer } from './insert-prompt.js'
 import { WbIcon } from './icons.js'
 import Catalogue from './Catalogue.jsx'
 import SummonModal from './SummonModal.jsx'
 import ConnectorAuthModal from './ConnectorAuthModal.jsx'
-import { insertPromptIntoComposer } from './insert-prompt.js'
 import './official.css'
 import './app.css'
 
@@ -49,11 +49,26 @@ export default function MarketPage({ sessionId, runCommand }) {
           setNotice(`已连接「${entry.displayName}」（工具命名空间 ${r.serverName}），下一次模型步骤起可用。`)
         }
       } else if (entry.kind === 'expert') {
-        // 宿主侧解析会话，客户端不需要 sessionId
-        await hub.mount(sessionId, entry.kind, entry.name)
-        const r = await hub.summon(entry.name, task, sessionId)
-        setNotice(r.ok ? `已召唤「${entry.displayName}」：子会话 ${r.childId}`
-                       : `已挂载，但召唤失败：${r.error}`)
+        // 官方：点「召唤」= 新建对话并选中该专家（实测会跳到 /app 并给出专家 chip）。
+        // DSH 里对应「专家的会话」——宿主为该专家建一个带人设的 durable 子会话，
+        // 再把它打开到主视图，用户直接就在专家的对话里。
+        // 官方召唤时若还没有对话会先开一个新对话；宿主也需要一个真实会话才能建专家会话。
+        let target = sessionId || composerSession()
+        if (!target) {
+          startNewSession()
+          for (let i = 0; i < 20 && !target; i++) {
+            await new Promise(resolve => setTimeout(resolve, 250))
+            target = composerSession()
+          }
+        }
+        if (!target) { setNotice('召唤失败：没有可用会话，且新建对话未就绪'); return }
+        await hub.mount(target, entry.kind, entry.name)
+        const r = await hub.summon(entry.name, task, target)
+        if (!r.ok) { setNotice(`召唤失败：${r.error}`); return }
+        const opened = openSessionById(r.childId)
+        setNotice(opened
+          ? `已召唤「${entry.displayName}」，已在新对话中打开`
+          : `已召唤「${entry.displayName}」（会话 ${r.childId}；导航不可用，未能自动打开）`)
       } else {
         await hub.mount(sessionId, entry.kind, entry.name)
         addSelection(entry)
@@ -71,7 +86,11 @@ export default function MarketPage({ sessionId, runCommand }) {
     if (entry.kind === 'expert') setSummoning(entry)
     else void attach(entry)
   }, [attach])
-  const onAction = useCallback(entry => { void attach(entry) }, [attach])
+  // 专家卡片右上角的「召唤」：官方即新建对话并选中该专家（打开模态的是点卡片本体）
+  const onAction = useCallback(entry => {
+    if (entry.kind === 'expert') { setSummoning(null); void attach(entry) }
+    else void attach(entry)
+  }, [attach])
 
   const loggedIn = auth?.configured === true
   return (
@@ -89,7 +108,8 @@ export default function MarketPage({ sessionId, runCommand }) {
           onQuickPrompt={text => {
             setSummoning(null)
             void attach(summoning, text)
-            insertPromptIntoComposer(text)
+            // 官方把示例预填进新对话的输入框；新会话的 composer 挂载需要一点时间
+            setTimeout(() => { try { insertPromptIntoComposer(text) } catch { /* 忽略 */ } }, 600)
           }} />
       )}
       {authorising && (

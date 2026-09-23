@@ -97,10 +97,10 @@
 
 /* --- 官方弹窗卡片宽度 --- */
 .ec-modal-overlay{z-index:6300;padding:20px}
-.ec-modal-card{width:640px;max-width:calc(100vw - 40px);max-height:640px}
+.ec-modal-card{width:640px;max-width:calc(100vw - 40px);max-height:640px;box-sizing:border-box}
 .ec-modal-card .ec-modal-quick-prompt-btn{font-size:14px;line-height:22px;background:#f7f7f7;min-height:48px;height:48px;gap:16px;padding:12px 16px;border:none;box-sizing:border-box}
 .ec-modal-card .ec-modal-quick-prompt-btn .ec-modal-quick-prompt-text{font-size:14px;line-height:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ec-modal-card.is-expert-view .ec-modal-header-summon-btn{min-width:124px;height:32px}
+.ec-modal-card.is-expert-view .ec-modal-header-summon-btn{min-width:124px;height:32px;padding:0 24px}
 .ec-modal-card.is-expert-view .ec-modal-close{padding:0}
 
 /* --- 过滤行 / 视图切换 / 添加技能菜单 / 我安装的（官方入口的落地样式）--- */
@@ -183,3 +183,16 @@
 .wbh-sideEntryItem:hover{background:#f0f0f0}
 .wbh-sideEntryIcon{flex:0 0 16px;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;color:rgba(0,0,0,.7)}
 .wbh-sideEntryLabel{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* --- 三个二级界面按官方补齐的少量规则（官方产物里缺 base 规则的部分）--- */
+/* 官方 .ec-modal-scroll-fade 基线：638x44 绝对定位 + 白→透明渐变，滚动时才显形 */
+.ec-modal-card .ec-modal-scroll-fade{position:absolute;left:0;right:0;height:44px;pointer-events:none;opacity:0;z-index:1;transition:opacity .15s ease}
+.ec-modal-card .ec-modal-scroll-fade-top{top:0;background:linear-gradient(180deg,#fff 0,rgba(255,255,255,0) 100%)}
+.ec-modal-card .ec-modal-scroll-fade-bottom{bottom:0;background:linear-gradient(0deg,#fff 0,rgba(255,255,255,0) 100%)}
+/* 连接器详情：官方实测（--connected 态）flow 头像仍是 68x68、正文区无左右内边距 */
+.connector-detail-modal .connector-detail-flow-avatar{width:68px;height:68px}
+.connector-detail-modal .connector-detail-modal-body{padding:48px 0 24px}
+.connector-detail-modal .connector-detail-close{padding:0}
+.connector-detail-modal .connector-detail-flow{gap:12px}
+/* 技能二级页面的 subpage 顶栏与主顶栏同高（官方实测 56） */
+.skills-view .ec-topbar--subpage{height:56px;min-height:56px}

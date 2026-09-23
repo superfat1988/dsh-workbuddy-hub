@@ -161,7 +161,7 @@ function ConnectorCard({ entry, busy, onDetail, onAction, onConnectorAction, bou
   const enabled = bound ? bound.includes(entry.name) : Boolean(entry._enabled || entry.isConnected)
   const dot = busy === key ? 'connecting' : enabled ? 'connected' : ''
   return (
-    <div className={`connector-card${enabled ? ' connector-card--installed' : ''}`} role="button" tabIndex={0}
+    <div className={`connector-card ${enabled ? 'connector-card--installed' : 'connector-card--available'}`} role="button" tabIndex={0}
       onClick={() => onDetail?.(entry)}
       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onDetail?.(entry) } }}>
       <div className="connector-card-icon">
@@ -288,12 +288,19 @@ export default function Catalogue({
   useEffect(() => { if (page > 1) void load(page, false) }, [page, load])
 
   const visible = useMemo(() => {
+    // 连接器：官方把已安装/已绑定的排在最前（实测 .connector-card--installed 是第 0 张），
+    // 其余保持服务端顺序（stable sort）。
+    if (kind === 'connector') {
+      if (bound.length === 0) return rows
+      const rank = x => (bound.includes(x.name) ? 0 : 1)
+      return [...rows].sort((a, b) => rank(a) - rank(b))
+    }
     if (kind !== 'expert' || sort === 'reco') return rows
     const copy = [...rows]
     if (sort === 'hot') copy.sort((a, b) => numeric(b.useCount) - numeric(a.useCount))
     else if (sort === 'new') copy.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
     return copy
-  }, [rows, sort, kind])
+  }, [rows, sort, kind, bound])
 
   // 连接器：已绑定=解绑；未绑定=发起官方 OAuth 并打开授权页；失败明确报错
   // 只读导出：生成可粘贴的原生 mcp-client overlay 行（不写 profile）
@@ -593,15 +600,20 @@ export default function Catalogue({
     </div>
   )
 
+  // 官方技能二级页面：.skills-view--detail 顶层，自带 ec-topbar--subpage（返回按钮），
+  // 其下 .skill-detail-view = header（名称 + 安装 + 描述）+ content-box（toolbar + preview/meta）。
   const skillDetailView = detail && detail.kind === 'skill' ? (
     <div className="skills-view skills-view--detail">
+      <header className="workbuddy-topbar ec-topbar ec-topbar--subpage">
+        <div className="ec-topbar__left">
+          <button type="button" className="ec-topbar__back" onClick={() => setDetail(null)}>
+            <WbIcon name="chevronLeft" size={14} />
+            技能
+          </button>
+        </div>
+      </header>
       <div className="skill-detail-view">
-        <button type="button" className="skill-detail-back" onClick={() => setDetail(null)}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="15 18 9 12 15 6" />
-          </svg>
-          技能
-        </button>
+        <button type="button" className="skill-detail-back" onClick={() => setDetail(null)} hidden>技能</button>
         <div className="skill-detail-header">
           <div className="skill-detail-header-main">
             <h2>{detail.displayName}</h2>
@@ -618,11 +630,24 @@ export default function Catalogue({
           <div className="skill-detail-toolbar">
             <button type="button" className="active">概览</button>
           </div>
-          <dl className="wbh-detailMeta">
-            <div><dt>name</dt><dd>{detail.name}</dd></div>
-            <div><dt>version</dt><dd>{detail.version || '1.0.0'}</dd></div>
-            {detail.subtitle ? <div><dt>profession</dt><dd>{detail.subtitle}</dd></div> : null}
-          </dl>
+          <div className="skill-detail-preview">
+            <div className="skill-detail-meta-grid">
+              <div className="skill-detail-meta-item">
+                <span className="skill-detail-meta-label">name</span>
+                <span className="skill-detail-meta-value">{detail.name}</span>
+              </div>
+              <div className="skill-detail-meta-item">
+                <span className="skill-detail-meta-label">version</span>
+                <span className="skill-detail-meta-value">{detail.version || '1.0.0'}</span>
+              </div>
+              {detail.subtitle ? (
+                <div className="skill-detail-meta-item">
+                  <span className="skill-detail-meta-label">profession</span>
+                  <span className="skill-detail-meta-value">{detail.subtitle}</span>
+                </div>
+              ) : null}
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -632,24 +657,28 @@ export default function Catalogue({
     <div className="connector-detail-overlay connector-detail-modal-overlay"
       onClick={() => setDetail(null)}>
       <div className={`connector-detail-modal${isBound(detail) ? ' connector-detail-modal--connected' : ''}`}
+        role="dialog" aria-modal="true" aria-label={detail.displayName}
         onClick={e => e.stopPropagation()}>
         <button type="button" className="connector-detail-close" aria-label="关闭" onClick={() => setDetail(null)}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
+          <WbIcon name="close" size={16} />
         </button>
+        <div className="connector-detail-modal-fade" aria-hidden="true" />
+        <div className="connector-detail-modal-bottom-fade" aria-hidden="true" />
         <div className="connector-detail-modal-body">
           <div className="connector-detail-flow">
             <div className="connector-detail-flow-avatar connector-detail-flow-avatar--workbuddy">
               <span className="wbh-flowBrand">W</span>
             </div>
-            <span className="wbh-flowLine" aria-hidden="true" />
-            <div className="connector-detail-flow-avatar">
+            {/* 官方 .connector-detail-flow-icon 是三个 6px 圆点（gap 6 → 宽 30×6） */}
+            <span className="connector-detail-flow-icon" aria-hidden="true">
+              <span /><span /><span />
+            </span>
+            <div className="connector-detail-flow-avatar connector-detail-flow-avatar--connector">
               <EntryIcon entry={detail} size={28} round />
             </div>
           </div>
-          <div className="wbh-detailName">{detail.displayName}</div>
-          <p className="wbh-detailDesc">{detail.description || detail.name}</p>
+          <h3 className="connector-detail-name">{detail.displayName}</h3>
+          <p className="connector-detail-desc">{detail.description || detail.name}</p>
           {toolInfo ? (
             <div className="wbh-toolBox">
               <div className="wbh-toolHead">该连接器向模型暴露 <b>{toolInfo.count}</b> 个工具 · 命名空间 <code>{toolInfo.namespace}</code></div>
@@ -676,8 +705,8 @@ export default function Catalogue({
               </div>
             </div>
           ) : null}
-          <div className="wbh-detailActions">
-            <button type="button" className="wb-button wb-button--secondary wb-button--medium"
+          <div className="connector-detail-actions">
+            <button type="button" className="connector-detail-btn connector-detail-btn--secondary connector-detail-btn--reset"
               disabled={busyLocal === `${detail.kind}/${detail.name}`}
               onClick={() => void (isBound(detail) ? connectorRevoke(detail) : connectorAction(detail))}>
               {isBound(detail) ? '解绑' : '连接'}
@@ -887,6 +916,9 @@ export default function Catalogue({
       </div>
     )
   }
+
+  // 技能二级页面是整页替换（官方进入详情后顶栏变成 subpage 返回栏），不是页内嵌一块
+  if (detail && detail.kind === 'skill') return skillDetailView
 
   return (
     <div className="ec-market-panel">

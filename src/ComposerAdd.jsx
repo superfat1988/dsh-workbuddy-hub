@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react'
-import { hub, addSelection, onCatalogChange, onMarketRequest } from './hub.js'
+import { hub, addSelection, onCatalogChange, onMarketRequest, setComposerSession } from './hub.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
 import Catalogue from './Catalogue.jsx'
@@ -52,6 +52,7 @@ export default function ComposerAdd({ sessionId, runCommand }) {
     } catch { /* keep previous */ }
   }, [sessionId])
 
+  useEffect(() => { setComposerSession(sessionId) }, [sessionId])
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => onCatalogChange(refresh), [refresh])
 

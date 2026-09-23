@@ -4,7 +4,10 @@ import MarketPage from './MarketPage.jsx'
 import ComposerAdd from './ComposerAdd.jsx'
 import AttachedRail from './AttachedRail.jsx'
 import SettingsPage from './SettingsPage.jsx'
-import { setMarketNavigator, openMarket } from './hub.js'
+import {
+  setMarketNavigator, setSessionOpener, setSessionStarter, openMarket,
+  openSessionById, startNewSession, composerSession,
+} from './hub.js'
 
 let pluginCtx = null
 
@@ -131,6 +134,33 @@ const plugin = {
       }
       console.info('[wbh] openMarket -> layout:', Boolean(layout), 'selectPanel:', ok)
     })
+    // 召唤专家要「新建对话并选中该专家」：DSH 里对应的动作是把该专家的会话打开到主视图
+    setSessionOpener(sessionId => {
+      if (!sessionId) return false
+      let workspace = null
+      try { workspace = ctx.get?.('uiWorkspace') ?? null } catch { workspace = null }
+      const ok = typeof workspace?.openSession === 'function'
+      console.info('[wbh] openSession ->', sessionId, 'uiWorkspace:', Boolean(workspace), 'openSession:', ok)
+      if (!ok) return false
+      try { workspace.openSession({ sessionId }); return true } catch (error) {
+        console.warn('[wbh] openSession failed:', String(error?.message || error)); return false
+      }
+    })
+    setSessionStarter(() => {
+      let workspace = null
+      try { workspace = ctx.get?.('uiWorkspace') ?? null } catch { workspace = null }
+      const ok = typeof workspace?.startSession === 'function'
+      console.info('[wbh] startSession -> uiWorkspace:', Boolean(workspace), 'startSession:', ok)
+      if (!ok) return false
+      try { workspace.startSession(); return true } catch (error) {
+        console.warn('[wbh] startSession failed:', String(error?.message || error)); return false
+      }
+    })
+    // 排障用：可在控制台直接验证「打开会话 / 新建对话」这两条桥是否可用
+    // （vConsole 里敲 __wbh.openSessionById('session-…')）
+    try {
+      window.__wbh = { openSessionById, startNewSession, composerSession }
+    } catch { /* 非浏览器环境忽略 */ }
     ctx.slots.inject('main', () => reg('main', { name: 'main', key: 'workbuddy-hub' }, HubPage))
     ctx.slots.inject('sidebar.panellist', () => reg('sidebar.panellist', { name: 'sidebar.panellist', id: 'workbuddy-hub', order: -90, label: () => '专家·技能·连接器' }, PanelIcon))
     ctx.slots.inject('conversation.input.left', () => reg('conversation.input.left', {

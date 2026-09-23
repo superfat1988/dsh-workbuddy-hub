@@ -60,7 +60,9 @@ const exports = new Set(
 assert.ok(exports.size > 0, 'hub.js exports not detected')
 for (const file of readdirSync(new URL('./src', import.meta.url)).filter(f => (f.endsWith('.jsx') || f.endsWith('.js')) && f !== 'hub.js')) {
   const text = readFileSync(new URL(`./src/${file}`, import.meta.url), 'utf8')
-  const importLine = text.split('\n').find(l => l.includes("from './hub.js'")) ?? ''
+  // 支持多行 import：取 "from './hub.js'" 之前整段导入子句
+  const marker = text.indexOf("from './hub.js'")
+  const importLine = marker < 0 ? '' : text.slice(Math.max(0, marker - 600), marker)
   const body = text.split('\n').filter(l => !l.includes("from './hub.js'")).join('\n')
     // Strip comments and string literals so a mention inside a message never
     // counts as identifier usage.

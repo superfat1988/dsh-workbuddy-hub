@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useCallback, useRef, useState } from 'react'
 import { WbIcon } from './icons.js'
 
 /**
@@ -10,6 +10,15 @@ import { WbIcon } from './icons.js'
  */
 export default function SummonModal({ entry, busy, onClose, onConfirm, onQuickPrompt }) {
   const [task, setTask] = useState('')
+  const [fade, setFade] = useState({ top: false, bottom: false })
+  const shellRef = useRef(null)
+  const onScroll = useCallback(() => {
+    const el = shellRef.current?.querySelector('.ec-modal-body')
+    if (!el) return
+    const top = el.scrollTop > 2
+    const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 2
+    setFade(prev => (prev.top === top && prev.bottom === bottom ? prev : { top, bottom }))
+  }, [])
   const prompts = (entry.quickPrompts ?? []).slice(0, 3)
   const profession = entry.subtitle || '专家'
   const useCount = entry.useCount ? `${entry.useCount}次使用` : ''
@@ -44,8 +53,10 @@ export default function SummonModal({ entry, busy, onClose, onConfirm, onQuickPr
           </div>
         </div>
 
-        <div className="ec-modal-scroll-shell">
-          <div className="ec-modal-body">
+        <div className={`ec-modal-scroll-shell${fade.top ? ' has-top-fade' : ''}${fade.bottom ? ' has-bottom-fade' : ''}`} ref={shellRef}>
+          {/* 官方上下两条 44px 渐隐遮罩 */}
+          <div className="ec-modal-scroll-fade ec-modal-scroll-fade-top" aria-hidden="true" />
+          <div className="ec-modal-body" onScroll={onScroll}>
             <div className="ec-modal-content">
               <p className="ec-modal-desc">{entry.description || '专家运行在独立会话中，主对话只接收结论。'}</p>
               {entry.tags?.length > 0 && (
@@ -69,6 +80,7 @@ export default function SummonModal({ entry, busy, onClose, onConfirm, onQuickPr
               </div>
             )}
           </div>
+          <div className="ec-modal-scroll-fade ec-modal-scroll-fade-bottom" aria-hidden="true" />
         </div>
       </div>
     </div>

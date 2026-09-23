@@ -9,6 +9,25 @@ const API = '/workbuddy-hub'
 let _marketNavigator = null
 const _marketListeners = new Set()
 export function setMarketNavigator(fn) { _marketNavigator = fn }
+
+// 打开某个会话（官方「召唤专家 = 新建对话并选中该专家」需要跳到专家的会话）
+let _sessionOpener = null
+export function setSessionOpener(fn) { _sessionOpener = fn }
+export function openSessionById(sessionId) {
+  try { return Boolean(_sessionOpener?.(sessionId)) } catch { return false }
+}
+
+// 新建对话（官方召唤前会先进入一个新对话）
+let _sessionStarter = null
+export function setSessionStarter(fn) { _sessionStarter = fn }
+export function startNewSession() {
+  try { return Boolean(_sessionStarter?.()) } catch { return false }
+}
+
+// 当前会话 id：composer 槽由框架注入 props.sessionId，是权威来源
+let _composerSession = ''
+export function setComposerSession(id) { _composerSession = id || '' }
+export function composerSession() { return _composerSession }
 export function onMarketRequest(fn) { _marketListeners.add(fn); return () => { _marketListeners.delete(fn) } }
 let _pendingMarket = null
 export function consumePendingMarket() { const r = _pendingMarket; _pendingMarket = null; return r }
