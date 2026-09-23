@@ -17,7 +17,7 @@
  */
 import { homedir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
-import { loginStart, loginPoll, loadAuth, saveAuth, marketList, marketCategories, connectorRegistry, connectorBound, connectorAuthStart, connectorRevoke, connectorOauthStatus } from './wb-market.js'
+import { loginStart, loginPoll, loadAuth, saveAuth, bearer, marketList, marketCategories, connectorRegistry, connectorBound, connectorAuthStart, connectorRevoke, connectorOauthStatus } from './wb-market.js'
 import { listExperts, categories as officialCategories, installExpert } from './wb-experts.js'
 import { skillDetails } from './wb-market.js'
 import { unzip } from './wb-unzip.js'
@@ -46,6 +46,9 @@ function expandHome(p) {
   if (p.startsWith('~/')) return join(homedir(), p.slice(2))
   return p
 }
+
+/** DSH 凭据引用名：官方 bearer 只以 ${WORKBUDDY_TOKEN} 形式出现在 mcp.json 里。 */
+const WB_TOKEN_REF = 'WORKBUDDY_TOKEN'
 
 export function storePaths(config) {
   const root = resolve(expandHome(config.storeRoot || '~/workbuddyskills'))
@@ -905,6 +908,64 @@ export function apply(ctx, config = {}) {
         }
       } catch { /* no dsh skills dir */ }
       json(res, 200, { ok: true, rows })
+      return true
+    }
+
+    // 官方已授权的连接器 → 在本地登记 MCP 配置，使其在 DSH 里真正可用。
+    // gateway_url 来自官方注册表；密钥只以 ${WORKBUDDY_TOKEN} 引用落盘。
+    if (route === 'POST /connectors/install') {
+      const body = JSON.parse((await readBody(req)) || '{}')
+      const entryName = String(body.name || '')
+      if (!/^[\w.-]+$/.test(entryName)) { json(res, 400, { error: 'invalid name' }); return true }
+      try {
+        const rows = await connectorRegistry(P.state)
+        const row = rows.find(r => r.name === entryName)
+        if (!row) { json(res, 404, { error: `connector not in official registry: ${entryName}` }); return true }
+        const gateway = row.mcp?.gateway_url
+        if (!gateway) { json(res, 400, { error: 'connector has no MCP gateway (CLI or skill-only connector)' }); return true }
+        const flags = []
+        // bearer() 会按需刷新并返回当前 access_token（auth 文件里是 access_token 字段）。
+        let token = ''
+        try { token = await bearer(P.state) } catch { token = '' }
+        if (token) {
+          try { await ctx.credentials?.set?.(WB_TOKEN_REF, token) }
+          catch (error) { flags.push(`credential store failed: ${String(error?.message || error)}`) }
+        } else {
+          flags.push('no official token: connector stays unusable until the account is connected')
+        }
+        const dest = join(P.connectors, entryName)
+        mkdirSync(dest, { recursive: true })
+        const mcp = {
+          mcpServers: {
+            [entryName]: {
+              transport: 'streamable-http',
+              url: gateway,
+              headers: { Authorization: `Bearer $\{${WB_TOKEN_REF}}` },
+            },
+          },
+        }
+        const mcpText = JSON.stringify(mcp, null, 2)
+        writeFileSync(join(dest, 'mcp.json'), mcpText)
+        const registry = loadJson(P.registry, { version: 1, installed: {} })
+        if (!registry.installed) registry.installed = {}
+        const key = `connector/${entryName}`
+        const previous = registry.installed[key]
+        registry.installed[key] = {
+          kind: 'connector', name: entryName, dest,
+          displayName: row.displayName || entryName,
+          description: row.description || '',
+          icon: row.icon || '',
+          installedAt: new Date().toISOString(),
+          files: 1, bytes: Buffer.byteLength(mcpText), flags,
+          linked: false,
+          enabled: Boolean(previous?.enabled),
+          official: true,
+        }
+        saveJson(P.registry, registry)
+        json(res, 200, { ok: true, key, dest, flags })
+      } catch (error) {
+        json(res, 502, { error: `connector install failed: ${String(error?.message || error)}` })
+      }
       return true
     }
 

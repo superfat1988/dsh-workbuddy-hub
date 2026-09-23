@@ -252,6 +252,20 @@ export default function Catalogue({
   }, [rows, sort, kind])
 
   // 连接器：已绑定=解绑；未绑定=发起官方 OAuth 并打开授权页；失败明确报错
+  const connectorRevoke = useCallback(async entry => {
+    const key = `${entry.kind}/${entry.name}`
+    setBusyLocal(key); setNotice('')
+    try {
+      await hub.disableConnector(entry.name).catch(() => {})
+      const r = await hub.connectorUnbind(entry.name)
+      if (r?.ok) await hub.unmount(undefined, entry.kind, entry.name).catch(() => {})
+      setNotice(r?.ok ? `已解绑「${entry.displayName}」` : `解绑失败：${r?.message || '官方未确认'}`)
+      const fresh = await hub.boundConnectors().catch(() => [])
+      setBound(fresh.map(x => x.name))
+      await onRefresh?.()
+    } catch (error) { setNotice(`解绑失败：${String(error?.message || error)}`) } finally { setBusyLocal('') }
+  }, [onRefresh])
+
   const pollOauth = useCallback(async entry => {
     for (let i = 0; i < 40; i++) {
       await new Promise(r => setTimeout(r, 3000))
@@ -261,13 +275,17 @@ export default function Catalogue({
           const fresh = await hub.boundConnectors().catch(() => [])
           setBound(fresh.map(x => x.name))
           setPendingAuth(null)
-          setNotice(`「${entry.displayName}」已连接`)
+          const ins = await hub.connectorInstall(entry.name).catch(() => null)
+          const en = ins?.ok ? await hub.enableConnector(entry.name).catch(() => null) : null
+          setNotice(en?.ok ? `「${entry.displayName}」已连接并启用，可在对话中使用`
+                           : `「${entry.displayName}」已连接（本地启用：${ins?.flags?.[0] || en?.error || '待重试'}）`)
+          await onRefresh?.()
           return
         }
       } catch { /* 继续轮询 */ }
     }
     setNotice(`「${entry.displayName}」授权尚未完成，可稍后重试`)
-  }, [])
+  }, [onRefresh])
 
   const connectorAction = useCallback(async entry => {
     const key = `${entry.kind}/${entry.name}`
@@ -277,6 +295,24 @@ export default function Catalogue({
     let authWindow = null
     if (!isBound(entry)) { try { authWindow = window.open('about:blank', '_blank') } catch { authWindow = null } }
     try {
+      // 已授权连接器：行内开关只做「本地启用/停用」，不撤销官方授权（解绑在详情弹窗里）。
+      if (isBound(entry)) {
+        const rec = installed[`connector/${entry.name}`]
+        if (rec?.enabled) {
+          await hub.disableConnector(entry.name)
+          await hub.unmount(undefined, entry.kind, entry.name).catch(() => {})
+          setNotice(`已停用「${entry.displayName}」（官方授权仍保留）`)
+        } else {
+          const ins = await hub.connectorInstall(entry.name)
+          if (!ins?.ok) setNotice(`启用失败：${ins?.error || '本地登记失败'}`)
+          else {
+            const en = await hub.enableConnector(entry.name)
+            setNotice(en?.ok ? `已启用「${entry.displayName}」，可在对话中使用` : `启用失败：${en?.error || ''}`)
+          }
+        }
+        await onRefresh?.()
+        return
+      }
       if (isBound(entry)) {
         const r = await hub.connectorUnbind(entry.name)
         if (r?.ok) await hub.unmount(undefined, entry.kind, entry.name).catch(() => {})
@@ -301,7 +337,7 @@ export default function Catalogue({
       try { authWindow?.close() } catch { /* 忽略 */ }
       setNotice(`操作失败：${String(error?.message || error)}`)
     } finally { setBusyLocal('') }
-  }, [isBound, onRefresh])
+  }, [isBound, onRefresh, installed])
 
   const handleDetail = useCallback(entry => {
     if (entry.kind === 'expert') { onDetail?.(entry); return }
@@ -538,7 +574,7 @@ export default function Catalogue({
           <div className="wbh-detailActions">
             <button type="button" className="wb-button wb-button--secondary wb-button--medium"
               disabled={busyLocal === `${detail.kind}/${detail.name}`}
-              onClick={() => void connectorAction(detail)}>
+              onClick={() => void (isBound(detail) ? connectorRevoke(detail) : connectorAction(detail))}>
               {isBound(detail) ? '解绑' : '连接'}
             </button>
           </div>

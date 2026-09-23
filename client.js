@@ -2318,6 +2318,7 @@ var hub = {
   boundConnectors: () => api("/connectors/bound").then((r) => r.items || []).catch(() => []),
   connectorAuthStart: (name) => post("/connectors/auth-start", { name }),
   connectorUnbind: (name) => post("/connectors/unbind", { name }),
+  connectorInstall: (name) => post("/connectors/install", { name }),
   connectorOauthStatus: (name) => api(`/connectors/oauth-status?name=${encodeURIComponent(name)}`),
   enableConnector: (name) => post("/connectors/enable", { name }).then((r) => {
     _emitChange();
@@ -2654,6 +2655,26 @@ function Catalogue({
     else if (sort === "new") copy.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
     return copy;
   }, [rows, sort, kind]);
+  const connectorRevoke = (0, import_react2.useCallback)(async (entry) => {
+    const key = `${entry.kind}/${entry.name}`;
+    setBusyLocal(key);
+    setNotice("");
+    try {
+      await hub.disableConnector(entry.name).catch(() => {
+      });
+      const r = await hub.connectorUnbind(entry.name);
+      if (r?.ok) await hub.unmount(void 0, entry.kind, entry.name).catch(() => {
+      });
+      setNotice(r?.ok ? `\u5DF2\u89E3\u7ED1\u300C${entry.displayName}\u300D` : `\u89E3\u7ED1\u5931\u8D25\uFF1A${r?.message || "\u5B98\u65B9\u672A\u786E\u8BA4"}`);
+      const fresh = await hub.boundConnectors().catch(() => []);
+      setBound(fresh.map((x) => x.name));
+      await onRefresh?.();
+    } catch (error) {
+      setNotice(`\u89E3\u7ED1\u5931\u8D25\uFF1A${String(error?.message || error)}`);
+    } finally {
+      setBusyLocal("");
+    }
+  }, [onRefresh]);
   const pollOauth = (0, import_react2.useCallback)(async (entry) => {
     for (let i = 0; i < 40; i++) {
       await new Promise((r) => setTimeout(r, 3e3));
@@ -2663,14 +2684,17 @@ function Catalogue({
           const fresh = await hub.boundConnectors().catch(() => []);
           setBound(fresh.map((x) => x.name));
           setPendingAuth(null);
-          setNotice(`\u300C${entry.displayName}\u300D\u5DF2\u8FDE\u63A5`);
+          const ins = await hub.connectorInstall(entry.name).catch(() => null);
+          const en = ins?.ok ? await hub.enableConnector(entry.name).catch(() => null) : null;
+          setNotice(en?.ok ? `\u300C${entry.displayName}\u300D\u5DF2\u8FDE\u63A5\u5E76\u542F\u7528\uFF0C\u53EF\u5728\u5BF9\u8BDD\u4E2D\u4F7F\u7528` : `\u300C${entry.displayName}\u300D\u5DF2\u8FDE\u63A5\uFF08\u672C\u5730\u542F\u7528\uFF1A${ins?.flags?.[0] || en?.error || "\u5F85\u91CD\u8BD5"}\uFF09`);
+          await onRefresh?.();
           return;
         }
       } catch {
       }
     }
     setNotice(`\u300C${entry.displayName}\u300D\u6388\u6743\u5C1A\u672A\u5B8C\u6210\uFF0C\u53EF\u7A0D\u540E\u91CD\u8BD5`);
-  }, []);
+  }, [onRefresh]);
   const connectorAction = (0, import_react2.useCallback)(async (entry) => {
     const key = `${entry.kind}/${entry.name}`;
     setBusyLocal(key);
@@ -2684,6 +2708,24 @@ function Catalogue({
       }
     }
     try {
+      if (isBound(entry)) {
+        const rec = installed[`connector/${entry.name}`];
+        if (rec?.enabled) {
+          await hub.disableConnector(entry.name);
+          await hub.unmount(void 0, entry.kind, entry.name).catch(() => {
+          });
+          setNotice(`\u5DF2\u505C\u7528\u300C${entry.displayName}\u300D\uFF08\u5B98\u65B9\u6388\u6743\u4ECD\u4FDD\u7559\uFF09`);
+        } else {
+          const ins = await hub.connectorInstall(entry.name);
+          if (!ins?.ok) setNotice(`\u542F\u7528\u5931\u8D25\uFF1A${ins?.error || "\u672C\u5730\u767B\u8BB0\u5931\u8D25"}`);
+          else {
+            const en = await hub.enableConnector(entry.name);
+            setNotice(en?.ok ? `\u5DF2\u542F\u7528\u300C${entry.displayName}\u300D\uFF0C\u53EF\u5728\u5BF9\u8BDD\u4E2D\u4F7F\u7528` : `\u542F\u7528\u5931\u8D25\uFF1A${en?.error || ""}`);
+          }
+        }
+        await onRefresh?.();
+        return;
+      }
       if (isBound(entry)) {
         const r = await hub.connectorUnbind(entry.name);
         if (r?.ok) await hub.unmount(void 0, entry.kind, entry.name).catch(() => {
@@ -2716,7 +2758,7 @@ function Catalogue({
     } finally {
       setBusyLocal("");
     }
-  }, [isBound, onRefresh]);
+  }, [isBound, onRefresh, installed]);
   const handleDetail = (0, import_react2.useCallback)((entry) => {
     if (entry.kind === "expert") {
       onDetail?.(entry);
@@ -2859,7 +2901,7 @@ function Catalogue({
           type: "button",
           className: "wb-button wb-button--secondary wb-button--medium",
           disabled: busyLocal === `${detail.kind}/${detail.name}`,
-          onClick: () => void connectorAction(detail)
+          onClick: () => void (isBound(detail) ? connectorRevoke(detail) : connectorAction(detail))
         },
         isBound(detail) ? "\u89E3\u7ED1" : "\u8FDE\u63A5"
       )))
