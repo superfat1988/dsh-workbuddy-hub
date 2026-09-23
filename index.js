@@ -25,7 +25,7 @@ import {
   existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
   symlinkSync, unlinkSync, lstatSync, statSync,
 } from 'node:fs'
-import { createConnectorManager, validateConnectorMcp } from './mcp-manager.js'
+import { createConnectorManager, validateConnectorMcp, buildNativeRow, declaredServerNames } from './mcp-manager.js'
 import { readExpertPersona, buildPersonaLine, buildSummonPrompt } from './expert-persona.js'
 
 export const name = 'workbuddy-hub'
@@ -49,6 +49,8 @@ function expandHome(p) {
 
 /** DSH 凭据引用名：官方 bearer 只以 ${WORKBUDDY_TOKEN} 形式出现在 mcp.json 里。 */
 const WB_TOKEN_REF = 'WORKBUDDY_TOKEN'
+
+const PROFILES_ROOT = join(homedir(), '.dsh', 'profiles')
 
 export function storePaths(config) {
   const root = resolve(expandHome(config.storeRoot || '~/workbuddyskills'))
@@ -857,6 +859,52 @@ export function apply(ctx, config = {}) {
         const connected = data.connected === true || status === 1 || status === 'connected' || status === 'connected_ok'
         json(res, 200, { ok: true, code: payload?.code, connected, status: status ?? null, raw: payload })
       } catch (error) { json(res, 200, { ok: false, connected: false, message: String(error?.message || error) }) }
+      return true
+    }
+
+    // 只读导出：把已安装连接器渲染成可粘贴的原生 mcp-client overlay 行，
+    // 并扫描 profile 里已声明的 serverName 供冲突提示。绝不写 profile。
+    if (route === 'GET /connectors/native-row') {
+      const entryName = url.searchParams.get('name') || ''
+      if (!/^[\w.-]+$/.test(entryName)) { json(res, 400, { error: 'invalid name' }); return true }
+      try {
+        const registry = loadJson(P.registry, { version: 1, installed: {} })
+        const record = registry.installed?.[`connector/${entryName}`]
+        if (!record) { json(res, 404, { error: `connector not installed locally: ${entryName}` }); return true }
+        const mcpPath = join(record.dest, 'mcp.json')
+        if (!existsSync(mcpPath)) { json(res, 400, { error: 'connector has no mcp.json' }); return true }
+        const raw = JSON.parse(readFileSync(mcpPath, 'utf8'))
+        const picked = Object.keys(raw.mcpServers ?? {})[0]
+        if (!picked) { json(res, 400, { error: 'mcp.json declares no server' }); return true }
+        const server = raw.mcpServers[picked]
+        const serverName = record.serverName || picked
+        const credentialRef = String(JSON.stringify(server.headers ?? {})).match(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/)?.[1] ?? ''
+        const generatedAt = new Date().toISOString()
+        const row = buildNativeRow({
+          serverName, transport: server.transport || 'streamable-http',
+          url: server.url || '', credentialRef: credentialRef || 'WORKBUDDY_TOKEN', connector: entryName,
+        }, generatedAt)
+        // 冲突扫描：profile 目录下的 patch/配置文本
+        const conflicts = []
+        try {
+          const profileDir = join(PROFILES_ROOT, config?.profile ?? 'web')
+          for (const file of ['cordis.yml', 'patch.yml', 'package.json']) {
+            const path = join(profileDir, file)
+            if (!existsSync(path)) continue
+            for (const name of declaredServerNames(readFileSync(path, 'utf8'))) conflicts.push({ file, name })
+          }
+        } catch { /* 扫描失败不影响导出 */ }
+        json(res, 200, {
+          ok: true, connector: entryName, serverName, credentialRef, generatedAt,
+          runtimeServerName: record.serverName || null,
+          row,
+          conflict: conflicts.some(c => c.name === serverName),
+          conflicts,
+          note: '快照导出：不修改任何 profile 文件；服务器改用原生加载后请重启 DSH 生效。',
+        })
+      } catch (error) {
+        json(res, 502, { error: `native row export failed: ${String(error?.message || error)}` })
+      }
       return true
     }
 

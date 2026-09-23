@@ -259,3 +259,41 @@ export function createConnectorManager(ctx) {
     disposeAll: async () => { for (const key of [...mounted.keys()]) await unmount(key) },
   }
 }
+
+/**
+ * Render the native `mcp-client` overlay row for one connector, ready to paste
+ * into a profile patch. Read-only: nothing here writes to the profile. The row
+ * mirrors the documented shape (`- insert:` entry with id/name/config) so the
+ * server loads exactly like a hand-written native MCP server.
+ * @param {{serverName:string, transport:string, url:string, credentialRef:string, connector:string}} spec
+ * @param {string} generatedAt ISO timestamp, embedded so a stale snapshot is visible.
+ */
+export function buildNativeRow(spec, generatedAt) {
+  const { serverName, transport, url, credentialRef, connector } = spec
+  const yaml = [
+    '- insert:',
+    `    - id: workbuddy-${connector}`,
+    "      name: '@deepseek-ai/dsh-mcp-client'",
+    '      config:',
+    `        serverName: ${serverName}`,
+    `        transport: ${transport}`,
+    `        url: ${url}`,
+    '        headers:',
+    `          Authorization: Bearer \${${credentialRef}}`,
+  ].join('\n')
+  const header = [
+    `# workbuddy-hub 导出 · 连接器 ${connector}`,
+    `# 生成时间：${generatedAt}`,
+    '# 这是快照：连接器改绑/换账号/凭据变更后请重新导出。',
+    `# 工具命名空间：mcp__${serverName}__<tool>`,
+    `# 依赖凭据：${credentialRef}（${transport === 'streamable-http' ? '由 DSH credentials 每次调用时解析' : '由 DSH credentials 解析'}）`,
+  ].join('\n')
+  return `${header}\n${yaml}\n`
+}
+
+/** Names already declared in a profile's own patch/config text. */
+export function declaredServerNames(text) {
+  const out = new Set()
+  for (const m of String(text ?? '').matchAll(/serverName\s*:\s*['"]?([A-Za-z0-9._-]+)/g)) out.add(m[1])
+  return [...out]
+}

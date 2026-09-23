@@ -200,3 +200,8 @@
 .ec-market-panel .ec-topbar .ec-search-wrapper input{flex:1;min-width:0;border:none;outline:none;background:transparent;font-size:14px;color:var(--wb-color-text-primary)}
 .ec-market-panel .ec-topbar .ec-search-wrapper input::placeholder{color:var(--wb-color-text-tertiary)}
 .ec-market-panel .ec-topbar__right{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+
+.wbh-nativeRowBox{margin:12px 0 4px}
+.wbh-nativeRow{max-height:220px;overflow:auto;margin:0;padding:10px 12px;border-radius:10px;background:var(--wb-bg-tertiary,#f6f6f6);font-size:11px;line-height:16px;white-space:pre;color:var(--wb-color-text-secondary)}
+.wbh-nativeRowFoot{display:flex;align-items:center;gap:10px;margin-top:8px}
+.wbh-nativeRowNote{font-size:11px;color:var(--wb-color-text-tertiary)}

@@ -180,6 +180,7 @@ export default function Catalogue({
   const [notice, setNotice] = useState('')     // 操作结果提示（连接/解绑失败等）
   const [busyLocal, setBusyLocal] = useState('')  // 本组件内发起的连接/解绑进行中态
   const [pendingAuth, setPendingAuth] = useState(null)  // 待完成的授权（含可点链接）
+  const [nativeRow, setNativeRow] = useState(null)      // 只读导出的原生 mcp-client 行
   const [pinned, setPinned] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem('wbh-pinned') || '[]')) } catch { return new Set() }
   })
@@ -265,6 +266,16 @@ export default function Catalogue({
   }, [rows, sort, kind])
 
   // 连接器：已绑定=解绑；未绑定=发起官方 OAuth 并打开授权页；失败明确报错
+  // 只读导出：生成可粘贴的原生 mcp-client overlay 行（不写 profile）
+  const exportNativeRow = useCallback(async entry => {
+    setBusyLocal(`${entry.kind}/${entry.name}`); setNotice('')
+    try {
+      const r = await hub.connectorNativeRow(entry.name)
+      if (r?.ok) { setNativeRow(r); setNotice(r.conflict ? '注意：该 serverName 已在 profile 中声明，粘贴前请改名' : '') }
+      else setNotice(`导出失败：${r?.error || '未知错误'}`)
+    } catch (error) { setNotice(`导出失败：${String(error?.message || error)}`) } finally { setBusyLocal('') }
+  }, [])
+
   const connectorRevoke = useCallback(async entry => {
     const key = `${entry.kind}/${entry.name}`
     setBusyLocal(key); setNotice('')
@@ -584,11 +595,28 @@ export default function Catalogue({
           </div>
           <div className="wbh-detailName">{detail.displayName}</div>
           <p className="wbh-detailDesc">{detail.description || detail.name}</p>
+          {nativeRow ? (
+            <div className="wbh-nativeRowBox">
+              <pre className="wbh-nativeRow">{nativeRow.row}</pre>
+              <div className="wbh-nativeRowFoot">
+                <button type="button" className="wb-button wb-button--secondary wb-button--small"
+                  onClick={() => { try { void navigator.clipboard?.writeText(nativeRow.row) } catch { /* 忽略 */ } }}>
+                  复制
+                </button>
+                <span className="wbh-nativeRowNote">{nativeRow.note}</span>
+              </div>
+            </div>
+          ) : null}
           <div className="wbh-detailActions">
             <button type="button" className="wb-button wb-button--secondary wb-button--medium"
               disabled={busyLocal === `${detail.kind}/${detail.name}`}
               onClick={() => void (isBound(detail) ? connectorRevoke(detail) : connectorAction(detail))}>
               {isBound(detail) ? '解绑' : '连接'}
+            </button>
+            <button type="button" className="wb-button wb-button--secondary wb-button--medium"
+              disabled={busyLocal === `${detail.kind}/${detail.name}`}
+              onClick={() => void exportNativeRow(detail)}>
+              导出原生 MCP 配置
             </button>
           </div>
         </div>

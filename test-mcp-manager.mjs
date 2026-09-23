@@ -1,5 +1,6 @@
 // Unit tests for the connector admission validator, server namespace and
 // credential-reference extraction. No network or DSH runtime required.
+import { buildNativeRow, declaredServerNames } from './mcp-manager.js'
 import assert from 'node:assert/strict'
 import {
   normalizeTransport, serverNameFor, credentialRefsIn, validateConnectorMcp, buildMcpConfig,
@@ -61,3 +62,13 @@ assert.equal(cfg.url, 'https://x/?k=secret-value')
 assert.equal(cfg.headers.Authorization, 'Bearer secret-value')
 
 console.log('mcp-manager validator, namespace and credential-ref tests: OK')
+
+// Native overlay export: the row must match the documented mcp-client shape and
+// must never carry an inline secret.
+const row = buildNativeRow({ serverName: 'tdocs-app', transport: 'streamable-http', url: 'https://example.test/mcp', credentialRef: 'WORKBUDDY_TOKEN', connector: 'tdocs-app' }, '2026-09-23T00:00:00.000Z')
+assert.ok(row.includes("name: '@deepseek-ai/dsh-mcp-client'"), 'row must declare the native mcp-client package')
+assert.ok(row.includes('serverName: tdocs-app'), 'row must carry the runtime server name')
+assert.ok(row.includes('Bearer ${WORKBUDDY_TOKEN}'), 'row must reference the credential, not a secret')
+assert.ok(row.includes('2026-09-23T00:00:00.000Z'), 'row must embed the generation time')
+assert.deepEqual(declaredServerNames('serverName: a\n  serverName: "b"\n'), ['a', 'b'])
+console.log('native MCP row export tests: OK')
