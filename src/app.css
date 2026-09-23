@@ -102,6 +102,10 @@
 .ec-modal-card .ec-modal-quick-prompt-btn .ec-modal-quick-prompt-text{font-size:14px;line-height:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ec-modal-card.is-expert-view .ec-modal-header-summon-btn{min-width:124px;height:32px;padding:0 24px}
 .ec-modal-card.is-expert-view .ec-modal-close{padding:0}
+/* 方案 B 的次级入口：挂在官方主按钮下方的一行小字，不改官方主按钮布局 */
+.wbh-newSessionBtn{display:block;width:100%;margin-top:6px;padding:0;border:none;background:transparent;color:var(--wb-color-text-secondary);font-family:inherit;font-size:12px;line-height:18px;text-align:center;cursor:pointer}
+.wbh-newSessionBtn:hover:not(:disabled){color:var(--wb-color-text-primary);text-decoration:underline}
+.wbh-newSessionBtn:disabled{cursor:not-allowed;opacity:.6}
 
 /* --- 过滤行 / 视图切换 / 添加技能菜单 / 我安装的（官方入口的落地样式）--- */
 /* 内容区左右内边距：官方实测 .ec-main-scroll{padding:0 20px 0 24px}

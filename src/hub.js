@@ -17,6 +17,18 @@ export function openSessionById(sessionId) {
   try { return Boolean(_sessionOpener?.(sessionId)) } catch { return false }
 }
 
+// 选中某会话的 agent preset（官方 remote，会自动把 sessionId 解析成 agent；
+// 只对空白会话生效，会话已开始会被锁拒绝）
+let _presetSelector = null
+export function setPresetSelector(fn) { _presetSelector = fn }
+export function selectPreset(sessionId, presetId) {
+  const fn = _presetSelector
+  if (typeof fn !== 'function') return Promise.resolve({ ok: false, error: 'agentPresets remote 不可用' })
+  try { return Promise.resolve(fn(sessionId, presetId)) } catch (error) {
+    return Promise.resolve({ ok: false, error: String(error?.message || error) })
+  }
+}
+
 // 新建对话（官方召唤前会先进入一个新对话）
 let _sessionStarter = null
 export function setSessionStarter(fn) { _sessionStarter = fn }
@@ -171,6 +183,8 @@ export const hub = {
   mount: (sessionId, kind, name) => post('/mount', { sessionId, kind, name }).then(r => { _emitChange(); return r }),
   unmount: (sessionId, kind, name) => post('/unmount', { sessionId, kind, name }).then(r => { _emitChange(); return r }),
   summon: (name, task, sessionId) => post('/summon', { name, task, sessionId }).then(r => { _emitChange(); return r }),
+  // 方案 B：把专家做成真正的 agent preset，并在新会话里选中它（真接管）。
+  expertPresetEnsure: name => post('/expert-preset-ensure', { name }),
   activeSession: () => api('/active-session').catch(() => ({ sessionId: '' })),
   boundConnectors: () => api('/connectors/bound').then(r => r.items || []).catch(() => []),
   connectorAuthStart: name => post('/connectors/auth-start', { name }),

@@ -6,9 +6,9 @@
 //    mcp__<serverName>__* 的真实工具名 —— 这是「连接器工具真的进了本进程」的证据。
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { apply } from './index.js'
+import { apply, replacePersonaPrefix } from './index.js'
 
 const root = '/tmp/wbh-session-contract'
 rmSync(root, { recursive: true, force: true })
@@ -214,5 +214,173 @@ assert.ok(hostSource.includes('record?.icon && record.icon !== \'letter:auto\'')
 // /installed 必须回填官方图标（专家按 name/displayName，技能按 officialId）
 assert.ok(hostSource.includes('byLabel'), 'expert icon backfill must fall back to displayName')
 assert.ok(hostSource.includes('r.officialId && (!r.icon || r.icon === \'letter:auto\')'), 'skill icon backfill keyed by officialId')
+
+// ---- 4. 方案 B：每专家一个 agent preset（真接管）----
+// 用假 agentPresets stub 跑通「ensure 幂等 → copy → 写 persona → select」这条链：
+// 这是「专家 preset 真的建出来、且人设正文真的写进去了」的证据。
+const presetRoot = '/tmp/wbh-preset-contract'
+rmSync(presetRoot, { recursive: true, force: true })
+mkdirSync(join(presetRoot, '.meta'), { recursive: true })
+// 一个仿 standard 的 preset（结构与官方一致：persona 块 + 后续块，prefix 用 >-）
+const shippedDir = join(presetRoot, 'shipped-standard')
+mkdirSync(shippedDir, { recursive: true })
+const SHIPPED_YAML = [
+  '- id: persona',
+  "  name: '@deepseek-ai/dsh-persona'",
+  '  config:',
+  '    suffix: Your working directory is {{cwd}}.',
+  '    prefix: >-',
+  '      You are a coding agent powered by the {{model}} model.',
+  '',
+  '- id: agent-instructions',
+  "  name: '@deepseek-ai/dsh-agent-instructions'",
+  '  config:',
+  '    maxBytes: 65536',
+  '',
+].join('\n')
+writeFileSync(join(shippedDir, 'agent.cordis.yml'), SHIPPED_YAML)
+
+// 装一个专家：人设正文故意带 frontmatter 和 {{ }}（preset 走严格插值，必须剥掉）
+const presetExpertDir = join(presetRoot, 'experts', 'demo-expert')
+mkdirSync(join(presetExpertDir, '.codebuddy-plugin'), { recursive: true })
+mkdirSync(join(presetExpertDir, 'agents'), { recursive: true })
+writeFileSync(join(presetExpertDir, '.codebuddy-plugin', 'plugin.json'),
+  JSON.stringify({ agentName: 'demo', displayName: '演示专家' }))
+writeFileSync(join(presetExpertDir, 'agents', 'demo.md'),
+  '---\nname: demo\n---\n你是演示专家。\n模板残留：{{model}} 与 {{cwd}} 必须被剥掉。\n')
+
+const presetCalls = { copied: [], selected: [], removed: [] }
+const presetDirs = new Map([['standard', shippedDir]])
+const agentPresetsStub = {
+  async resolve(id) {
+    const dir = presetDirs.get(id)
+    if (!dir) {
+      const error = new Error(`preset "${id}" not found`)
+      error.code = 'agent-preset/not-found'
+      throw error
+    }
+    return { id, name: id, path: join(dir, 'agent.cordis.yml') }
+  },
+  async copy(from, id, name) {
+    presetCalls.copied.push({ from, id, name })
+    if (presetDirs.has(id)) throw new Error(`preset "${id}" already exists`)
+    const dir = join(presetRoot, 'user-root', id)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'agent.cordis.yml'), readFileSync(join(presetDirs.get(from), 'agent.cordis.yml')))
+    presetDirs.set(id, dir)
+  },
+  async select(agent, presetId) {
+    presetCalls.selected.push({ sessionId: agent.id, presetId })
+    if (presetCalls.selected.length > 1) {
+      const error = new Error(`session "${agent.id}" has already started; its agent preset is fixed`)
+      error.code = 'agent-preset/locked'
+      throw error
+    }
+    return presetId
+  },
+  async remove(id) {
+    presetCalls.removed.push(id)
+    const dir = presetDirs.get(id)
+    if (dir) { rmSync(dir, { recursive: true, force: true }); presetDirs.delete(id) }
+  },
+}
+
+writeFileSync(join(presetRoot, '.meta', 'registry.json'), JSON.stringify({
+  version: 1,
+  installed: {
+    'expert/demo-expert': {
+      kind: 'expert', name: 'demo-expert', displayName: '演示专家',
+      dest: presetExpertDir, files: 2, bytes: 10, flags: [], linked: false,
+    },
+  },
+}))
+
+let presetHandler = null
+const presetCtx = {
+  ...ctx,
+  agentPresets: agentPresetsStub,
+  // 只有这一个会话有活跃 agent，用来分别验 select 成功路径与 409 路径
+  agents: { get: id => (id === 'session-from-client' ? { id: 'agent-1' } : undefined) },
+  webServer: { register: spec => { presetHandler = spec.handler; return () => {} } },
+}
+apply(presetCtx, { storeRoot: presetRoot, skillPrefix: 'wbh-preset-' })
+assert.equal(typeof presetHandler, 'function')
+
+const callOn = async (method, path, body) => {
+  const req = new EventEmitter()
+  req.method = method
+  req.url = '/workbuddy-hub' + path
+  req.headers = {}
+  req.destroy = () => {}
+  const res = makeRes()
+  const done = presetHandler(req, res)
+  setImmediate(() => {
+    if (body !== undefined) req.emit('data', Buffer.from(JSON.stringify(body)))
+    req.emit('end')
+  })
+  await done
+  let parsed = null
+  try { parsed = JSON.parse(res.body) } catch { parsed = null }
+  return { status: res.statusCode, json: parsed }
+}
+
+const first = await callOn('POST', '/expert-preset-ensure', { name: 'demo-expert' })
+assert.equal(first.status, 200)
+assert.equal(first.json.ok, true)
+assert.equal(first.json.presetId, 'workbuddy-demo-expert')
+assert.equal(presetCalls.copied.length, 1, 'the first ensure must copy exactly once')
+assert.equal(presetCalls.copied[0].from, 'standard')
+assert.equal(presetCalls.copied[0].id, 'workbuddy-demo-expert')
+assert.equal(presetCalls.copied[0].name, '演示专家', 'the preset display name comes from the expert title')
+
+// 幂等：第二次 ensure 必须直接复用，不再 copy
+const second = await callOn('POST', '/expert-preset-ensure', { name: 'demo-expert' })
+assert.equal(second.json.ok, true)
+assert.equal(second.json.presetId, 'workbuddy-demo-expert')
+assert.equal(presetCalls.copied.length, 1, 'ensure must be idempotent (no second copy)')
+
+// 写出来的 YAML：persona 正文进 block scalar、剥了 {{ }}、suffix 与其它块原样
+const written = readFileSync(join(presetRoot, 'user-root', 'workbuddy-demo-expert', 'agent.cordis.yml'), 'utf8')
+assert.ok(written.includes('    prefix: |'), 'the persona prefix must be a literal block scalar')
+assert.ok(!written.includes('>-'), 'the folded scalar must be replaced, not kept')
+assert.ok(written.includes('      你是演示专家。'), 'the body must be indented 6 spaces')
+assert.ok(written.includes('你是演示专家。'), 'the persona body must land in the preset')
+assert.ok(!written.includes('{{model}} 与 {{cwd}}'), 'template braces from the expert prose must be stripped')
+assert.ok(written.includes('模板残留：model 与 cwd 必须被剥掉。'), 'the prose survives with braces removed')
+assert.ok(written.includes('    suffix: Your working directory is {{cwd}}.'), 'the suffix must be untouched')
+assert.ok(!written.includes('name: demo\n'), 'the YAML frontmatter must be stripped')
+assert.equal((written.match(/^- id:/gm) ?? []).length, 2, 'no other composition row may be added or lost')
+assert.ok(written.includes('- id: agent-instructions'), 'later rows must survive')
+
+// 非法专家名：不碰 agentPresets，直接 400
+const badName = await callOn('POST', '/expert-preset-ensure', { name: '../etc/passwd' })
+assert.equal(badName.status, 400)
+assert.equal(badName.json.ok, false)
+assert.equal(presetCalls.copied.length, 1)
+
+// select 已改为客户端官方 remote（ctx.remote.agentPresets.select(sessionId, presetId)）：
+// 它会自动把 sessionId 解析成 agent、且只对空白会话生效（会话开始后被锁拒绝），
+// 不再走宿主路由，所以这里不测宿主 select。
+
+// 卸载专家后 best-effort 删掉它的 preset
+const uninstalled = await callOn('POST', '/uninstall', { kind: 'expert', name: 'demo-expert' })
+assert.equal(uninstalled.status, 200)
+assert.deepEqual(presetCalls.removed, ['workbuddy-demo-expert'], 'uninstall must drop the expert preset')
+assert.equal(presetDirs.has('workbuddy-demo-expert'), false)
+
+// 真实 standard preset 的 YAML 也要能被原地改写（260 行、含 !!js 与注释）
+const REAL_STANDARD = '/home/kaitzh/deepseek-harness/packages/preset/agent-presets/presets/standard/agent.cordis.yml'
+if (existsSync(REAL_STANDARD)) {
+  const source = readFileSync(REAL_STANDARD, 'utf8')
+  const patched = replacePersonaPrefix(source, '你是演示专家。\n第二行：正文换行必须保留。')
+  assert.equal((patched.match(/^- id:/gm) ?? []).length, (source.match(/^- id:/gm) ?? []).length,
+    'rewriting the real standard preset must not add or drop a row')
+  assert.ok(patched.includes('    prefix: |'))
+  assert.ok(patched.includes('    suffix: Your working directory is {{cwd}}.'))
+  assert.ok(patched.includes('      你是演示专家。'))
+  assert.ok(patched.includes('      第二行：正文换行必须保留。'))
+  assert.ok(!patched.includes('>-'), 'the folded prefix scalar must be gone')
+  assert.ok(patched.includes('!!js'), 'the rest of the real composition must be untouched')
+}
 
 console.log('session resolution + live MCP tool registry: OK')

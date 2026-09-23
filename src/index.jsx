@@ -5,7 +5,7 @@ import ComposerAdd from './ComposerAdd.jsx'
 import AttachedRail from './AttachedRail.jsx'
 import SettingsPage from './SettingsPage.jsx'
 import {
-  setMarketNavigator, setSessionOpener, setSessionStarter, openMarket,
+  setMarketNavigator, setSessionOpener, setSessionStarter, setPresetSelector, openMarket,
   openSessionById, startNewSession, composerSession,
 } from './hub.js'
 
@@ -145,6 +145,13 @@ const plugin = {
       try { workspace.openSession({ sessionId }); return true } catch (error) {
         console.warn('[wbh] openSession failed:', String(error?.message || error)); return false
       }
+    })
+    setPresetSelector((sessionId, presetId) => {
+      const remote = ctx.remote ?? null
+      if (typeof remote?.agentPresets?.select !== 'function') {
+        return { ok: false, error: 'agentPresets remote 不可用' }
+      }
+      return remote.agentPresets.select(sessionId, presetId)
     })
     setSessionStarter(() => {
       let workspace = null

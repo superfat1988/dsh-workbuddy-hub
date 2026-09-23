@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { hub, addSelection } from './hub.js'
+import { hub, addSelection, startNewSession, composerSession, selectPreset } from './hub.js'
 import { insertPromptIntoComposer } from './insert-prompt.js'
 import { WbIcon } from './icons.js'
 import Catalogue from './Catalogue.jsx'
@@ -80,6 +80,46 @@ export default function MarketPage({ sessionId, runCommand }) {
     else void attach(entry)
   }, [attach])
 
+  // 阶段 2 / 方案 B：新建一个会话，并把该专家设成这个会话的 agent preset
+  // （真接管：preset 决定该会话的 persona/工具面，不再靠 system prompt 叠加）。
+  // 顺序照官方：先确保 preset 存在 → 新建会话 → 等会话真的切过去 → select。
+  const summonInNewSession = useCallback(async entry => {
+    const key = `${entry.kind}/${entry.name}`
+    setBusy(key); setNotice('')
+    addSelection(entry) // 先让 chip 出现（与官方「选中即显示」一致）
+    try {
+      const ensure = await hub.expertPresetEnsure(entry.name)
+      if (!ensure?.ok || !ensure.presetId) {
+        setNotice(`失败：${ensure?.error || '无法创建专家预设'}`)
+        return
+      }
+      const before = composerSession() || sessionId || ''
+      startNewSession()
+      // 新会话是异步出现的（uiWorkspace.startSession 内部 connectWorkspace）；
+      // 等 composer 槽拿到新的 sessionId，最多 6 秒。
+      let target = ''
+      for (let i = 0; i < 24; i += 1) {
+        await new Promise(resolve => setTimeout(resolve, 250))
+        const now = composerSession()
+        if (now && now !== before) { target = now; break }
+      }
+      // 没等到变化时退回当前会话：若它本来就是那个空白会话，select 依然成立。
+      if (!target) target = composerSession() || sessionId || ''
+      if (!target) { setNotice('失败：没有等到新会话，请手动新建对话后重试'); return }
+      // 官方 remote：把 sessionId 解析成 agent 再 select；只对空白会话生效
+      const picked = await selectPreset(target, ensure.presetId)
+      if (!picked?.ok) {
+        const detail = picked?.error?.details?.reason ?? picked?.error?.message ?? picked?.error
+        setNotice(`失败：${typeof detail === 'string' ? detail : '切换 agent preset 被拒绝'}`)
+        return
+      }
+      setNotice(`已在新会话中以「${entry.displayName || entry.name}」身份开始`)
+    } catch (error) {
+      // 409（该会话没有活跃 agent）等非 2xx 会走这里，error.message 即宿主原文。
+      setNotice(`失败：${error.message}`)
+    } finally { setBusy('') }
+  }, [sessionId])
+
   const loggedIn = auth?.configured === true
   return (
     <div className="expert-center-page wbh-page" data-wbh-session={sessionId || ''}>
@@ -93,6 +133,7 @@ export default function MarketPage({ sessionId, runCommand }) {
         <SummonModal entry={summoning} busy={busy === `${summoning.kind}/${summoning.name}`}
           onClose={() => setSummoning(null)}
           onConfirm={async task => { await attach(summoning, task); setSummoning(null) }}
+          onNewSession={() => { const picked = summoning; setSummoning(null); void summonInNewSession(picked) }}
           onQuickPrompt={text => {
             setSummoning(null)
             void attach(summoning, text)

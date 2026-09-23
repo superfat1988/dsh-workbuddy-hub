@@ -32,7 +32,8 @@ import {
 } from './expert-persona.js'
 
 export const name = 'workbuddy-hub'
-export const inject = ['webServer', 'connection', 'loader', 'commands', 'subagents', 'credentials', 'sessions', 'agents', 'systemPrompt']
+// agentPresets 供「方案 B」使用：把专家做成真正的 agent preset，由用户在新会话里选中。
+export const inject = ['webServer', 'connection', 'loader', 'commands', 'subagents', 'credentials', 'sessions', 'agents', 'systemPrompt', 'agentPresets']
 
 const PREFIX = '/workbuddy-hub'
 const GH_RAW = 'https://raw.githubusercontent.com'
@@ -464,6 +465,107 @@ function injectedExpertPersona(paths, sessionId, disabled) {
   } catch {
     return ''
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * 方案 B：每专家一个 agent preset（真接管）
+ *
+ * 与方案 A（注入当前会话的 system prompt）并存：A 是默认动作，B 是可选动作 ——
+ * 把专家人设写进一个 user root 里的 preset，用户在新会话里选中它，该会话的
+ * persona / 工具面就由这份 preset 决定（真接管，不再依赖 section 叠加）。
+ * ------------------------------------------------------------------ */
+
+/** 专家 preset id；expertName 必须已通过 /^[\w.-]+$/ 校验。 */
+export function expertPresetId(expertName) {
+  return `workbuddy-${expertName}`
+}
+
+/** 进 preset 的人设正文上限（字符）；超长截断并注明。 */
+const MAX_PRESET_PERSONA_CHARS = 12000
+
+/**
+ * 专家人设正文 → 可直接放进 preset YAML 的文本：
+ *  - 剥掉 frontmatter（extractPersonaBody）；
+ *  - 剥掉 `{{` / `}}`：preset 的 persona section 走**严格插值**，专家正文里
+ *    残留的模板变量会让 renderPrompt 因未知变量直接抛错，必须清掉；
+ *  - 超长截断。
+ */
+export function presetPersonaText(persona) {
+  let text = extractPersonaBody(persona).replace(/\{\{|\}\}/g, '').trim()
+  if (text.length > MAX_PRESET_PERSONA_CHARS) {
+    text = `${text.slice(0, MAX_PRESET_PERSONA_CHARS)}\n\n（人设正文过长，已截断至前 ${MAX_PRESET_PERSONA_CHARS} 字符。）`
+  }
+  return text
+}
+
+/**
+ * 把 agent.cordis.yml 里 `- id: persona` 块的 `prefix:` 值换成 YAML literal
+ * block scalar（`|`，正文每行 6 空格缩进），换行原样保留；同块的 suffix 及其它
+ * 行一律不动。找不到 persona 块 / prefix 键时抛错（调用方转成 ok:false）。
+ * 只用 `|` 不用 `>-`：后者会把正文折成一行。
+ */
+export function replacePersonaPrefix(yaml, body) {
+  const lines = String(yaml).split('\n')
+  const start = lines.findIndex(line => /^- id:\s*persona\s*$/.test(line))
+  if (start < 0) throw new Error('agent.cordis.yml 里没有 `- id: persona` 块')
+  let end = lines.length
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^- id:/.test(lines[i])) { end = i; break }
+  }
+  const key = lines.findIndex((line, i) => i > start && i < end && /^ {4}prefix:/.test(line))
+  if (key < 0) throw new Error('persona 块里没有 `prefix:` 键')
+  // 吃掉 prefix 的旧值：块标量（>-, |, |- …）继续到缩进不足 6 为止；行内标量只吃本行。
+  let stop = key + 1
+  if (/^ {4}prefix:\s*[|>][+-]?\s*$/.test(lines[key])) {
+    while (stop < end && /^ {5,}\S/.test(lines[stop])) stop += 1
+  }
+  const block = String(body).split('\n').map(line => (line.trim() === '' ? '' : `      ${line}`))
+  lines.splice(key, stop - key, '    prefix: |', ...block)
+  return lines.join('\n')
+}
+
+/**
+ * 确保某专家在 user root 里有一份 agent preset（幂等：已存在直接复用）。
+ * @returns {Promise<{ok: true, presetId: string} | {ok: false, error: string}>}
+ */
+export async function ensureExpertPreset(ctx, paths, expertName) {
+  const name = String(expertName || '')
+  if (!/^[\w.-]+$/.test(name)) return { ok: false, error: `invalid expert name "${name}"` }
+  const presets = ctx?.agentPresets
+  if (!presets || typeof presets.resolve !== 'function' || typeof presets.copy !== 'function') {
+    return { ok: false, error: 'agentPresets unavailable' }
+  }
+  const presetId = expertPresetId(name)
+  // 幂等：上一轮召唤已经建过就直接复用，不重复 copy（copy 对已存在的 id 会抛错）。
+  try {
+    await presets.resolve(presetId)
+    return { ok: true, presetId }
+  } catch { /* 不存在 → 下面创建 */ }
+
+  const read = readExpertPersona(paths.experts, name)
+  if (!read.ok) return { ok: false, error: `专家人设不可用：${read.error}` }
+  const body = presetPersonaText(read.persona)
+  if (body === '') return { ok: false, error: '专家人设正文为空' }
+
+  try {
+    await presets.copy('standard', presetId, read.title || name)
+  } catch (error) {
+    return { ok: false, error: `创建专家预设失败：${String(error?.message || error)}` }
+  }
+  try {
+    const resolved = await presets.resolve(presetId)
+    const file = resolved?.path
+    if (!file) throw new Error('resolve 未返回 preset 文件路径')
+    writeFileSync(file, replacePersonaPrefix(readFileSync(file, 'utf8'), body))
+    // 用 DSH 自己的 discovery 复核一遍：它用 loader 的 YAML dialect 解析，
+    // broken 非空说明这份 preset 装不起来（宁可现在失败，也不留个装不上的空壳）。
+    const verified = await presets.resolve(presetId)
+    if (verified?.broken !== undefined) throw new Error(String(verified.broken))
+  } catch (error) {
+    try { await presets.remove?.(presetId) } catch { /* 清不掉也不影响报错 */ }
+    return { ok: false, error: `写入专家预设失败：${String(error?.message || error)}` }
+  }
+  return { ok: true, presetId }
 }
 
 /* ------------------------------------------------------------------ *
@@ -1330,6 +1432,37 @@ export function apply(ctx, config = {}) {
       return true
     }
 
+    // 只读：把该会话的 system prompt 真实 assemble 出来，验证专家人设段是否真的
+    // 进了 assembled 结果——这是「模型这一步会收到什么」的精确答案，无需真实模型回合。
+    if (route === 'GET /expert-assemble') {
+      try {
+        const sessionId = String(url.searchParams.get('sessionId') || '').trim()
+        if (!sessionId) { json(res, 400, { error: 'missing sessionId' }); return true }
+        const sp = ctx.get?.('systemPrompt') ?? ctx.systemPrompt
+        if (!sp || typeof sp.assemble !== 'function') {
+          json(res, 200, { ok: false, reason: 'systemPrompt unavailable' }); return true
+        }
+        // 优先用真实 agent 作 scope；没有活跃 agent 时退回 {id}（section 在 global 层，
+        // 两种 scope 都能拼出同一份全局 section）。
+        const scope = resolveAgent(sessionId) ?? { id: sessionId }
+        const assembly = await sp.assemble({ scope })
+        const sections = Array.isArray(assembly?.sections) ? assembly.sections : []
+        const section = sections.find(item => item?.name === 'workbuddy-expert-persona')
+        const rendered = sections.map(item => item?.text ?? '').join('\n\n')
+        json(res, 200, {
+          ok: true, sessionId,
+          sectionCount: sections.length,
+          personaPresent: Boolean(section && section.text),
+          personaChars: section?.text?.length ?? 0,
+          personaText: section?.text ?? '',
+          promptContainsMarker: rendered.includes('【已选专家角色】'),
+        })
+      } catch (error) {
+        json(res, 500, { ok: false, error: String(error?.message || error) })
+      }
+      return true
+    }
+
     // 只读：当前会话的专家人设注入状态（排障用：能看到命中哪个专家、注入了多少字）。
     if (route === 'GET /expert-injection') {
       try {
@@ -1352,6 +1485,21 @@ export function apply(ctx, config = {}) {
       }
       return true
     }
+
+    // 方案 B：为某专家准备一份 agent preset（幂等），供「在新会话中召唤」使用。
+    if (route === 'POST /expert-preset-ensure') {
+      try {
+        const body = JSON.parse((await readBody(req)) || '{}')
+        const result = await ensureExpertPreset(ctx, P, String(body.name || ''))
+        json(res, result.ok ? 200 : 400, result)
+      } catch (error) {
+        json(res, 500, { ok: false, error: String(error?.message || error) })
+      }
+      return true
+    }
+
+    // 方案 B：把某个**空白**会话的 agent 换成该专家 preset（DSH 语义：会话一旦开始
+    // 过回合，preset 就固定，select 会抛 agent-preset/locked，原文回给界面）。
 
     if (route === 'POST /mount' || route === 'POST /unmount') {
       const body = JSON.parse((await readBody(req)) || '{}')
@@ -1575,6 +1723,11 @@ export function apply(ctx, config = {}) {
       rmSync(record.dest, { recursive: true, force: true })
       delete registry.installed[key]
       saveJson(P.registry, registry)
+      // 专家卸载后 best-effort 删掉它对应的 agent preset（按 `workbuddy-<name>`
+      // 现算，不改安装记录结构）；删不掉（没建过 / 已不存在 / 被占用）不影响卸载。
+      if (kind === 'expert') {
+        try { await ctx.agentPresets?.remove?.(expertPresetId(entryName)) } catch { /* best effort */ }
+      }
       json(res, 200, { ok: true, removed: key })
       return true
     }

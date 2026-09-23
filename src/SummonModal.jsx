@@ -7,8 +7,10 @@ import { WbIcon } from './icons.js'
  * summon button, and quick-prompt examples. No free-form textarea (the task
  * is captured in the composer after selection in the official app); here a
  * clicked quick prompt seeds the summon task.
+ * `onNewSession` adds a secondary (plugin-owned) entry under the summon button:
+ * 新建会话并把该专家设为该会话的 agent preset（方案 B）。
  */
-export default function SummonModal({ entry, busy, onClose, onConfirm, onQuickPrompt }) {
+export default function SummonModal({ entry, busy, onClose, onConfirm, onQuickPrompt, onNewSession }) {
   const [task, setTask] = useState('')
   const [fade, setFade] = useState({ top: false, bottom: false })
   const shellRef = useRef(null)
@@ -50,6 +52,14 @@ export default function SummonModal({ entry, busy, onClose, onConfirm, onQuickPr
               disabled={busy} onClick={() => onConfirm(task)}>
               {busy ? '召唤中…' : '召唤专家'}
             </button>
+            {/* 方案 B 的次级入口：不改官方「召唤专家」主按钮的行为，只多给一条
+                「新建会话 + 把该专家设为这个会话的 agent preset」的路。 */}
+            {onNewSession && (
+              <button type="button" className="wbh-newSessionBtn"
+                disabled={busy} onClick={() => onNewSession()}>
+                {busy ? '处理中…' : '在新会话中召唤（真接管）'}
+              </button>
+            )}
           </div>
         </div>
 
