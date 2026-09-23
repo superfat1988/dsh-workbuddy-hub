@@ -229,9 +229,9 @@ export const hub = {
  * 完全不动：不挂载、不注入、不 chip。
  * @returns {Promise<{ok:true, presetId, sessionId} | {ok:false, error}>}
  */
-export async function summonExpertInNewSession(entry, workspaceId) {
+export async function summonExpertInNewSession(entry, workspaceId, nearSessionId) {
   try {
-    // 先确保已安装（未安装则下载，人设文件是 preset 的前置）
+    // 先确保已安装（人设文件是注入的前置）
     const key = `expert/${entry.name}`
     let already = false
     try { already = Boolean((await hub.installed())[key]) } catch { /* 读不到则走安装 */ }
@@ -239,25 +239,26 @@ export async function summonExpertInNewSession(entry, workspaceId) {
       try {
         await hub.install('expert', entry.name, entry.official ? 'official' : undefined)
       } catch (error) {
-        // 已装过后端会 400；再确认一次，避免把「已安装」当失败
         const fresh = await hub.installed().catch(() => ({}))
         if (!fresh[key]) return { ok: false, error: `安装专家失败：${String(error?.message || error)}` }
       }
     }
-    const ensure = await hub.expertPresetEnsure(entry.name)
-    console.info('[wbh] summonExpert: ensure ->', JSON.stringify(ensure))
-    if (!ensure?.ok || !ensure.presetId) return { ok: false, error: ensure?.error || '无法创建专家预设' }
-
-    // 建会话时就把 preset 带上（sessionController.create {agentPreset}），一步到位。
-    const created = await post('/expert-new-session', { presetId: ensure.presetId, workspaceId })
+    // 官方语义：召唤 = 新建一个会话；工作区用**当前会话所属工作区**（可靠），
+    // 专家用方案 C 的注入+接管加载进这个新会话（不写 preset）。
+    const created = await post('/expert-new-session', {
+      ...(workspaceId ? { workspaceId } : {}),
+      ...(!workspaceId && nearSessionId ? { nearSessionId } : {}),
+    })
     if (!created?.ok || !created.sessionId) {
-      return { ok: false, error: created?.error || '创建专家会话失败' }
+      return { ok: false, error: created?.error || '创建新会话失败' }
     }
-    console.info('[wbh] summonExpert: created ->', created.sessionId)
-    addSelection(entry, created.sessionId)
-    openSessionById(created.sessionId)
-    return { ok: true, presetId: ensure.presetId, sessionId: created.sessionId }
+    const sessionId = created.sessionId
+    await post('/mount', { sessionId, kind: 'expert', name: entry.name })
+    addSelection(entry, sessionId)
+    openSessionById(sessionId)
+    return { ok: true, sessionId }
   } catch (error) {
     return { ok: false, error: String(error?.message || error) }
   }
 }
+

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { hub, addSelection, openSessionById } from './hub.js'
+import { hub, addSelection, summonExpertInNewSession } from './hub.js'
 import { insertPromptIntoComposer } from './insert-prompt.js'
 import { WbIcon } from './icons.js'
 import Catalogue from './Catalogue.jsx'
@@ -49,14 +49,10 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
           setNotice(`已连接「${entry.displayName}」（工具命名空间 ${r.serverName}），下一次模型步骤起可用。`)
         }
       } else if (entry.kind === 'expert') {
-        // 方案 C：把专家挂到当前会话（宿主在 system-prompt/assemble 里把部署人设段
-        // 替换成专家人设 = 接管）。挂载后用**宿主返回的真实会话 id** 跳到该会话 ——
-        // 否则用户停在世界市场页，看不到专家已就位。
-        const r = await hub.mount(sessionId, entry.kind, entry.name)
-        const target = r?.sessionId || sessionId || ''
-        addSelection(entry, target)
-        if (target) openSessionById(target)
-        setNotice(`已选中「${entry.displayName}」，下一步起以该专家身份回答`)
+        // 官方语义：召唤 = 新建一个会话 + 该专家加载进去（方案 C 的注入+接管，不写 preset）。
+        // 新会话落在**当前会话所属工作区**（workspaceId 由 main 槽解析），避免落错工作区。
+        const r = await summonExpertInNewSession(entry, workspaceId)
+        setNotice(r.ok ? `已在新会话中加载「${entry.displayName}」，下一步起以该专家身份回答` : `失败：${r.error}`)
       } else {
         await hub.mount(sessionId, entry.kind, entry.name)
         addSelection(entry, sessionId)
@@ -74,11 +70,16 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
     if (entry.kind === 'expert') setSummoning(entry)
     else void attach(entry)
   }, [attach])
-  // 专家卡片右上角的「召唤」= 选中该专家挂到当前会话（方案 C：下一步起接管人设）。
+  // 专家卡片右上角的「召唤」= 新建会话 + 该专家加载进去（官方语义）。
   const onAction = useCallback(entry => {
-    if (entry.kind === 'expert') { setSummoning(null); void attach(entry) }
-    else void attach(entry)
-  }, [attach])
+    if (entry.kind === 'expert') {
+      setBusy(`${entry.kind}/${entry.name}`); setNotice('')
+      void summonExpertInNewSession(entry, workspaceId).then(r => {
+        setNotice(r.ok ? `已在新会话中加载「${entry.displayName}」，下一步起以该专家身份回答` : `失败：${r.error}`)
+      }).catch(error => { setNotice(`失败：${String(error?.message || error)}`) })
+        .finally(() => setBusy(''))
+    } else void attach(entry)
+  }, [attach, workspaceId])
 
   const loggedIn = auth?.configured === true
   return (
@@ -96,7 +97,10 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
           onQuickPrompt={text => {
             const picked = summoning
             setSummoning(null)
-            void attach(picked).then(() => { try { insertPromptIntoComposer(text) } catch { /* 忽略 */ } })
+            void summonExpertInNewSession(picked, workspaceId).then(r => {
+              setNotice(r.ok ? `已在新会话中加载「${picked.displayName}」` : `失败：${r.error}`)
+              if (r.ok) setTimeout(() => { try { insertPromptIntoComposer(text) } catch { /* 忽略 */ } }, 900)
+            }).catch(error => { setNotice(`失败：${String(error?.message || error)}`) })
           }} />
       )}
       {authorising && (

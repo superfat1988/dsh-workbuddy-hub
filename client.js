@@ -2421,7 +2421,7 @@ var hub = {
   authPoll: () => post("/wb-auth/poll", {}),
   authLogout: () => post("/wb-auth/logout", {})
 };
-async function summonExpertInNewSession(entry, workspaceId) {
+async function summonExpertInNewSession(entry, workspaceId, nearSessionId) {
   try {
     const key = `expert/${entry.name}`;
     let already = false;
@@ -2437,17 +2437,18 @@ async function summonExpertInNewSession(entry, workspaceId) {
         if (!fresh[key]) return { ok: false, error: `\u5B89\u88C5\u4E13\u5BB6\u5931\u8D25\uFF1A${String(error?.message || error)}` };
       }
     }
-    const ensure = await hub.expertPresetEnsure(entry.name);
-    console.info("[wbh] summonExpert: ensure ->", JSON.stringify(ensure));
-    if (!ensure?.ok || !ensure.presetId) return { ok: false, error: ensure?.error || "\u65E0\u6CD5\u521B\u5EFA\u4E13\u5BB6\u9884\u8BBE" };
-    const created = await post("/expert-new-session", { presetId: ensure.presetId, workspaceId });
+    const created = await post("/expert-new-session", {
+      ...workspaceId ? { workspaceId } : {},
+      ...!workspaceId && nearSessionId ? { nearSessionId } : {}
+    });
     if (!created?.ok || !created.sessionId) {
-      return { ok: false, error: created?.error || "\u521B\u5EFA\u4E13\u5BB6\u4F1A\u8BDD\u5931\u8D25" };
+      return { ok: false, error: created?.error || "\u521B\u5EFA\u65B0\u4F1A\u8BDD\u5931\u8D25" };
     }
-    console.info("[wbh] summonExpert: created ->", created.sessionId);
-    addSelection(entry, created.sessionId);
-    openSessionById(created.sessionId);
-    return { ok: true, presetId: ensure.presetId, sessionId: created.sessionId };
+    const sessionId = created.sessionId;
+    await post("/mount", { sessionId, kind: "expert", name: entry.name });
+    addSelection(entry, sessionId);
+    openSessionById(sessionId);
+    return { ok: true, sessionId };
   } catch (error) {
     return { ok: false, error: String(error?.message || error) };
   }
@@ -3518,11 +3519,8 @@ function MarketPage({ sessionId, workspaceId, runCommand: runCommand2 }) {
           setNotice(`\u5DF2\u8FDE\u63A5\u300C${entry.displayName}\u300D\uFF08\u5DE5\u5177\u547D\u540D\u7A7A\u95F4 ${r.serverName}\uFF09\uFF0C\u4E0B\u4E00\u6B21\u6A21\u578B\u6B65\u9AA4\u8D77\u53EF\u7528\u3002`);
         }
       } else if (entry.kind === "expert") {
-        const r = await hub.mount(sessionId, entry.kind, entry.name);
-        const target = r?.sessionId || sessionId || "";
-        addSelection(entry, target);
-        if (target) openSessionById(target);
-        setNotice(`\u5DF2\u9009\u4E2D\u300C${entry.displayName}\u300D\uFF0C\u4E0B\u4E00\u6B65\u8D77\u4EE5\u8BE5\u4E13\u5BB6\u8EAB\u4EFD\u56DE\u7B54`);
+        const r = await summonExpertInNewSession(entry, workspaceId);
+        setNotice(r.ok ? `\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u52A0\u8F7D\u300C${entry.displayName}\u300D\uFF0C\u4E0B\u4E00\u6B65\u8D77\u4EE5\u8BE5\u4E13\u5BB6\u8EAB\u4EFD\u56DE\u7B54` : `\u5931\u8D25\uFF1A${r.error}`);
       } else {
         await hub.mount(sessionId, entry.kind, entry.name);
         addSelection(entry, sessionId);
@@ -3543,10 +3541,15 @@ function MarketPage({ sessionId, workspaceId, runCommand: runCommand2 }) {
   }, [attach]);
   const onAction = (0, import_react7.useCallback)((entry) => {
     if (entry.kind === "expert") {
-      setSummoning(null);
-      void attach(entry);
+      setBusy(`${entry.kind}/${entry.name}`);
+      setNotice("");
+      void summonExpertInNewSession(entry, workspaceId).then((r) => {
+        setNotice(r.ok ? `\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u52A0\u8F7D\u300C${entry.displayName}\u300D\uFF0C\u4E0B\u4E00\u6B65\u8D77\u4EE5\u8BE5\u4E13\u5BB6\u8EAB\u4EFD\u56DE\u7B54` : `\u5931\u8D25\uFF1A${r.error}`);
+      }).catch((error) => {
+        setNotice(`\u5931\u8D25\uFF1A${String(error?.message || error)}`);
+      }).finally(() => setBusy(""));
     } else void attach(entry);
-  }, [attach]);
+  }, [attach, workspaceId]);
   const loggedIn = auth?.configured === true;
   return /* @__PURE__ */ import_react7.default.createElement("div", { className: "expert-center-page wbh-page", "data-wbh-session": sessionId || "" }, /* @__PURE__ */ import_react7.default.createElement(
     Catalogue,
@@ -3577,11 +3580,16 @@ function MarketPage({ sessionId, workspaceId, runCommand: runCommand2 }) {
       onQuickPrompt: (text) => {
         const picked = summoning;
         setSummoning(null);
-        void attach(picked).then(() => {
-          try {
-            insertPromptIntoComposer(text);
-          } catch {
-          }
+        void summonExpertInNewSession(picked, workspaceId).then((r) => {
+          setNotice(r.ok ? `\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u52A0\u8F7D\u300C${picked.displayName}\u300D` : `\u5931\u8D25\uFF1A${r.error}`);
+          if (r.ok) setTimeout(() => {
+            try {
+              insertPromptIntoComposer(text);
+            } catch {
+            }
+          }, 900);
+        }).catch((error) => {
+          setNotice(`\u5931\u8D25\uFF1A${String(error?.message || error)}`);
         });
       }
     }
@@ -3781,9 +3789,8 @@ function ComposerAdd({ sessionId, runCommand: runCommand2 }) {
           setNotice(`\u5DF2\u8FDE\u63A5\u300C${entry.displayName}\u300D\uFF08\u5DE5\u5177\u547D\u540D\u7A7A\u95F4 ${r.serverName}\uFF09\uFF0C\u4E0B\u4E00\u6B21\u6A21\u578B\u6B65\u9AA4\u8D77\u53EF\u7528\u3002`);
         }
       } else if (entry.kind === "expert") {
-        const r = await hub.mount(sessionId, entry.kind, entry.name);
-        addSelection(entry, r?.sessionId || sessionId);
-        setNotice(`\u5DF2\u9009\u4E2D\u300C${entry.displayName}\u300D\uFF0C\u4E0B\u4E00\u6B65\u8D77\u4EE5\u8BE5\u4E13\u5BB6\u8EAB\u4EFD\u56DE\u7B54`);
+        const r = await summonExpertInNewSession(entry, void 0, sessionId);
+        setNotice(r.ok ? `\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u52A0\u8F7D\u300C${entry.displayName}\u300D` : `\u5931\u8D25\uFF1A${r.error}`);
       } else {
         await hub.mount(sessionId, entry.kind, entry.name);
         addSelection(entry, sessionId);

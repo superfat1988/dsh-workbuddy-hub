@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react'
-import { hub, addSelection, onCatalogChange, onMarketRequest, setComposerSession } from './hub.js'
+import { hub, addSelection, summonExpertInNewSession, onCatalogChange, onMarketRequest, setComposerSession } from './hub.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
 import Catalogue from './Catalogue.jsx'
@@ -166,10 +166,10 @@ export default function ComposerAdd({ sessionId, runCommand }) {
           setNotice(`已连接「${entry.displayName}」（工具命名空间 ${r.serverName}），下一次模型步骤起可用。`)
         }
       } else if (entry.kind === 'expert') {
-        // 方案 C：挂到当前会话（picker 本来就在会话里，无需跳转）。
-        const r = await hub.mount(sessionId, entry.kind, entry.name)
-        addSelection(entry, r?.sessionId || sessionId)
-        setNotice(`已选中「${entry.displayName}」，下一步起以该专家身份回答`)
+        // 官方语义：新建会话 + 该专家加载进去；picker 没有 useWorkspaces，
+        // 由宿主从当前会话的 header.cwd 解析工作区。
+        const r = await summonExpertInNewSession(entry, undefined, sessionId)
+        setNotice(r.ok ? `已在新会话中加载「${entry.displayName}」` : `失败：${r.error}`)
       } else {
         await hub.mount(sessionId, entry.kind, entry.name)
         addSelection(entry, sessionId)

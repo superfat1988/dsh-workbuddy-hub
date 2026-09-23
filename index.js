@@ -1500,9 +1500,20 @@ export function apply(ctx, config = {}) {
         const sc = ctx.get?.('sessionController') ?? ctx.sessionController
         if (!sc || typeof sc.create !== 'function') { json(res, 503, { ok: false, error: 'sessionController unavailable' }); return true }
         const workspaceId = body.workspaceId ? String(body.workspaceId) : undefined
+        // 没给 workspaceId 时，用 nearSessionId 所属会话的 cwd 落同一工作区
+        // （picker 场景拿不到 useWorkspaces，只能靠宿主从会话头解析）。
+        let cwd = body.cwd ? String(body.cwd) : undefined
+        if (!workspaceId && !cwd && body.nearSessionId) {
+          try {
+            const near = ctx.sessions?.get?.(String(body.nearSessionId))
+            const nearCwd = near?.header?.cwd
+            if (typeof nearCwd === 'string' && nearCwd !== '') cwd = nearCwd
+          } catch { /* 解析不到就退回 defaultCwd */ }
+        }
         const created = await sc.create({
           ...(presetId ? { agentPreset: presetId } : {}),
           ...(workspaceId ? { workspaceId } : {}),
+          ...(!workspaceId && cwd ? { cwd } : {}),
         })
         json(res, 200, { ok: true, sessionId: created.sessionId, agentPreset: created.agentPreset })
       } catch (error) {
