@@ -417,8 +417,8 @@ export default function Catalogue({
   // 技能：选中即把「/技能名」写进聊天输入框（DSH 的 skill 调用样式），并显示 chip
   const handleSkillPick = useCallback(entry => {
     insertPromptIntoComposer(`/${entry.name} `)
-    addSelection(entry)
-  }, [])
+    addSelection(entry, sessionId)
+  }, [sessionId])
 
   const togglePin = useCallback(entry => {
     const key = `${entry.kind}/${entry.name}`

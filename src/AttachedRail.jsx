@@ -8,16 +8,16 @@ import { WbIcon } from './icons.js'
  * 数据来源是客户端选择态 store（选中立刻可见），不依赖槽位能否拿到 sessionId。
  */
 export default function AttachedRail({ sessionId }) {
-  const [items, setItems] = useState(selectedItems())
+  const [items, setItems] = useState(selectedItems(sessionId))
   const [busy, setBusy] = useState('')
 
-  const sync = useCallback(() => setItems([...selectedItems()]), [])
+  const sync = useCallback(() => setItems([...selectedItems(sessionId)]), [sessionId])
   useEffect(() => onSelectionChange(sync), [sync])
   useEffect(() => onCatalogChange(sync), [sync])
 
   const detach = async item => {
     setBusy(item.key)
-    removeSelection(item.kind, item.name)
+    removeSelection(sessionId, item.kind, item.name)
     try {
       if (item.kind === 'connector') await hub.disableConnector(item.name)
       if (sessionId) await hub.unmount(sessionId, item.kind, item.name)

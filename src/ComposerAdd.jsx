@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react'
-import { hub, addSelection, onCatalogChange, onMarketRequest, setComposerSession } from './hub.js'
+import { hub, addSelection, summonExpertInNewSession, onCatalogChange, onMarketRequest, setComposerSession } from './hub.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
 import Catalogue from './Catalogue.jsx'
@@ -135,9 +135,8 @@ export default function ComposerAdd({ sessionId, runCommand }) {
   const attach = useCallback(async (entry, task = '') => {
     const key = `${entry.kind}/${entry.name}`
     setBusy(key); setNotice('')
-    // 官方逻辑：在 picker 里选中即刻在聊天框出现该项的 chip（选择态），
-    // 安装/挂载是后续动作，失败也不回滚这次选择。
-    addSelection(entry)
+    // 官方逻辑：选中即刻在聊天框出现该项的 chip（按会话隔离）。
+    addSelection(entry, sessionId)
     try {
       let already = Boolean(installed[key])
       if (!already) {
@@ -163,18 +162,16 @@ export default function ComposerAdd({ sessionId, runCommand }) {
         } else {
           const r = await hub.enableConnector(entry.name)
           await hub.mount(sessionId, entry.kind, entry.name)
-          addSelection(entry)
+          addSelection(entry, sessionId)
           setNotice(`已连接「${entry.displayName}」（工具命名空间 ${r.serverName}），下一次模型步骤起可用。`)
         }
       } else if (entry.kind === 'expert') {
-        // 方案 A：挂载即可。宿主把该专家人设作为 system prompt section 注入当前会话，
-        // 每个 step 的 assembly 重算 → 下一步起以该专家身份回答（不建子会话）。
-        await hub.mount(sessionId, entry.kind, entry.name)
-        addSelection(entry)
-        setNotice(`已选中「${entry.displayName}」，下一步起以该专家身份回答`)
+        // 官方语义：召唤 = 新建会话 + 该专家成为那个会话的 agent（当前会话不动）。
+        const r = await summonExpertInNewSession(entry)
+        setNotice(r.ok ? `已在新会话中以「${entry.displayName}」身份开始` : `失败：${r.error}`)
       } else {
         await hub.mount(sessionId, entry.kind, entry.name)
-        addSelection(entry)
+        addSelection(entry, sessionId)
         setNotice(`已挂载「${entry.displayName}」`)
       }
       setRecent(prev => [entry, ...prev.filter(e => e.key !== key)].slice(0, 5))

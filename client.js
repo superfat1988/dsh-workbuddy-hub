@@ -2229,10 +2229,11 @@ function openMarket(request) {
   } catch {
   }
 }
-var _selected = [];
+var _selectedBySession = /* @__PURE__ */ new Map();
 var _selListeners = /* @__PURE__ */ new Set();
-function selectedItems() {
-  return _selected;
+function selectedItems(sessionId) {
+  const key = sessionId || "_unbound";
+  return _selectedBySession.get(key) || [];
 }
 function onSelectionChange(fn) {
   _selListeners.add(fn);
@@ -2248,16 +2249,23 @@ var _emitSelection = () => {
     }
   }
 };
-function addSelection(entry) {
-  const key = `${entry.kind}/${entry.name}`;
-  if (_selected.some((x) => x.key === key)) return;
-  _selected = [..._selected, { key, kind: entry.kind, name: entry.name, displayName: entry.displayName || entry.name, icon: entry.icon || "" }];
+function addSelection(entry, sessionId) {
+  const key = sessionId || "_unbound";
+  const list = _selectedBySession.get(key) || [];
+  const itemKey = `${entry.kind}/${entry.name}`;
+  if (list.some((x) => x.key === itemKey)) return;
+  _selectedBySession.set(key, [...list, { key: itemKey, kind: entry.kind, name: entry.name, displayName: entry.displayName || entry.name, icon: entry.icon || "" }]);
   _emitSelection();
 }
-function removeSelection(kind, name) {
-  const before = _selected.length;
-  _selected = _selected.filter((x) => !(x.kind === kind && x.name === name));
-  if (_selected.length !== before) _emitSelection();
+function removeSelection(sessionId, kind, name) {
+  const key = sessionId || "_unbound";
+  const list = _selectedBySession.get(key) || [];
+  const before = list.length;
+  const next = list.filter((x) => !(x.kind === kind && x.name === name));
+  if (next.length !== before) {
+    _selectedBySession.set(key, next);
+    _emitSelection();
+  }
 }
 var _changeListeners = /* @__PURE__ */ new Set();
 var onCatalogChange = (fn) => {
@@ -2411,6 +2419,30 @@ var hub = {
   authPoll: () => post("/wb-auth/poll", {}),
   authLogout: () => post("/wb-auth/logout", {})
 };
+async function summonExpertInNewSession(entry) {
+  const ensure = await hub.expertPresetEnsure(entry.name);
+  if (!ensure?.ok || !ensure.presetId) return { ok: false, error: ensure?.error || "\u65E0\u6CD5\u521B\u5EFA\u4E13\u5BB6\u9884\u8BBE" };
+  const before = composerSession() || "";
+  startNewSession();
+  let target = "";
+  for (let i = 0; i < 24; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const now = composerSession();
+    if (now && now !== before) {
+      target = now;
+      break;
+    }
+  }
+  if (!target) target = composerSession() || "";
+  if (!target) return { ok: false, error: "\u6CA1\u6709\u7B49\u5230\u65B0\u4F1A\u8BDD\uFF0C\u8BF7\u624B\u52A8\u65B0\u5EFA\u5BF9\u8BDD\u540E\u91CD\u8BD5" };
+  const picked = await selectPreset(target, ensure.presetId);
+  if (!picked?.ok) {
+    const detail = picked?.error?.details?.reason ?? picked?.error?.message ?? picked?.error;
+    return { ok: false, error: typeof detail === "string" ? detail : "\u5207\u6362 agent preset \u88AB\u62D2\u7EDD" };
+  }
+  addSelection(entry, target);
+  return { ok: true, presetId: ensure.presetId, sessionId: target };
+}
 
 // src/insert-prompt.js
 function insertPromptIntoComposer(text) {
@@ -2940,8 +2972,8 @@ function Catalogue({
   }, [onDetail]);
   const handleSkillPick = (0, import_react3.useCallback)((entry) => {
     insertPromptIntoComposer(`/${entry.name} `);
-    addSelection(entry);
-  }, []);
+    addSelection(entry, sessionId);
+  }, [sessionId]);
   const togglePin = (0, import_react3.useCallback)((entry) => {
     const key = `${entry.kind}/${entry.name}`;
     setPinned((prev) => {
@@ -3462,7 +3494,7 @@ function MarketPage({ sessionId, runCommand: runCommand2 }) {
     const key = `${entry.kind}/${entry.name}`;
     setBusy(key);
     setNotice("");
-    addSelection(entry);
+    addSelection(entry, sessionId);
     try {
       if (!installed[key]) await hub.install(entry.kind, entry.name, entry.official ? "official" : void 0);
       if (entry.kind === "connector") {
@@ -3473,16 +3505,15 @@ function MarketPage({ sessionId, runCommand: runCommand2 }) {
         } else {
           const r = await hub.enableConnector(entry.name);
           await hub.mount(sessionId, entry.kind, entry.name);
-          addSelection(entry);
+          addSelection(entry, sessionId);
           setNotice(`\u5DF2\u8FDE\u63A5\u300C${entry.displayName}\u300D\uFF08\u5DE5\u5177\u547D\u540D\u7A7A\u95F4 ${r.serverName}\uFF09\uFF0C\u4E0B\u4E00\u6B21\u6A21\u578B\u6B65\u9AA4\u8D77\u53EF\u7528\u3002`);
         }
       } else if (entry.kind === "expert") {
-        await hub.mount(sessionId, entry.kind, entry.name);
-        addSelection(entry);
-        setNotice(`\u5DF2\u9009\u4E2D\u300C${entry.displayName}\u300D\uFF0C\u4E0B\u4E00\u6B65\u8D77\u4EE5\u8BE5\u4E13\u5BB6\u8EAB\u4EFD\u56DE\u7B54`);
+        const r = await summonExpertInNewSession(entry);
+        setNotice(r.ok ? `\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u4EE5\u300C${entry.displayName}\u300D\u8EAB\u4EFD\u5F00\u59CB` : `\u5931\u8D25\uFF1A${r.error}`);
       } else {
         await hub.mount(sessionId, entry.kind, entry.name);
-        addSelection(entry);
+        addSelection(entry, sessionId);
         setNotice(`\u5DF2\u6302\u8F7D\u300C${entry.displayName}\u300D`);
       }
       await refresh();
@@ -3500,50 +3531,14 @@ function MarketPage({ sessionId, runCommand: runCommand2 }) {
   }, [attach]);
   const onAction = (0, import_react7.useCallback)((entry) => {
     if (entry.kind === "expert") {
-      setSummoning(null);
-      void attach(entry);
+      setBusy(`${entry.kind}/${entry.name}`);
+      setNotice("");
+      void summonExpertInNewSession(entry).then((r) => {
+        setNotice(r.ok ? `\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u4EE5\u300C${entry.displayName}\u300D\u8EAB\u4EFD\u5F00\u59CB` : `\u5931\u8D25\uFF1A${r.error}`);
+        setBusy("");
+      });
     } else void attach(entry);
   }, [attach]);
-  const summonInNewSession = (0, import_react7.useCallback)(async (entry) => {
-    const key = `${entry.kind}/${entry.name}`;
-    setBusy(key);
-    setNotice("");
-    addSelection(entry);
-    try {
-      const ensure = await hub.expertPresetEnsure(entry.name);
-      if (!ensure?.ok || !ensure.presetId) {
-        setNotice(`\u5931\u8D25\uFF1A${ensure?.error || "\u65E0\u6CD5\u521B\u5EFA\u4E13\u5BB6\u9884\u8BBE"}`);
-        return;
-      }
-      const before = composerSession() || sessionId || "";
-      startNewSession();
-      let target = "";
-      for (let i = 0; i < 24; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        const now = composerSession();
-        if (now && now !== before) {
-          target = now;
-          break;
-        }
-      }
-      if (!target) target = composerSession() || sessionId || "";
-      if (!target) {
-        setNotice("\u5931\u8D25\uFF1A\u6CA1\u6709\u7B49\u5230\u65B0\u4F1A\u8BDD\uFF0C\u8BF7\u624B\u52A8\u65B0\u5EFA\u5BF9\u8BDD\u540E\u91CD\u8BD5");
-        return;
-      }
-      const picked = await selectPreset(target, ensure.presetId);
-      if (!picked?.ok) {
-        const detail = picked?.error?.details?.reason ?? picked?.error?.message ?? picked?.error;
-        setNotice(`\u5931\u8D25\uFF1A${typeof detail === "string" ? detail : "\u5207\u6362 agent preset \u88AB\u62D2\u7EDD"}`);
-        return;
-      }
-      setNotice(`\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u4EE5\u300C${entry.displayName || entry.name}\u300D\u8EAB\u4EFD\u5F00\u59CB`);
-    } catch (error) {
-      setNotice(`\u5931\u8D25\uFF1A${error.message}`);
-    } finally {
-      setBusy("");
-    }
-  }, [sessionId]);
   const loggedIn = auth?.configured === true;
   return /* @__PURE__ */ import_react7.default.createElement("div", { className: "expert-center-page wbh-page", "data-wbh-session": sessionId || "" }, /* @__PURE__ */ import_react7.default.createElement(
     Catalogue,
@@ -3566,22 +3561,23 @@ function MarketPage({ sessionId, runCommand: runCommand2 }) {
       entry: summoning,
       busy: busy === `${summoning.kind}/${summoning.name}`,
       onClose: () => setSummoning(null),
-      onConfirm: async (task) => {
-        await attach(summoning, task);
-        setSummoning(null);
-      },
-      onNewSession: () => {
+      onConfirm: async () => {
         const picked = summoning;
         setSummoning(null);
-        void summonInNewSession(picked);
+        void onAction(picked);
       },
       onQuickPrompt: (text) => {
+        const picked = summoning;
         setSummoning(null);
-        void attach(summoning, text);
-        try {
-          insertPromptIntoComposer(text);
-        } catch {
-        }
+        void summonExpertInNewSession(picked).then((r) => {
+          setNotice(r.ok ? `\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u4EE5\u300C${picked.displayName}\u300D\u8EAB\u4EFD\u5F00\u59CB` : `\u5931\u8D25\uFF1A${r.error}`);
+          if (r.ok) setTimeout(() => {
+            try {
+              insertPromptIntoComposer(text);
+            } catch {
+            }
+          }, 800);
+        });
       }
     }
   ), authorising && /* @__PURE__ */ import_react7.default.createElement(
@@ -3609,14 +3605,14 @@ var import_react9 = __toESM(require("react"), 1);
 // src/AttachedRail.jsx
 var import_react8 = __toESM(require("react"), 1);
 function AttachedRail({ sessionId }) {
-  const [items, setItems] = (0, import_react8.useState)(selectedItems());
+  const [items, setItems] = (0, import_react8.useState)(selectedItems(sessionId));
   const [busy, setBusy] = (0, import_react8.useState)("");
-  const sync = (0, import_react8.useCallback)(() => setItems([...selectedItems()]), []);
+  const sync = (0, import_react8.useCallback)(() => setItems([...selectedItems(sessionId)]), [sessionId]);
   (0, import_react8.useEffect)(() => onSelectionChange(sync), [sync]);
   (0, import_react8.useEffect)(() => onCatalogChange(sync), [sync]);
   const detach = async (item) => {
     setBusy(item.key);
-    removeSelection(item.kind, item.name);
+    removeSelection(sessionId, item.kind, item.name);
     try {
       if (item.kind === "connector") await hub.disableConnector(item.name);
       if (sessionId) await hub.unmount(sessionId, item.kind, item.name);
@@ -3750,7 +3746,7 @@ function ComposerAdd({ sessionId, runCommand: runCommand2 }) {
     const key = `${entry.kind}/${entry.name}`;
     setBusy(key);
     setNotice("");
-    addSelection(entry);
+    addSelection(entry, sessionId);
     try {
       let already = Boolean(installed[key]);
       if (!already) {
@@ -3776,16 +3772,15 @@ function ComposerAdd({ sessionId, runCommand: runCommand2 }) {
         } else {
           const r = await hub.enableConnector(entry.name);
           await hub.mount(sessionId, entry.kind, entry.name);
-          addSelection(entry);
+          addSelection(entry, sessionId);
           setNotice(`\u5DF2\u8FDE\u63A5\u300C${entry.displayName}\u300D\uFF08\u5DE5\u5177\u547D\u540D\u7A7A\u95F4 ${r.serverName}\uFF09\uFF0C\u4E0B\u4E00\u6B21\u6A21\u578B\u6B65\u9AA4\u8D77\u53EF\u7528\u3002`);
         }
       } else if (entry.kind === "expert") {
-        await hub.mount(sessionId, entry.kind, entry.name);
-        addSelection(entry);
-        setNotice(`\u5DF2\u9009\u4E2D\u300C${entry.displayName}\u300D\uFF0C\u4E0B\u4E00\u6B65\u8D77\u4EE5\u8BE5\u4E13\u5BB6\u8EAB\u4EFD\u56DE\u7B54`);
+        const r = await summonExpertInNewSession(entry);
+        setNotice(r.ok ? `\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u4EE5\u300C${entry.displayName}\u300D\u8EAB\u4EFD\u5F00\u59CB` : `\u5931\u8D25\uFF1A${r.error}`);
       } else {
         await hub.mount(sessionId, entry.kind, entry.name);
-        addSelection(entry);
+        addSelection(entry, sessionId);
         setNotice(`\u5DF2\u6302\u8F7D\u300C${entry.displayName}\u300D`);
       }
       setRecent((prev) => [entry, ...prev.filter((e) => e.key !== key)].slice(0, 5));

@@ -33,7 +33,7 @@ import {
 
 export const name = 'workbuddy-hub'
 // agentPresets 供「方案 B」使用：把专家做成真正的 agent preset，由用户在新会话里选中。
-export const inject = ['webServer', 'connection', 'loader', 'commands', 'subagents', 'credentials', 'sessions', 'agents', 'systemPrompt', 'agentPresets']
+export const inject = ['webServer', 'connection', 'loader', 'commands', 'subagents', 'credentials', 'sessions', 'agents', 'systemPrompt', 'agentPresets', 'sessionController']
 
 const PREFIX = '/workbuddy-hub'
 const GH_RAW = 'https://raw.githubusercontent.com'
@@ -1448,6 +1448,7 @@ export function apply(ctx, config = {}) {
         const assembly = await sp.assemble({ scope })
         const sections = Array.isArray(assembly?.sections) ? assembly.sections : []
         const section = sections.find(item => item?.name === 'workbuddy-expert-persona')
+        const deploymentPersona = sections.find(item => item?.name === 'deployment:persona-prefix')
         const rendered = sections.map(item => item?.text ?? '').join('\n\n')
         json(res, 200, {
           ok: true, sessionId,
@@ -1456,7 +1457,27 @@ export function apply(ctx, config = {}) {
           personaChars: section?.text?.length ?? 0,
           personaText: section?.text ?? '',
           promptContainsMarker: rendered.includes('【已选专家角色】'),
+          deploymentPersonaChars: deploymentPersona?.text?.length ?? 0,
+          deploymentPersonaText: deploymentPersona?.text ?? '',
         })
+      } catch (error) {
+        json(res, 500, { ok: false, error: String(error?.message || error) })
+      }
+      return true
+    }
+
+    // 排障/验收：用 agent preset 直接建一个会话（等价于官方「新会话 + 选 preset」），
+    // 返回会话 id 与 assemble 出的 deployment persona 片段，用来确认 preset 真的
+    // 把 agent 的人设换成了专家（无需真实模型回合）。
+    if (route === 'POST /expert-new-session') {
+      try {
+        const body = JSON.parse((await readBody(req)) || '{}')
+        const presetId = String(body.presetId || '').trim()
+        if (!/^[\w.-]+$/.test(presetId)) { json(res, 400, { ok: false, error: 'invalid presetId' }); return true }
+        const sc = ctx.get?.('sessionController') ?? ctx.sessionController
+        if (!sc || typeof sc.create !== 'function') { json(res, 503, { ok: false, error: 'sessionController unavailable' }); return true }
+        const created = await sc.create({ agentPreset: presetId })
+        json(res, 200, { ok: true, sessionId: created.sessionId, agentPreset: created.agentPreset })
       } catch (error) {
         json(res, 500, { ok: false, error: String(error?.message || error) })
       }

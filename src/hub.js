@@ -53,23 +53,31 @@ export function openMarket(request) {
   try { setTimeout(emit, 0) } catch { /* 无定时器环境 */ }
 }
 
-// 已选条目（专家/技能/连接器）：composer 的 chip 直接读这份客户端状态，
-// 因此「选中即显示、悬停删除、取消即移除」不依赖槽组件能否拿到 sessionId。
-let _selected = []
+// 已选条目（专家/技能/连接器）—— 按会话隔离：每个会话的 composer 只显示
+// **它自己** 选中的 chip，不再全局串。key = sessionId；sessionId 缺失的调用
+// 落到 '_unbound' 桶（历史兼容）。
+let _selectedBySession = new Map()
 const _selListeners = new Set()
-export function selectedItems() { return _selected }
+export function selectedItems(sessionId) {
+  const key = sessionId || '_unbound'
+  return _selectedBySession.get(key) || []
+}
 export function onSelectionChange(fn) { _selListeners.add(fn); return () => { _selListeners.delete(fn) } }
 const _emitSelection = () => { for (const fn of _selListeners) { try { fn() } catch {} } }
-export function addSelection(entry) {
-  const key = `${entry.kind}/${entry.name}`
-  if (_selected.some(x => x.key === key)) return
-  _selected = [..._selected, { key, kind: entry.kind, name: entry.name, displayName: entry.displayName || entry.name, icon: entry.icon || '' }]
+export function addSelection(entry, sessionId) {
+  const key = sessionId || '_unbound'
+  const list = _selectedBySession.get(key) || []
+  const itemKey = `${entry.kind}/${entry.name}`
+  if (list.some(x => x.key === itemKey)) return
+  _selectedBySession.set(key, [...list, { key: itemKey, kind: entry.kind, name: entry.name, displayName: entry.displayName || entry.name, icon: entry.icon || '' }])
   _emitSelection()
 }
-export function removeSelection(kind, name) {
-  const before = _selected.length
-  _selected = _selected.filter(x => !(x.kind === kind && x.name === name))
-  if (_selected.length !== before) _emitSelection()
+export function removeSelection(sessionId, kind, name) {
+  const key = sessionId || '_unbound'
+  const list = _selectedBySession.get(key) || []
+  const before = list.length
+  const next = list.filter(x => !(x.kind === kind && x.name === name))
+  if (next.length !== before) { _selectedBySession.set(key, next); _emitSelection() }
 }
 
 const _changeListeners = new Set()
@@ -200,4 +208,33 @@ export const hub = {
   authStart: () => post('/wb-auth/start', {}),
   authPoll: () => post('/wb-auth/poll', {}),
   authLogout: () => post('/wb-auth/logout', {}),
+}
+
+/**
+ * 方案 B：召唤专家 = 新建一个会话，并把该专家设成这个会话的 agent preset
+ * （真接管，与官方「点召唤→新会话→该专家成为会话 agent」一致）。当前会话
+ * 完全不动：不挂载、不注入、不 chip。
+ * @returns {Promise<{ok:true, presetId, sessionId} | {ok:false, error}>}
+ */
+export async function summonExpertInNewSession(entry) {
+  const ensure = await hub.expertPresetEnsure(entry.name)
+  if (!ensure?.ok || !ensure.presetId) return { ok: false, error: ensure?.error || '无法创建专家预设' }
+  const before = composerSession() || ''
+  startNewSession()
+  let target = ''
+  for (let i = 0; i < 24; i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 250))
+    const now = composerSession()
+    if (now && now !== before) { target = now; break }
+  }
+  if (!target) target = composerSession() || ''
+  if (!target) return { ok: false, error: '没有等到新会话，请手动新建对话后重试' }
+  const picked = await selectPreset(target, ensure.presetId)
+  if (!picked?.ok) {
+    const detail = picked?.error?.details?.reason ?? picked?.error?.message ?? picked?.error
+    return { ok: false, error: typeof detail === 'string' ? detail : '切换 agent preset 被拒绝' }
+  }
+  // chip 只挂在「这个新会话」名下
+  addSelection(entry, target)
+  return { ok: true, presetId: ensure.presetId, sessionId: target }
 }
