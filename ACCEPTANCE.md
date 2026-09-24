@@ -148,7 +148,7 @@ PY
 
 | ID | 步骤 | 预期 | 证据 |
 |---|---|---|---|
-| **A1** | `set -o pipefail && npm test` | exit 0；17 个套件全部 `OK`/`ALL TESTS PASSED` | 尾部输出 |
+| **A1** | `set -o pipefail && npm test` | exit 0；**15 个套件**全部 `OK`/`PASSED`（联网版 `npm run test:live` 单独跑，离线会 SKIP）| 尾部输出 |
 | **A2** | `npm run build:client` 后 `git status --short` | `client.js` 无变化（证明 src 与产物同步） | 命令输出 |
 | **A3** | `node test-package.mjs` | 通过；且其中「真打包→解压→import」一步成功 | 输出里 `import('./index.js') 成功` |
 | **A4** | `npm pack --dry-run --json`，检查产物清单 | 含 `index.js expert-persona.js mcp-manager.js wb-market.js wb-experts.js wb-cats.js wb-unzip.js client.js client.css cordis.patch.yml` 与 `skills/*` | 文件清单 |

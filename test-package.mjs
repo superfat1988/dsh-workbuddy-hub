@@ -59,6 +59,13 @@ for (const name of skillDirs) {
 }
 console.log(`3. 随插件 skill: ${skillDirs.join(', ')}`)
 
+// ---- 1b. 给 agent 用的检索脚本必须随包发布 ---------------------------------
+// 技能文档让 agent 跑 scripts/hub-find.mjs；如果它不在产物里，装了插件也用不了。
+for (const rel of ['scripts/hub-find.mjs']) {
+  assert.ok(packedSet.has(rel), `${rel} 必须在产物里（技能文档会用它）`)
+}
+console.log('1b. scripts/hub-find.mjs 在产物里 ✓')
+
 // ---- ② 真打包 → 解压 → 真 import（产物可加载）-------------------------------
 console.log('4. 真打包并解压后 import 一次…')
 const packOut = execFileSync('npm', ['pack', '--pack-destination', tmp], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim().split('\n').pop()

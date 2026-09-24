@@ -28,15 +28,26 @@ WorkBuddy 语义的专家推荐与召唤。核心规则：**专家只能推荐�
 
 ### 1. 检索专家目录（官方注册表，无需登录）
 
+**用脚本，不要用裸 curl** —— hub 的 HTTP 路由在 DSH 连接栅栏后面（实测裸 curl 连 `/health` 都是 401），
+而脚本直接读官方注册表：不需要登录、不需要浏览器会话、也不把整段 JSON 塞进上下文。
+
 ```bash
-curl -s "http://127.0.0.1:3080/workbuddy-hub/official-experts?limit=500&q=<关键词>&category=all"
-# 可选：拿到分类 id 列表后再按 category 过滤
-curl -s "http://127.0.0.1:3080/workbuddy-hub/official-expert-categories"
+node <插件目录>/scripts/hub-find.mjs expert <关键词> [--limit 5]
+# 例：node ~/.openclaw/workspace/projects/dsh-workbuddy-hub/scripts/hub-find.mjs expert 合同
 ```
 
-返回 `{ ok, source: "official-registry", total, rows: [...] }`；每行含 `name / displayName / subtitle / description / tags / categoryId / expertType / icon`。
+输出是**每行一条**的紧凑结果：
+```
+expert/contract-legal-expert | 腾讯电子签合同法务专家 | 资深合同法务专家 | 合同起草,合同审查,法规检索
+# 命中 11 条，显示 5 条（--limit 最多 20）
+```
 
-关键词取用户意图的领域词（法务/财报/论文/股票/小红书/合同…），中英都试。未命中时接口返回空列表（不会回退成全量）。
+省多少（同一次「合同」查询）：脚本 **630 字节** vs 原始 JSON **12,655 字节**；而原始接口在不带关键词、
+limit=500 时能到 **473KB** —— 脚本内置 `limit ≤ 20` 的硬约束，从结构上排除了这种事故。
+
+- 关键词取用户意图的领域词（法务/财报/论文/股票/小红书/合同…），中英都试。
+- `NO_MATCH` = 没命中（换关键词，别换接口）；`ERROR <原因>` = 失败，如实转述。
+- 需要原始字段时加 `--json`（仍受 limit 约束）。
 
 ### 2. 推荐卡片（3 个以内，宁缺毋滥）
 

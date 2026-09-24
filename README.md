@@ -14,6 +14,7 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 | 本地内容仓 | `~/workbuddyskills/` | `.meta/registry.json`、`.meta/mounts.json`、`.meta/icons/`、`skills/ experts/ connectors/` |
 | DSH 挂载 | `~/.dsh/skills/<prefix><name>` | 符号链接（DSH 扫描器原生跟随） |
 | 随插件 skill | `skills/workbuddy-find-tools`、`skills/workbuddy-experts` | 工具检索 / 专家推荐与召唤 |
+| 随插件脚本 | `scripts/hub-find.mjs` | agent 的**紧凑检索入口**（专家/技能/连接器/已装清单）：本地过滤+排版，一次查询约 0.1–0.9KB，替代会把整段 JSON（12.7KB，最坏 473KB）塞进上下文的裸 curl；也绕开了连接栅栏（裸 curl 连 /health 都 401）|
 
 **官方源是唯一真源，GitHub 镜像只是灾备**（`mirrorFallback: false` 是默认值）：
 - 列表 / 目录 / 检索（`/market-list`、`/catalog`、`/search`）在官方失败时**不再静默换成镜像内容**，
@@ -133,7 +134,7 @@ agent —— 路由与其它插件路由共用同一道 DSH 连接栅栏，而 a
 ## 开发
 
 ```bash
-npm test        # 17 个套件：mcp 校验 / 专家人设 / CLI 连接器 / 召唤 / 凭证轮换 /
+npm test        # 15 个套件（另 test:live 单独跑联网版）：mcp 校验 / 专家人设 / CLI 连接器 / 召唤 / 凭证轮换 /
                 #   浏览器槽位 / client bundle / render smoke / session 契约 / pending expert /
                 #   recent experts / auth store / keepalive / install 离线链 / 更新判定 /
                 #   本地 MCP 管理 / package 完整性

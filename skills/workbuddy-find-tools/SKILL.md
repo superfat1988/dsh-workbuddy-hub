@@ -38,16 +38,26 @@ curl -s http://127.0.0.1:3080/workbuddy-hub/wb-auth
 
 ### 2. 检索（官方市场）
 
+**用脚本，不要用裸 curl**（同上：裸 curl 会被连接栅栏挡在 401；脚本直接调官方市场 API，
+并用内容仓里的凭证，不需要浏览器会话）：
+
 ```bash
-# 技能
-curl -s "http://127.0.0.1:3080/workbuddy-hub/market-list?kind=skill&page=1&pageSize=60&q=<关键词>"
-# 连接器
-curl -s "http://127.0.0.1:3080/workbuddy-hub/market-list?kind=connector&pageSize=60&q=<关键词>"
+node <插件目录>/scripts/hub-find.mjs skill     <关键词> [--limit 5]
+node <插件目录>/scripts/hub-find.mjs connector <关键词> [--limit 5]
+node <插件目录>/scripts/hub-find.mjs installed           # 本机已装清单
 ```
 
-返回 `{ ok, source:"official", total, rows:[...] }`。若 `rows` 为空且带 `error`，**如实把原因转述**（例如「需要登录才能查看官方技能目录」），不要说成「市场里没有」。
+输出每行一条紧凑记录（约 0.1–0.9KB）：
+```
+skill/xlsx | Excel 表格处理 | 创建、编辑、分析 Excel 表格：公式、图表、透视表与格式设置。 |
+connector/youzan-workbuddy | 有赞 | mcp_oauth,mcp
+# 命中 1 条，显示 1 条（--limit 最多 20）
+```
 
-关键词建议：中文意图词优先（如「领券」「地图」「火车」「邮件」），无结果再换英文（coupon/map/train/mail）。
+结果里可能出现这三种**一行结论**，按它们行动，**不要**说成「市场里没有」：
+- `NEED_LOGIN` → 技能/连接器需要 WorkBuddy 账号：提示用户去插件设置区（或市场页右上角）扫码登录后再试；
+- `NO_MATCH ...官方连接器共 N 个...` → 确实没有匹配（官方连接器只有有限几个，换关键词）；
+- `ERROR <原因>` → 如实转述（限流/网络/上游错误要区分开）。
 
 ### 3. 呈现候选（推荐卡片格式，经 toolview 渲染）
 
