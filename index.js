@@ -365,12 +365,12 @@ export function linkConnectorSkills(prefix, connectorName, dest) {
   return linked
 }
 
-export function unlinkConnectorSkills(prefix, linked = []) {
+export function unlinkConnectorSkills(prefix, linked = [], skillsRoot = skillsMountRoot()) {
   for (const item of linked) {
     const name = typeof item === 'string' ? item : item?.name
     if (!name) continue
     try {
-      const linkPath = join(homedir(), '.dsh', 'skills', `${prefix}${name}`)
+      const linkPath = join(skillsRoot, `${prefix}${name}`)
       lstatSync(linkPath); unlinkSync(linkPath)
     } catch { /* absent */ }
   }
@@ -688,6 +688,10 @@ export function apply(ctx, config = {}) {
   // 注意：/updates 永远不用镜像（纯官方元数据比对），与这个开关无关。
   const mirrorFallback = cfg.mirrorFallback === true
   const skillPrefix = cfg.skillPrefix || 'workbuddy-'
+  // DSH skills 挂载目录（默认 ~/.dsh/skills）。**参数化是为了隔离测试**：此前它硬编码
+  // homedir，导致任何指向临时 storeRoot 的隔离实例装技能时，都会往用户真实 ~/.dsh/skills
+  // 里塞软链（实测泄漏过一个指向已删临时目录的断链）。
+  const skillsMount = cfg.skillsMount ? resolve(expandHome(cfg.skillsMount)) : skillsMountRoot()
       const P = storePaths(cfg)
   for (const d of [P.root, P.store, P.skills, P.experts, P.connectors, P.meta, P.icons]) {
     mkdirSync(d, { recursive: true })
@@ -2265,7 +2269,7 @@ export function apply(ctx, config = {}) {
         enabled: kind === 'connector' ? Boolean(previous?.enabled) : undefined,
       }
       if (kind === 'skill') {
-        try { linkSkill(P, skillPrefix, officialMeta?.name ?? entryName); record.linked = true } catch (error) {
+        try { linkSkill(P, skillPrefix, officialMeta?.name ?? entryName, skillsMount); record.linked = true } catch (error) {
           report.flags.push(`symlink failed: ${error.message}`)
         }
       }
@@ -2307,9 +2311,9 @@ export function apply(ctx, config = {}) {
       // Tear the transport down (and await it) before deleting its files.
       if (kind === 'connector') {
         await connectors.disable(key)
-        unlinkConnectorSkills(skillPrefix, record.linkedSkills)
+        unlinkConnectorSkills(skillPrefix, record.linkedSkills, skillsMount)
       }
-      if (kind === 'skill') unlinkSkill(skillPrefix, entryName)
+      if (kind === 'skill') unlinkSkill(skillPrefix, entryName, skillsMount)
       rmSync(record.dest, { recursive: true, force: true })
       delete registry.installed[key]
       saveJson(P.registry, registry)

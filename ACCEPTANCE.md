@@ -12,6 +12,10 @@
 
 ### 0.1 基础隔离实例（含两个预置工作区）
 
+> **隔离纪律**：任何指向临时 `storeRoot` 的实例都必须同时设 `skillsMount` 到临时目录，
+> 否则装技能会往真实 `~/.dsh/skills` 写软链（已修：`linkSkill/unlinkSkill` 现在接受挂载根，
+> 安装/卸载链路会传 `cfg.skillsMount`）。
+
 ```bash
 rm -rf /tmp/acc && mkdir -p /tmp/acc/storages /tmp/acc/ws-alpha /tmp/acc/ws-beta
 ln -s ~/.dsh/profiles /tmp/acc/profiles          # 复用 profile（插件是 link: 本地仓库）
@@ -49,6 +53,8 @@ cat > /tmp/acc-nologin-patch.yml <<'EOF'
 - id: workbuddy-hub
   config:
     storeRoot: '/tmp/acc-nologin'
+    # 必加：否则隔离实例装技能时仍会往用户真实 ~/.dsh/skills 塞软链（曾泄漏过断链）
+    skillsMount: '/tmp/acc-nologin/.dsh-skills'
 EOF
 # 启动命令在上面的基础上加 --patch，端口换 3998。
 # ⚠️ --patch 的位置有讲究：必须写成 `web --patch <file> --host … --port …`

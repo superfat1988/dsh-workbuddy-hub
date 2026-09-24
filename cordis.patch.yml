@@ -15,3 +15,6 @@
         storeRoot: '~/workbuddyskills'
         # DSH skills 挂载前缀：~/.dsh/skills/workbuddy-<name> → storeRoot/skills/<name>
         skillPrefix: 'workbuddy-'
+        # skills 挂载目录（默认 ~/.dsh/skills）。**隔离测试务必覆盖它**：否则临时 storeRoot
+        # 装技能时仍会往用户真实目录塞软链（此前实测泄漏过一个指向已删临时目录的断链）。
+        # skillsMount: '/tmp/my-isolated/skills'

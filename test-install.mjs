@@ -8,6 +8,7 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, lstatSync, readlinkSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { homedir } from 'node:os'
 import { tmpdir } from 'node:os'
 import { buildIndex, landEntry, loadJson, saveJson, linkSkill, unlinkSkill, skillsMountRoot } from './index.js'
 
@@ -131,5 +132,20 @@ assert.equal(existsSync(join(realMount, 'workbuddy-demo-skill')), false, '不得
 assert.notEqual(realMount, skillsMount, '测试必须使用独立的挂载根')
 rmSync(root, { recursive: true, force: true })
 console.log('   temp 已清理；真实 ~/.dsh/skills 未被触碰')
+
+// ---- 7. 挂载根必须真的接进安装/卸载链路（否则 skillsMount 就是死配置）--------
+// 背景：linkSkill 曾经硬编码 homedir()/.dsh/skills，导致隔离实例（临时 storeRoot）装技能时
+// 仍会往用户真实 ~/.dsh/skills 里塞软链 —— 实测泄漏过一个指向已删临时目录的断链。
+console.log('7. skillsMount 是否接通（源码契约）…')
+{
+  const src = readFileSync(join(import.meta.dirname, 'index.js'), 'utf8')
+  assert.ok(/const skillsMount = cfg\.skillsMount \?/.test(src), 'index.js 必须读取 cfg.skillsMount')
+  assert.ok(/linkSkill\(P, skillPrefix, [^)]*skillsMount\)/.test(src), '安装技能时必须把 skillsMount 传给 linkSkill')
+  assert.ok(/unlinkSkill\(skillPrefix, entryName, skillsMount\)/.test(src), '卸载技能时必须把 skillsMount 传给 unlinkSkill')
+  assert.ok(/unlinkConnectorSkills\(skillPrefix, record\.linkedSkills, skillsMount\)/.test(src), '停用连接器时必须把 skillsMount 传下去')
+  // 默认值仍是用户真实目录（不改变生产行为）
+  assert.equal(skillsMountRoot(), join(homedir(), '.dsh', 'skills'), '默认挂载根不变')
+  console.log('   ok：默认 ~/.dsh/skills，且可被 cfg.skillsMount 覆盖')
+}
 
 console.log('\nALL TESTS PASSED (offline: index → land → registry → link)')
