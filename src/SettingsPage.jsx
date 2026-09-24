@@ -106,6 +106,57 @@ export function checkSummaryText(result, checking) {
   return `检查于 ${at}${cached} · 有更新 ${counts.update ?? 0} · 已是最新 ${counts.current ?? 0} · 无法检查 ${counts.unknown ?? 0}`
 }
 
+/* ------------------------------------------------------------------ *
+ * 本地 MCP 服务器（设置区新节）的纯函数（导出以便直接单测）
+ * ------------------------------------------------------------------ */
+
+/** 徽标：本地 MCP 状态 → {className, text}（enabled 优先于 lastError）。 */
+export function localMcpBadge(server) {
+  if (server?.enabled) return { className: 'wbh-badge wbh-badgeCurrent', text: '已启用' }
+  if (String(server?.lastError || '')) return { className: 'wbh-badge wbh-badgeUnknown', text: `连不上：${server.lastError}` }
+  return { className: 'wbh-badge wbh-badgeIdle', text: '已停用' }
+}
+
+/** 工具数显示：宿主拿不到活注册表时回 null → 显示「—」。 */
+export function localMcpToolCount(server) {
+  const n = Number(server?.toolCount)
+  return Number.isFinite(n) && n >= 0 ? String(n) : '—'
+}
+
+/** 表单提交前的客户端校验（与服务端同规则的前置；服务端仍是权威）。 */
+export function validateLocalMcpForm(name, url, token) {
+  if (!/^[\w.-]+$/.test(String(name || ''))) return '名称只允许字母数字、点、下划线、连字符'
+  if (String(name || '').length > 80) return '名称过长（≤80）'
+  const trimmedUrl = String(url || '').trim()
+  if (!/^https?:\/\//i.test(trimmedUrl)) return 'URL 必须以 http:// 或 https:// 开头'
+  let host = ''
+  try { host = new URL(trimmedUrl).hostname.toLowerCase() } catch { return 'URL 无法解析' }
+  const isLoopback = host === 'localhost' || host === '::1' || /^127(\.\d{1,3}){3}$/.test(host.replace(/^\[|\]$/g, ''))
+  if (!isLoopback) return '只允许本机地址（127.0.0.1 / localhost / ::1）—— 非本机 MCP 一律不收'
+  if (String(token || '').length > 4096) return 'token 过长（≤4096）'
+  return ''
+}
+
+/** 注册结果 → 通知文案（失败必带宿主原因；成功不回显任何 token 信息）。 */
+export function localMcpSaveNotice(result) {
+  if (!result || result.ok !== true) {
+    return { ok: false, text: `注册失败：${String(result?.error || '宿主未返回原因')}` }
+  }
+  return { ok: true, text: `已注册本地 MCP「${result.server?.name}」（工具命名空间 mcp__${result.server?.serverName}__）` }
+}
+
+/** 启停/移除结果 → 通知文案。 */
+export function localMcpActionNotice(action, name, result) {
+  const what = { enable: '启用', disable: '停用', remove: '移除' }[action] || action
+  if (!result || result.ok !== true) {
+    return { ok: false, text: `${what}「${name}」失败：${String(result?.error || '宿主未返回原因')}` }
+  }
+  if (action === 'enable') return { ok: true, text: `已启用「${name}」（命名空间 mcp__${result.server?.serverName || name}__）` }
+  if (action === 'remove') return { ok: true, text: `已移除「${name}」（已先停用并拆除传输）` }
+  return { ok: true, text: `已停用「${name}」` }
+}
+
+
 /** 徽标：状态 → {className, text}（null = 还没检查过，不显示任何徽标）。 */
 export function statusBadge(status) {
   if (status === 'update') return { className: 'wbh-badgeUpdate', text: '有更新' }
@@ -221,6 +272,161 @@ export function InstalledRow({
           </>
         )}
       </span>
+    </div>
+  )
+}
+
+/**
+ * 本地 MCP 行：状态徽标 + 工具数 + 启停按钮（行内确认只用于移除，与已安装列表一致）。
+ * aria-label 一律带名字；busy 时 aria-busy；按钮全部真实 <button>（键盘可达）。
+ */
+export function LocalMcpRow({
+  server, confirming, busy, confirmRef, onAskRemove, onCancel, onConfirm, onToggle, toggling,
+}) {
+  const label = server.name
+  const badge = localMcpBadge(server)
+  return (
+    <div className="wbh-row wbh-localMcpRow" aria-busy={busy || toggling ? 'true' : undefined}>
+      <span className="wbh-installedName">
+        {label}
+        <span className="wbh-muted"> · {server.url}</span>
+        <span
+          className={`wbh-badge ${badge.className}`}
+          title={badge.text}
+          aria-label={`${badge.text} ${label}`}
+        >{badge.text}</span>
+        <span className="wbh-muted">
+          工具 {localMcpToolCount(server)}
+          {server.tokenRef ? ` · 凭据 ${server.tokenRef}` : ''}
+        </span>
+      </span>
+      <span className="wbh-installedActions">
+        {confirming ? (
+          <span
+            className="wbh-confirmRow"
+            role="group"
+            aria-label={`确认移除 ${label}`}
+            onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); onCancel() } }}
+          >
+            <span className="wbh-confirmText">确认移除？<span className="wbh-muted">（先停用并拆除传输）</span></span>
+            <button
+              ref={confirmRef}
+              type="button"
+              className="wbh-btnDanger"
+              disabled={busy}
+              aria-label={`确认移除 ${label}`}
+              onClick={onConfirm}
+            >{busy ? '移除中…' : '移除'}</button>
+            <button
+              type="button"
+              className="wbh-btnGhost"
+              disabled={busy}
+              aria-label={`取消移除 ${label}`}
+              onClick={onCancel}
+            >取消</button>
+          </span>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="wbh-btnGhost"
+              disabled={toggling || busy}
+              aria-label={`${server.enabled ? '停用' : '启用'} ${label}`}
+              aria-busy={toggling ? 'true' : undefined}
+              onClick={onToggle}
+            >{toggling ? (server.enabled ? '停用中…' : '启用中…') : (server.enabled ? '停用' : '启用')}</button>
+            <button
+              type="button"
+              className="wbh-btnGhost wbh-removeBtn"
+              disabled={busy || toggling}
+              aria-label={`移除 ${label}`}
+              onClick={onAskRemove}
+            >{busy ? '移除中…' : '移除'}</button>
+          </>
+        )}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * 设置区「本地 MCP 服务器」一节。config.localMcp=false 时只显示一行说明
+ * （未开启 + 怎么开），不渲染表单与列表数据。
+ */
+export function LocalMcpSection({
+  guarded, reason, servers, loading, form, onChange, onSubmit, notice,
+  confirmKey, busyKey, toggleKey, confirmRef, onAskRemove, onCancel, onConfirm, onToggle,
+}) {
+  if (guarded) {
+    return (
+      <div className="wbh-localMcpSection">
+        <h2 className="wbh-secTitle" style={{ marginTop: 22 }}>本地 MCP 服务器</h2>
+        <p className="wbh-muted" role="note">{reason || '本地 MCP 管理未开启：请在插件配置里设 localMcp: true（默认关闭）'}</p>
+      </div>
+    )
+  }
+  return (
+    <div className="wbh-localMcpSection">
+      <h2 className="wbh-secTitle" style={{ marginTop: 22 }}>本地 MCP 服务器（{servers.length}）</h2>
+      <p className="wbh-muted">
+        只有本机地址（127.0.0.1 / localhost / ::1）可以注册；token 只存入 DSH 凭据库
+        （~/.dsh/.credentials.yaml，0600），不落任何配置文件、不回显。启用的服务器会以
+        mcp__&lt;名字&gt;__&lt;工具&gt; 的命名空间暴露给模型。
+      </p>
+      {notice && (
+        <p className={`wbh-removeNotice${notice.ok ? '' : ' is-error'}`} role={notice.ok ? 'status' : 'alert'} aria-live="polite">
+          {notice.text}
+        </p>
+      )}
+      {servers.length === 0 && !loading && <p className="wbh-muted">尚未注册任何本地 MCP 服务器。</p>}
+      {servers.map(server => (
+        <LocalMcpRow
+          key={server.name}
+          server={server}
+          confirming={confirmKey === server.name}
+          busy={busyKey === server.name}
+          toggling={toggleKey === server.name}
+          confirmRef={confirmRef}
+          onAskRemove={() => onAskRemove(server.name)}
+          onCancel={onCancel}
+          onConfirm={() => onConfirm(server.name)}
+          onToggle={() => onToggle(server.name)}
+        />
+      ))}
+      <form
+        className="wbh-localMcpForm"
+        aria-label="注册本地 MCP 服务器"
+        onSubmit={event => { event.preventDefault(); onSubmit() }}
+      >
+        <input
+          className="wbh-localMcpInput"
+          type="text"
+          value={form.name}
+          placeholder="名称（如 scrapling）"
+          aria-label="本地 MCP 名称"
+          onChange={event => onChange({ ...form, name: event.target.value })}
+        />
+        <input
+          className="wbh-localMcpInput wbh-localMcpUrl"
+          type="text"
+          value={form.url}
+          placeholder="http://127.0.0.1:8002/mcp"
+          aria-label="本地 MCP URL（仅本机地址）"
+          onChange={event => onChange({ ...form, url: event.target.value })}
+        />
+        <input
+          className="wbh-localMcpInput wbh-localMcpToken"
+          type="password"
+          autoComplete="off"
+          value={form.token}
+          placeholder="token（可选，存入凭据库，不回显）"
+          aria-label="本地 MCP token（可选，存入凭据库，不回显）"
+          onChange={event => onChange({ ...form, token: event.target.value })}
+        />
+        <button type="submit" className="wbh-btnPrimary" aria-label="注册本地 MCP 服务器" aria-busy={form.busy ? 'true' : undefined} disabled={form.busy}>
+          {form.busy ? '注册中…' : '注册'}
+        </button>
+      </form>
     </div>
   )
 }
@@ -383,6 +589,80 @@ export default function SettingsPage() {
     await checkUpdates({ refresh: true })
   }, [checkUpdates, installEntry, loadInstalled])
 
+  /* ---------------------------------------------------------------- *
+   * 本地 MCP 服务器（localMcp:true 才显示可操作界面）
+   * ---------------------------------------------------------------- */
+  const [localMcp, setLocalMcp] = useState(null)          // {guarded, reason, servers}
+  const [localForm, setLocalForm] = useState({ name: '', url: '', token: '', busy: false })
+  const [localNotice, setLocalNotice] = useState(null)
+  const [localConfirmKey, setLocalConfirmKey] = useState('')
+  const [localBusyKey, setLocalBusyKey] = useState('')
+  const [localToggleKey, setLocalToggleKey] = useState('')
+  const localConfirmRef = useRef(null)
+  useEffect(() => { if (localConfirmKey) localConfirmRef.current?.focus?.() }, [localConfirmKey])
+
+  const loadLocalMcp = useCallback(async () => {
+    try { setLocalMcp(await hub.localMcpList()) } catch { /* 保留旧列表 */ }
+  }, [])
+  useEffect(() => { void loadLocalMcp() }, [loadLocalMcp])
+
+  const submitLocalMcp = useCallback(async () => {
+    const problem = validateLocalMcpForm(localForm.name, localForm.url, localForm.token)
+    if (problem) { setLocalNotice({ ok: false, text: problem }); return }
+    setLocalForm(prev => ({ ...prev, busy: true }))
+    setLocalNotice(null)
+    let result = null
+    try {
+      // token 只在这一次请求体里出现；提交后立即清空 state（不留存、不回显）
+      result = await hub.localMcpSave(localForm.name.trim(), localForm.url.trim(), localForm.token)
+      setLocalForm({ name: '', url: '', token: '', busy: false })
+      setLocalNotice(localMcpSaveNotice(result))
+    } catch (error) {
+      setLocalForm(prev => ({ ...prev, token: '', busy: false }))
+      setLocalNotice(localMcpSaveNotice({ ok: false, error: String(error?.message || error), status: error?.status }))
+      return
+    }
+    await loadLocalMcp()
+    // 注册成功且当前未启用 → 自动尝试启用（scrapling 用例：注册完即可用）
+    if (result?.ok === true && result.server?.enabled !== true) {
+      try {
+        const enabled = await hub.localMcpEnable(result.server.name)
+        setLocalNotice(localMcpActionNotice('enable', result.server.name, enabled))
+        await loadLocalMcp()
+      } catch (error) {
+        setLocalNotice(localMcpActionNotice('enable', result.server.name, { ok: false, error: String(error?.message || error) }))
+      }
+    }
+  }, [localForm, loadLocalMcp])
+
+  const toggleLocalMcp = useCallback(async name => {
+    const server = (localMcp?.servers ?? []).find(s => s.name === name)
+    const action = server?.enabled ? 'disable' : 'enable'
+    setLocalToggleKey(name)
+    setLocalNotice(null)
+    try {
+      const result = action === 'enable' ? await hub.localMcpEnable(name) : await hub.localMcpDisable(name)
+      setLocalNotice(localMcpActionNotice(action, name, result))
+    } catch (error) {
+      setLocalNotice(localMcpActionNotice(action, name, { ok: false, error: String(error?.message || error), status: error?.status }))
+    }
+    setLocalToggleKey('')
+    await loadLocalMcp()
+  }, [localMcp, loadLocalMcp])
+
+  const removeLocalMcp = useCallback(async name => {
+    setLocalBusyKey(name)
+    setLocalNotice(null)
+    let result = { ok: true }
+    try { await hub.localMcpRemove(name) } catch (error) {
+      result = { ok: false, error: String(error?.message || error), status: error?.status }
+    }
+    setLocalNotice(localMcpActionNotice('remove', name, result))
+    setLocalBusyKey('')
+    setLocalConfirmKey('')
+    await loadLocalMcp()
+  }, [loadLocalMcp])
+
   return (
     <section className="wbh-settings">
       <h2 className="wbh-secTitle">腾讯账号（官方市场数据）</h2>
@@ -508,6 +788,25 @@ export default function SettingsPage() {
           onConfirmUpdate={() => void updateOne(row)}
         />
       ))}
+
+      <LocalMcpSection
+        guarded={localMcp?.guarded === true}
+        reason={localMcp?.reason || ''}
+        servers={localMcp?.servers ?? []}
+        loading={localMcp === null}
+        form={localForm}
+        onChange={setLocalForm}
+        onSubmit={() => void submitLocalMcp()}
+        notice={localNotice}
+        confirmKey={localConfirmKey}
+        busyKey={localBusyKey}
+        toggleKey={localToggleKey}
+        confirmRef={localConfirmRef}
+        onAskRemove={name => { setLocalNotice(null); setLocalConfirmKey(name) }}
+        onCancel={() => setLocalConfirmKey('')}
+        onConfirm={name => void removeLocalMcp(name)}
+        onToggle={name => void toggleLocalMcp(name)}
+      />
 
       <p className="wbh-muted" style={{ marginTop: 16 }}>
         需要 OAuth 或 API Key 的连接器会在启用时发起独立授权；本页与浏览器端不会展示任何凭据值。

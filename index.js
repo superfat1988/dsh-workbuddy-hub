@@ -31,7 +31,7 @@ import {
   existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
   symlinkSync, unlinkSync, lstatSync, statSync,
 } from 'node:fs'
-import { createConnectorManager, validateConnectorMcp, buildNativeRow, declaredServerNames } from './mcp-manager.js'
+import { createConnectorManager, validateConnectorMcp, buildMcpConfig, buildNativeRow, declaredServerNames, localMcpSpec, localTokenRefFor, MCP_SERVER_NAME_PATTERN, MCP_CLIENT_PACKAGE } from './mcp-manager.js'
 import {
   readExpertPersona, buildPersonaLine, buildSummonPrompt,
   extractPersonaBody, sanitizePersonaBody,
@@ -77,6 +77,9 @@ export function storePaths(config) {
     catalogCache: join(root, '.meta', 'catalog-cache.json'),
     state: join(root, '.meta', 'state'),
     loginState: join(root, '.meta', 'state', 'login-state.json'),
+    // 本地 MCP 服务器条目（与官方连接器分开：目录独立，绝不混进 connectors/，
+    // 避免污染官方连接器列表与 /updates 的「连接器」判定）
+    localMcpDir: join(root, 'mcp-servers'),
   }
 }
 
@@ -230,23 +233,74 @@ export function buildIndex(blobs) {
  * Safety scan
  * ------------------------------------------------------------------ */
 
-const SCAN_EXT = new Set(['.py', '.js', '.mjs', '.cjs', '.sh', '.ps1', '.cmd', '.bat'])
+// .json 也在扫描范围内：连接器的 mcp.json 恰恰是声明 command/url/headers 的地方，
+// 此前被排除意味着「声明命令执行」「外连非官方域名」这类最高价值的信号永远扫不到。
+const SCAN_EXT = new Set(['.py', '.js', '.mjs', '.cjs', '.sh', '.ps1', '.cmd', '.bat', '.json'])
+
+/** 通用规则：任何被扫描的文本都适用。 */
+const SCAN_RULES = [
+  [/curl\s+[^|]*\|\s*(ba)?sh/i, 'piped-to-shell'],
+  [/\beval\s*\(/, 'eval'],
+  [/new\s+Function\s*\(/, 'dynamic-function'],
+  [/child_process|subprocess/i, 'spawns-process'],
+  [/credentials?|api[_-]?key|secret|token/i, 'mentions-credentials'],
+  [/https?:\/\/(?!raw\.githubusercontent\.com|github\.com)/i, 'external-url'],
+]
+
+/**
+ * mcp.json / cli.json 这类「定义文件」的结构化扫描：对 command / url / headers
+ * 的值逐个判断并给出明确旗标，而不是只做全文正则。注意这是**可见性**（标记），
+ * 不是准入判定 —— 准入由 mcp-manager 的 validateConnectorMcp 负责。
+ */
+export function scanMcpDefinitionFlags(raw) {
+  const flags = []
+  const servers = raw?.mcpServers
+  if (servers && typeof servers === 'object' && !Array.isArray(servers)) {
+    for (const [name, server] of Object.entries(servers)) {
+      const label = `mcpServers.${name}`
+      if (server && typeof server === 'object' && !Array.isArray(server)) {
+        // 声明了 stdio = 声明了本机命令执行（即便最终未被挂载，也要标记可见）
+        if (server.transport === 'stdio' || server.type === 'stdio' || server.command !== undefined) {
+          flags.push(`${label}: declares-command-execution`)
+        }
+        for (const [key, value] of Object.entries(server)) {
+          if (typeof value !== 'string') continue
+          if (/^https?:\/\//i.test(value) && !/^(https?:\/\/)(raw\.githubusercontent\.com|github\.com)\//.test(value)) {
+            flags.push(`${label}.${key}: external-url (${value.replace(/^https?:\/\//, '').slice(0, 60)})`)
+          }
+          if (/authorization|cookie|api[-_]?key|token|secret/i.test(key)) {
+            flags.push(`${label}.${key}: sensitive-header`)
+          }
+          // URL 查询串里的凭据型参数（官方连接器就有 ?key=${TENCENT_MAP_KEY} 这种形态）
+          if (/^https?:\/\//i.test(value)) {
+            try {
+              const parsed = new URL(value.replace(/\$\{[^}]+\}/g, 'x'))
+              for (const q of parsed.searchParams.keys()) {
+                if (/^(api[-_]?key|key|token|secret|access[-_]?token|password|sig(nature)?)$/i.test(q)) {
+                  flags.push(`${label}.${key}: sensitive-query-param (${q})`)
+                }
+              }
+            } catch { /* 非法 URL：解析不了就不猜 */ }
+          }
+        }
+      }
+    }
+  }
+  return flags
+}
 
 export function scanFlags(fileName, text) {
   const flags = []
   const dot = fileName.lastIndexOf('.')
   if (dot < 0) return flags
-  if (!SCAN_EXT.has(fileName.slice(dot).toLowerCase())) return flags
+  const ext = fileName.slice(dot).toLowerCase()
+  if (!SCAN_EXT.has(ext)) return flags
   const src = String(text)
-  const rules = [
-    [/curl\s+[^|]*\|\s*(ba)?sh/i, 'piped-to-shell'],
-    [/\beval\s*\(/, 'eval'],
-    [/new\s+Function\s*\(/, 'dynamic-function'],
-    [/child_process|subprocess/i, 'spawns-process'],
-    [/credentials?|api[_-]?key|secret|token/i, 'mentions-credentials'],
-    [/https?:\/\/(?!raw\.githubusercontent\.com|github\.com)/i, 'external-url'],
-  ]
-  for (const [re, tag] of rules) if (re.test(src)) flags.push(tag)
+  for (const [re, tag] of SCAN_RULES) if (re.test(src)) flags.push(tag)
+  // 定义类文件额外做结构化扫描（值级判定；解析失败就退回纯文本规则的结果）
+  if (ext === '.json') {
+    try { flags.push(...scanMcpDefinitionFlags(JSON.parse(src))) } catch { /* not a definition file */ }
+  }
   return flags
 }
 
@@ -725,6 +779,138 @@ export function apply(ctx, config = {}) {
   const connectors = createConnectorManager(ctx)
   ctx.effect(() => () => connectors.disposeAll(), 'workbuddy-hub: connector transports')
 
+  /* ---------------------------------------------------------------- *
+   * 本地 MCP 服务器（用户手工注册的 loopback 服务，如 Docker 里的 scrapling）
+   *
+   * ⚠️ 威胁模型（如实声明，不做超出模型的安全承诺）：
+   * 这些路由与插件的其它路由共用同一道 DSH 连接栅栏（ctx.connection.requestRejection，
+   * 路由入口统一调用），它拦的是「未经授权的浏览器/外部访问」，拦不住本机进程。
+   * 而 agent 本身（比如经技能文档指导）就能 curl 这些本地路由 —— 所以四道栅栏
+   * （localMcp 默认关 / 仅 loopback / v1 拒绝 stdio / 全程可见 + 立即生效）的目标是：
+   *   1) 不让权限**静默升级**（默认关、stdio 拒绝、loopback 白名单都是显式约束）；
+   *   2) 全程可见（注册/启用/停用/移除都打 console 日志 + 条目里留时间戳）；
+   *  3) 一键可撤（disable/remove 立即 dispose mcp-client 行，工具当场从注册表消失）。
+   * 它们**不是**针对「已被完全控制的 agent」的防御 —— 一个完全受控的 agent 本来
+   * 就可以直连 loopback 服务或改写插件代码；那类威胁归 DSH 宿主与用户监督处理。
+   *
+   * 凭据：token 只经 ctx.credentials.set 存进 DSH 凭据库（refs 表，0600，热加载），
+   * 条目文件/响应/日志里只出现引用名（${REF}），绝不出现明文。
+   * ---------------------------------------------------------------- */
+  const localMcpEnabled = cfg.localMcp === true
+  const LOCAL_MCP_GUARD = '本地 MCP 管理未开启：请在插件配置里设 localMcp: true（默认关闭）'
+  // 本地 MCP 的运行时挂载（同 connectors 的 mounted Map）。
+  const localMcpRuntime = new Map()
+  // 插件卸载 / HMR 时拆掉所有本地 MCP 传输（不留孤儿注册）。
+  ctx.effect(() => () => {
+    for (const name of [...localMcpRuntime.keys()]) void disableLocalMcp(name)
+  }, 'workbuddy-hub: local MCP transports')
+  // 隔离测试需要看到「门关着」这一事实；false 时仍返回 guarded:true，不暴露任何条目数据。
+  if (!localMcpEnabled) {
+    mkdirSync(P.localMcpDir, { recursive: true })
+  }
+
+  const localMcpPath = name => join(P.localMcpDir, `${name}.json`)
+  const readLocalMcp = name => {
+    try { return JSON.parse(readFileSync(localMcpPath(name), 'utf8')) } catch { return null }
+  }
+  const listLocalMcp = () => {
+    const out = []
+    try {
+      for (const f of readdirSync(P.localMcpDir)) {
+        if (!f.endsWith('.json')) continue
+        const entry = readLocalMcp(f.slice(0, -5))
+        if (entry?.name) out.push(entry)
+      }
+    } catch { /* 目录不存在 → 空 */ }
+    return out
+  }
+  const saveLocalMcp = entry => {
+    mkdirSync(P.localMcpDir, { recursive: true })
+    writeFileSync(localMcpPath(entry.name), JSON.stringify(entry, null, 2))
+  }
+  /** 谁在操作（审计字段）。DSH 前缀路由下没有按用户鉴权，能记多少记多少。 */
+  const auditNote = req => `remote=${req?.socket?.remoteAddress || 'unknown'}`
+  /** 栅栏 d) 可见性：每个写动作一条 console 日志（只含引用名，绝不含 token 明文）。 */
+  const auditLog = (action, name, detail) => {
+    console.info(`[wbh] localMcp ${action}: ${name} ${detail}`)
+  }
+
+  /** 条目 → 列表视图（绝不包含 token 明文；工具数实时从活注册表算）。 */
+  const localMcpView = entry => {
+    const live = entry.serverName ? liveToolView(entry.serverName) : null
+    return {
+      name: entry.name,
+      url: entry.url,
+      transport: entry.transport || 'streamable-http',
+      tokenRef: entry.tokenRef || '',
+      // 只暴露「凭据是否已配置」，不暴露值本身（hasToken 甚至也不回传值的存在性以外的信息）
+      tokenRefSet: Boolean(entry.tokenRef),
+      serverName: entry.serverName || '',
+      enabled: Boolean(entry.enabled),
+      toolCount: live?.available ? live.count : null,
+      lastError: String(entry.lastError || ''),
+      note: String(entry.note || ''),
+      createdAt: entry.createdAt || '',
+      updatedAt: entry.updatedAt || '',
+      lastEnabledAt: entry.lastEnabledAt || '',
+      lastDisabledAt: entry.lastDisabledAt || '',
+      removedAt: entry.removedAt || '',
+    }
+  }
+
+  /** 启用一条本地 MCP（路由与启动恢复共用）。失败抛错且绝不置 enabled。 */
+  const enableLocalMcp = async entry => {
+    const spec = localMcpSpec({ name: entry.name, url: entry.url, tokenRef: entry.tokenRef })
+    if (!spec.ok) throw new Error(spec.error)
+    if (localMcpRuntime.has(entry.name)) await disableLocalMcp(entry.name)
+    const resolved = {}
+    const credentials = ctx.credentials
+    const missing = []
+    for (const ref of spec.refs) {
+      try {
+        const value = (await credentials?.resolve?.(ref))?.value
+        if (value === undefined || value === '') missing.push(ref)
+        else resolved[ref] = value
+      } catch { missing.push(ref) }
+    }
+    let authMode
+    const server = structuredClone(spec.server)
+    if (missing.length > 0) {
+      // 凭据还没配置：按「未鉴权」明示降级（连接可能被服务器 401 拒绝 —— 那也是可见的失败）。
+      delete server.headers.Authorization
+      authMode = 'unauthorized'
+    } else {
+      authMode = 'token'
+    }
+    const id = await ctx.loader.create({ name: MCP_CLIENT_PACKAGE, config: buildMcpConfig(server, spec.serverName, resolved) })
+    const created = ctx.loader.resolve?.(id)
+    if (created?.fiber !== undefined) {
+      try { await created.fiber.await() } catch (error) {
+        const disposal = created.fiber.dispose()
+        ctx.loader.remove(id)
+        await disposal
+        throw error instanceof Error ? error : new Error(String(error))
+      }
+    }
+    localMcpRuntime.set(entry.name, { id, serverName: spec.serverName })
+    return { serverName: spec.serverName, authMode }
+  }
+
+  /** 停用并立即 dispose（本地 MCP 与连接器共用同一套 fiber 管理方式）。 */
+  const disableLocalMcp = async name => {
+    const live = localMcpRuntime.get(name)
+    if (live === undefined) return false
+    localMcpRuntime.delete(name)
+    const entry = ctx.loader.store?.[live.id]
+    if (entry !== undefined) {
+      const disposal = entry.fiber?.dispose()
+      ctx.loader.remove(live.id)
+      await disposal
+    }
+    return true
+  }
+
+
   /** Persisted connector status is deliberately sanitized: no urls/headers/env. */
   const noteConnectorStatus = (key, patch) => {
     const registry = loadJson(P.registry, { version: 1, installed: {} })
@@ -1121,6 +1307,8 @@ export function apply(ctx, config = {}) {
         ok: true, store: P.root, mirror: mirrorRepo, branch: mirrorBranch,
         // 官方是唯一真源；这里如实报告灾备开关状态（默认 false）
         mirrorFallback,
+        // 本地 MCP 管理门（默认 false；true 时才允许注册/启停本地 MCP 服务器）
+        localMcp: localMcpEnabled,
       })
       return true
     }
@@ -1887,6 +2075,134 @@ export function apply(ctx, config = {}) {
       return true
     }
 
+    /* ---------------------------------------------------------------- *
+     * 本地 MCP 服务器：注册/列表/启用/停用/移除
+     * 栅栏 a) localMcp 默认 false → 写路由 403，列表不给条目数据（guarded:true）
+     * 栅栏 c) v1 只收 streamable-http；stdio 在 localMcpSpec 里直接拒绝
+     * 栅栏 b) URL 白名单 loopback（localMcpSpec.isLoopbackUrl）
+     * 栅栏 d) 每个写动作 console 日志 + 条目时间戳；disable/remove 立即 dispose
+     * ---------------------------------------------------------------- */
+    if (route === 'GET /mcp/local') {
+      if (!localMcpEnabled) {
+        json(res, 200, { ok: true, guarded: true, reason: LOCAL_MCP_GUARD, servers: [] })
+        return true
+      }
+      json(res, 200, { ok: true, guarded: false, servers: listLocalMcp().map(localMcpView) })
+      return true
+    }
+
+    if (route === 'POST /mcp/local') {
+      if (!localMcpEnabled) { json(res, 403, { ok: false, error: LOCAL_MCP_GUARD }); return true }
+      const body = JSON.parse((await readBody(req)) || '{}')
+      const name = String(body.name || '').trim()
+      const url = String(body.url || '').trim()
+      const token = String(body.token ?? '')
+      const tokenRef = String(body.tokenRef || '').trim()
+      // 1) 传输白名单（栅栏 c）：stdio 会在本机执行任意命令，本版本不提供；
+      //    除 streamable-http 外的其余 transport 同样拒绝（v1 只支持这一种）。
+      const wantedTransport = String(body.transport || 'streamable-http').toLowerCase()
+      if (wantedTransport === 'stdio') {
+        json(res, 400, { ok: false, error: 'v1 只支持 streamable-http；stdio 会在本机执行任意命令，本版本不提供' })
+        return true
+      }
+      if (wantedTransport !== 'streamable-http') {
+        json(res, 400, { ok: false, error: `不支持的 transport: ${wantedTransport}（v1 只支持 streamable-http）` })
+        return true
+      }
+      // 2) 准入（名称 + loopback 白名单（栅栏 b） + tokenRef 形状）
+      const spec = localMcpSpec({ name, url, tokenRef })
+      if (!spec.ok) { json(res, 400, { ok: false, error: spec.error }); return true }
+      // 3) token：只写凭据库；明文不落条目、不进响应、不进日志
+      if (token !== '') {
+        try { await ctx.credentials?.set?.(spec.tokenRef, token) }
+        catch (error) {
+          json(res, 502, { ok: false, error: `凭据写入失败：${String(error?.message || error).slice(0, 200)}` })
+          return true
+        }
+      }
+      const now = new Date().toISOString()
+      const prev = readLocalMcp(spec.serverName) || readLocalMcp(name)
+      const entry = {
+        name: spec.serverName,
+        transport: 'streamable-http',
+        url: spec.server.url,
+        tokenRef: spec.tokenRef,
+        enabled: false,
+        serverName: spec.serverName,
+        createdAt: prev?.createdAt || now,
+        updatedAt: now,
+        lastEnabledAt: prev?.lastEnabledAt || '',
+        note: String(body.note || prev?.note || ''),
+      }
+      saveLocalMcp(entry)
+      auditLog('register', entry.name, `${auditNote(req)} url=${entry.url} tokenRef=${entry.tokenRef}${token !== '' ? ' token=updated' : ' token=unchanged'} at=${now}`)
+      json(res, 200, { ok: true, server: localMcpView(entry) })
+      return true
+    }
+
+    if (route === 'POST /mcp/local/enable') {
+      if (!localMcpEnabled) { json(res, 403, { ok: false, error: LOCAL_MCP_GUARD }); return true }
+      const body = JSON.parse((await readBody(req)) || '{}')
+      const name = String(body.name || '').trim()
+      const entry = readLocalMcp(name)
+      if (!entry) { json(res, 404, { ok: false, error: `未注册的本地 MCP：${name}` }); return true }
+      try {
+        const result = await enableLocalMcp(entry)
+        const now = new Date().toISOString()
+        entry.enabled = true
+        entry.serverName = result.serverName
+        entry.lastEnabledAt = now
+        entry.updatedAt = now
+        entry.lastError = ''
+        entry.authMode = result.authMode
+        saveLocalMcp(entry)
+        auditLog('enable', entry.name, `${auditNote(req)} serverName=${result.serverName} auth=${result.authMode} at=${now}`)
+        json(res, 200, { ok: true, server: localMcpView(entry) })
+      } catch (error) {
+        const message = String(error?.message || error).slice(0, 300)
+        // 失败保持 disabled：绝不留下「声称已启用但实际没挂上」的中间态
+        entry.enabled = false
+        entry.lastError = message
+        entry.updatedAt = new Date().toISOString()
+        saveLocalMcp(entry)
+        auditLog('enable-failed', entry.name, `error=${message}`)
+        json(res, 502, { ok: false, error: `启用失败：${message}`, status: 'failed' })
+      }
+      return true
+    }
+
+    if (route === 'POST /mcp/local/disable') {
+      if (!localMcpEnabled) { json(res, 403, { ok: false, error: LOCAL_MCP_GUARD }); return true }
+      const body = JSON.parse((await readBody(req)) || '{}')
+      const name = String(body.name || '').trim()
+      const entry = readLocalMcp(name)
+      if (!entry) { json(res, 404, { ok: false, error: `未注册的本地 MCP：${name}` }); return true }
+      const disposed = await disableLocalMcp(name)
+      const now = new Date().toISOString()
+      entry.enabled = false
+      entry.lastDisabledAt = now
+      entry.updatedAt = now
+      saveLocalMcp(entry)
+      auditLog('disable', entry.name, `${auditNote(req)} disposed=${disposed} at=${now}`)
+      json(res, 200, { ok: true, server: localMcpView(entry) })
+      return true
+    }
+
+    if (route === 'POST /mcp/local/remove') {
+      if (!localMcpEnabled) { json(res, 403, { ok: false, error: LOCAL_MCP_GUARD }); return true }
+      const body = JSON.parse((await readBody(req)) || '{}')
+      const name = String(body.name || '').trim()
+      const entry = readLocalMcp(name)
+      if (!entry) { json(res, 404, { ok: false, error: `未注册的本地 MCP：${name}` }); return true }
+      // 先拆传输再删文件：工具先从注册表消失，条目才被移除（与 /uninstall 顺序一致）
+      await disableLocalMcp(name)
+      rmSync(localMcpPath(name), { force: true })
+      const now = new Date().toISOString()
+      auditLog('remove', name, `${auditNote(req)} at=${now}`)
+      json(res, 200, { ok: true, name, removedAt: now })
+      return true
+    }
+
     if (route === 'GET /mounted') {
       const resolvedSession = resolveSessionId(url.searchParams.get('sessionId'))
       const sessionId = resolvedSession.id
@@ -2384,6 +2700,44 @@ export function apply(ctx, config = {}) {
     }, 1500)
     return () => { cancelled = true; clearTimeout(timer) }
   }, 'workbuddy-hub: restore enabled connectors')
+
+  // 启动时恢复已启用的本地 MCP：与连接器恢复同一处/同一风格（延迟 1.5s，逐条恢复）。
+  // 失败只记 lastError，**绝不让插件启动失败** —— 本地服务器（如 Docker 容器）完全
+  // 可能在 DSH 之后才起来。
+  ctx.effect(() => {
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      try {
+        if (!localMcpEnabled) return
+        for (const entry of listLocalMcp()) {
+          if (cancelled) return
+          if (entry.enabled !== true) continue
+          try {
+            const result = await enableLocalMcp(entry)
+            const now = new Date().toISOString()
+            entry.serverName = result.serverName
+            entry.lastEnabledAt = now
+            entry.updatedAt = now
+            entry.lastError = ''
+            entry.authMode = result.authMode
+            saveLocalMcp(entry)
+            auditLog('restore', entry.name, `serverName=${result.serverName} auth=${result.authMode} at=${now}`)
+          } catch (error) {
+            const message = String(error?.message || error).slice(0, 300)
+            try {
+              const now = new Date().toISOString()
+              entry.enabled = false
+              entry.lastError = message
+              entry.updatedAt = now
+              saveLocalMcp(entry)
+            } catch { /* 落盘失败也只影响可见性 */ }
+            auditLog('restore-failed', entry.name, `error=${message}`)
+          }
+        }
+      } catch { /* 列表读不出来 → 没有可恢复的记录 */ }
+    }, 1500)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, 'workbuddy-hub: restore enabled local MCP servers')
 
   // 任何路由未捕获的异常都返回可诊断的 JSON（此前会得到空体 400，无法定位）。
   const guardedHandler = async (req, res) => {

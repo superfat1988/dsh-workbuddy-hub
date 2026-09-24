@@ -36,6 +36,7 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 | `storeRoot` | `~/workbuddyskills` | 本地内容仓 |
 | `skillPrefix` | `workbuddy-` | `~/.dsh/skills/` 下的挂载前缀 |
 | `keepalive` | `true` | 后台每 30 分钟巡检并主动刷新凭证 |
+| `localMcp` | **`false`** | 本地 MCP 服务器管理总开关（默认关闭）。打开后设置区才出现「本地 MCP 服务器」节，允许注册/启停本机 MCP 服务器（仅 loopback，v1 只支持 streamable-http，stdio 一律拒绝） |
 
 ## HTTP 路由（Host 侧 `/workbuddy-hub`，全部先过 `ctx.connection.requestRejection`）
 
@@ -51,6 +52,9 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 | GET | `/mounted?sessionId=` | 本会话已挂载条目（只读，缺 sessionId 时按最近会话兜底并标 `sessionSource`） |
 | POST | `/mount` \| `/unmount {sessionId,kind,name}` | 会话级挂载（安装 ≠ 挂载）；**写操作必须显式传 `sessionId`，缺失返回 409**，绝不兜底猜会话 |
 | POST | `/connectors/enable` \| `/connectors/disable {name}` | 动态挂载/拆卸 MCP 传输 |
+| GET | `/mcp/local` | 本地 MCP 服务器列表（`localMcp:false` 时 `guarded:true` + 原因、不返回条目数据） |
+| POST | `/mcp/local {name,url,token?,tokenRef?,note?}` | 注册/更新本地 MCP 服务器；token 只写入凭据库，明文不落盘、不回显 |
+| POST | `/mcp/local/enable` \| `/mcp/local/disable` \| `/mcp/local/remove {name}` | 启用（事务性，失败保持停用）/ 停用（立即 dispose）/ 移除（先停用再删条目） |
 | GET | `/icon?kind=&name=` | 图标代理（按需从镜像取，磁盘缓存） |
 
 ## 检查更新 / 一键更新
@@ -91,10 +95,36 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 | 技能 skill | 符号链接进 `~/.dsh/skills` | **添加/挂载**，DSH 按 description 触发 |
 | 连接器 connector | MCP 型带 `mcp.json`；CLI 型带 `cli.json` + `skills/` | **开关** = 真实连接状态；CLI 型的捆绑技能会被挂载 |
 
+## 本地 MCP 服务器（localMcp）
+
+把**用户自己在本机跑的 MCP 服务器**（如 Docker 里的 scrapling：`http://127.0.0.1:8002/mcp`）
+纳入插件管理，不必手改 profile 配置。条目存在 `storeRoot/mcp-servers/<name>.json`
+（与官方连接器 `connectors/` 分开，不污染连接器列表与 `/updates` 判定），
+经 `buildMcpConfig` 复用官方连接器同一套 `@deepseek-ai/dsh-mcp-client` 准入与挂载链路。
+
+**四道栅栏**（目标是「不让权限静默升级 + 全程可见 + 一键可撤」，不是防御已被完全控制的
+agent —— 路由与其它插件路由共用同一道 DSH 连接栅栏，而 agent 本身就能 curl 这些路由）：
+
+1. **默认关闭**：`localMcp:false` 时写路由一律 403，列表只回 `guarded:true` + 原因；
+2. **仅 loopback**：URL 只接受 `127.0.0.1` / `localhost` / `::1`（任意端口），非本机一律 400 拒绝；
+3. **v1 拒绝 stdio**：stdio 会在本机执行任意命令，本版本不提供（`transport: "stdio"` 注册直接 400）；
+4. **可见 + 可撤**：注册/启用/停用/移除都打 `[wbh] localMcp …` console 日志（含来源 IP）并记时间戳；
+   停用/移除立即 dispose mcp-client 行，工具当场从注册表消失。
+
+- **凭据**：token 提交后经 `credentials.set(ref, value)` 只存 DSH 凭据库
+  （`~/.dsh/.credentials.yaml`，0600，热加载）；条目文件与响应里只出现引用名
+  （默认 `<NAME 大写>_MCP_TOKEN`，如 scrapling → `SCRAPLING_MCP_TOKEN`），**绝不出现明文**。
+  凭据未配置时启用会按「未鉴权」明示降级（条目 `authMode: unauthorized`），服务器 401 也是可见失败。
+- **命名空间**：`mcp__<name>__<tool>`；列表里的 `toolCount` 从 DSH 活工具注册表实时计算，拿不到显示「—」。
+- **恢复**：插件启动时按条目自动恢复所有 `enabled` 的本地服务器；连不上只记 `lastError`
+  （条目复位为停用），绝不让插件启动失败。
+
 ## 安全模型
 
 - 下载内容逐文件扫描（piped-shell / eval / 动态函数 / 进程 spawn / 凭据词 / 外链），标记写入 registry
-- `mcp.json` 视为**不可信数据**：仅放行 `stdio` / `streamable-http`，拒绝未知键、非法 URL/header、非字符串 args/env、多义服务器
+- `mcp.json` 视为**不可信数据**：仅放行 `stdio` / `streamable-http`，拒绝未知键、非法 URL/header、非字符串 args/env、多义服务器；
+  `.json` 也纳入 `scanFlags`（mcp 定义类文件额外做值级扫描：`declares-command-execution` /
+  `external-url` / `sensitive-header` / `sensitive-query-param`）
 - `${VAR}` 只作凭证引用；值经 `credentials.resolve(ref)?.value` 临时解析，**不落盘、不回传**
 - 启用是事务性的（`failOnStartupError: true`）；失败保持"已安装未启用"并记录 `lastError`
 - `cli.json` 只保留净化后的需求（runtime / minVersion / authDomain），**不持久化平台命令模板**
@@ -103,9 +133,10 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 ## 开发
 
 ```bash
-npm test        # 16 个套件：mcp 校验 / 专家人设 / CLI 连接器 / 召唤 / 凭证轮换 /
+npm test        # 17 个套件：mcp 校验 / 专家人设 / CLI 连接器 / 召唤 / 凭证轮换 /
                 #   浏览器槽位 / client bundle / render smoke / session 契约 / pending expert /
-                #   recent experts / auth store / keepalive / install 离线链 / 更新判定 / package 完整性
+                #   recent experts / auth store / keepalive / install 离线链 / 更新判定 /
+                #   本地 MCP 管理 / package 完整性
 npm run pack:check
 ```
 

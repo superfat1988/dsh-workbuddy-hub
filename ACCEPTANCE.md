@@ -117,15 +117,22 @@ PY
   验收隔离实例时，实例要绑 `0.0.0.0`，并在 profile 的 `trustedHosts` 里加上对应 authority。
 - **不要在本机 `pip install scrapling`**：那是往技能目录塞一份 469MB 的重复本体（本项目犯过一次，已删）。
 
-**B. 交互（点击 / 输入 / 多步流程）→ 上面的 MCP 做不到**
+**B. 交互（点击 / 输入 / 多步流程）**
 
-- 那 13 个工具里**没有** `click` / `type` / `fill`；容器内也**没有 playwright**（只有 scrapling 本体），
-  所以 `docker exec` 跑交互脚本同样不可行。上一轮那次交互验收能跑通，用的是本机临时装的 Playwright venv（已删）。
-- 交互验收仍用：`/tmp/wbh-cdp.mjs` + `/tmp/lib.mjs`（CDP 直连本机 Chromium），
-  或先连上 `dsh-browser` 的浏览器扩展以启用 `browser_*` 工具（当前扩展未连接）。
-- 已知坑：DSH 新实例首次出现的 Internal Testing Notice 弹窗（`[class*="_mask_"]`）会全屏遮挡，必须先关掉再操作。
-
-CDP 辅助仍在（`/tmp/wbh-cdp.mjs`、`/tmp/lib.mjs`），但仅在无法起浏览器时作为退路。
+- 容器里的 scrapling MCP **做不到**：那 13 个工具没有 `click` / `type` / `fill`，容器内也没有 playwright。
+- 本机有两条**不需要新装**的路（2026-09-25 实测）：
+  1. **DSH 仓库自带的 node Playwright + 系统 chromium（推荐）**——仓库里装着 `playwright@1.61.1`，
+     但没有 `~/.cache/ms-playwright` 浏览器缓存，所以必须用 `executablePath` 指系统 chromium：
+     ```js
+     import { createRequire } from 'node:module'
+     const require = createRequire('/home/kaitzh/deepseek-harness/packages/experimental/inspector/package.json')
+     const { chromium } = require('playwright')
+     const page = await (await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] })).newPage()
+     ```
+     实测 `hover` / `click` / `type` 全部可用。
+  2. `/tmp/wbh-cdp.mjs` + `/tmp/lib.mjs`（CDP 直连本机 Chromium）——退路；注意 DSH 新实例首次的
+     Internal Testing Notice 弹窗（`[class*="_mask_"]`）会全屏遮挡，必须先关掉再操作。
+- 另外 `127.0.0.1:16002` 上有一个本机 CDP 网关（回 `local CDP requires the loopback endpoint`），未进一步接入。
 
 ---
 
@@ -133,7 +140,7 @@ CDP 辅助仍在（`/tmp/wbh-cdp.mjs`、`/tmp/lib.mjs`），但仅在无法起�
 
 | ID | 步骤 | 预期 | 证据 |
 |---|---|---|---|
-| **A1** | `set -o pipefail && npm test` | exit 0；16 个套件全部 `OK`/`ALL TESTS PASSED` | 尾部输出 |
+| **A1** | `set -o pipefail && npm test` | exit 0；17 个套件全部 `OK`/`ALL TESTS PASSED` | 尾部输出 |
 | **A2** | `npm run build:client` 后 `git status --short` | `client.js` 无变化（证明 src 与产物同步） | 命令输出 |
 | **A3** | `node test-package.mjs` | 通过；且其中「真打包→解压→import」一步成功 | 输出里 `import('./index.js') 成功` |
 | **A4** | `npm pack --dry-run --json`，检查产物清单 | 含 `index.js expert-persona.js mcp-manager.js wb-market.js wb-experts.js wb-cats.js wb-unzip.js client.js client.css cordis.patch.yml` 与 `skills/*` | 文件清单 |
@@ -228,6 +235,19 @@ CDP 辅助仍在（`/tmp/wbh-cdp.mjs`、`/tmp/lib.mjs`），但仅在无法起�
 | **U6** | 更新一项已装技能后再 `GET /updates?refresh=1` | 该项变 `current`（新记录写入了 `officialMeta.version`，与官方一致）；注册表 `installedAt` 更新、文件被重装（先删后落） | 前后响应 + 目录 mtime |
 | **U7** | 更新失败（限流/断网/安装失败） | 界面给出可区分的原因并带 HTTP 状态；**不得**静默，也不得显示「已是最新」 | 通知文案 |
 | **U8** | 注册表里造一条**没有** `officialMeta` 的老记录后再 `GET /updates?refresh=1` | 该条 `unknown`，reason 明确「缺少安装时记录的官方版本 / MCP 定义哈希，重装一次即可记录」；**不得**判「已是最新」 | 响应 JSON |
+
+## MC. 本地 MCP 服务器（隔离实例；`storeRoot` 指真实仓副本 + `localMcp:true`）
+
+> token 一律用假值（64 位十六进制即可）；**任何日志/响应/条目文件里出现 token 明文即 FAIL**。
+> 顺带要求 `skillsMount` 指向临时目录（隔离纪律），`keepalive:false`。
+
+| ID | 步骤 | 预期 | 证据 |
+|---|---|---|---|
+| **MC1** | `POST /mcp/local {name:"scrapling", url:"http://127.0.0.1:8002/mcp", token:<假值>}` → `GET /mcp/local` | 注册 200；列表可见、`enabled:true`（自动启用）、`tokenRef:"SCRAPLING_MCP_TOKEN"`、`toolCount` 为数字或 null | 响应 JSON |
+| **MC2** | 注册非 loopback（`http://192.168.1.5:8002/mcp`）与 stdio（`transport:"stdio"`） | 都 400，error 分别说明「只允许本机地址」与「stdio 会在本机执行任意命令，本版本不提供」 | 响应 JSON |
+| **MC3** | 另起一个 `localMcp:false` 实例（或去掉该配置）重试写路由 | 全部 403 + 「localMcp: true」指引；`GET /mcp/local` 返回 `guarded:true` 且 `servers:[]` | 响应 JSON |
+| **MC4** | `grep -r <假token明文> <storeRoot>`；同时检查 `GET /mcp/local` 响应体 | 零命中；条目文件与响应里只有 `SCRAPLING_MCP_TOKEN` 引用名 | grep 输出 |
+| **MC5** | 控制台抽查 `[wbh] localMcp` 日志 | register/enable/disable/remove 各一条，含来源 IP 与时间戳，无 token 明文 | 控制台输出 |
 
 ## R. 发布就绪与一致性
 

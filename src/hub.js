@@ -426,6 +426,22 @@ export const hub = {
   enableConnector: name => post('/connectors/enable', { name }).then(r => { _emitChange(); return r }),
   disableConnector: name => post('/connectors/disable', { name }).then(r => { _emitChange(); return r }),
 
+  // 本地 MCP 服务器（用户手工注册的 loopback 服务）。token 只在 POST 请求体里
+  // 出现一次（交给宿主写凭据库），前端 state 不留存、不回显。
+  localMcpList: () => api('/mcp/local').catch(error => ({
+    ok: false, guarded: false, servers: [], error: String(error?.message || error),
+  })),
+  localMcpSave: (name, url, token, opts = {}) => post('/mcp/local', {
+    name, url,
+    // 空 token 不发送（语义 = 沿用已存凭据；宿主只对非空 token 才写凭据库）
+    ...(token ? { token } : {}),
+    ...(opts.tokenRef ? { tokenRef: opts.tokenRef } : {}),
+    ...(opts.note ? { note: opts.note } : {}),
+  }),
+  localMcpEnable: name => post('/mcp/local/enable', { name }),
+  localMcpDisable: name => post('/mcp/local/disable', { name }),
+  localMcpRemove: name => post('/mcp/local/remove', { name }).then(r => { _emitChange(); return r }),
+
   auth: () => api('/wb-auth'),
   authStart: () => post('/wb-auth/start', {}),
   authPoll: () => post('/wb-auth/poll', {}),

@@ -78,7 +78,9 @@ for (const file of readdirSync(new URL('./src', import.meta.url)).filter(f => (f
     .replace(/"(?:[^"\\]|\\.)*"/g, '""')
     .replace(/`(?:[^`\\]|\\.)*`/g, '``')
   for (const name of exports) {
-    const used = new RegExp(`(^|[^\\w$.])${name}\\b`).test(body)
+    // 用作标识符才算「用了」：className 字符串（如 wbh-authState）已在上面剥掉，
+    // 这里再排除连字符前缀形态，防止 CSS 类名残段误判成标识符使用。
+    const used = new RegExp(`(^|[^\\w$.\\-])${name}\\b`).test(body)
     if (!used) continue
     assert.ok(new RegExp(`[{,\\s]${name}[,}\\s]`).test(importLine), `${file} uses hub.${name} without importing it`)
   }

@@ -18,3 +18,8 @@
         # skills 挂载目录（默认 ~/.dsh/skills）。**隔离测试务必覆盖它**：否则临时 storeRoot
         # 装技能时仍会往用户真实目录塞软链（此前实测泄漏过一个指向已删临时目录的断链）。
         # skillsMount: '/tmp/my-isolated/skills'
+        # 本地 MCP 服务器管理（默认 **false**）。打开后设置区才出现「本地 MCP 服务器」节，
+        # 可注册/启停本机（仅 127.0.0.1/localhost/::1）的 streamable-http MCP 服务器
+        # （如 Docker 里的 scrapling：http://127.0.0.1:8002/mcp）；stdio 一律拒绝。
+        # token 只写 DSH 凭据库（refs 表），不落配置文件。
+        localMcp: false

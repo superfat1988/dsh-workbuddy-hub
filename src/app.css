@@ -256,3 +256,15 @@
 .wbh-flyoutLogin .wbh-flyoutFooterLabel{white-space:normal;overflow:visible;text-overflow:clip;font-size:12px;line-height:16px}
 .wbh-flyoutLogin .wbh-flyoutFooterLabel,
 .wbh-flyoutLogin .wbh-flyoutFooterIcon{color:var(--wb-palette-blue-1,#2f6bff)}
+
+/* --- 设置区：本地 MCP 服务器（localMcp:true 才显示可操作界面） --- */
+.wbh-localMcpSection .wbh-muted{display:block;margin:6px 0;line-height:1.7}
+.wbh-localMcpRow{flex-wrap:wrap}
+.wbh-localMcpRow .wbh-installedName{display:inline-flex;align-items:center;flex-wrap:wrap;gap:8px}
+.wbh-badgeIdle{border-color:var(--wb-border-default);background:transparent;color:var(--wb-color-text-tertiary)}
+.wbh-localMcpForm{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:12px;padding:10px 0;border-top:1px solid var(--wb-border-default)}
+.wbh-localMcpInput{height:30px;padding:0 10px;border:1px solid var(--wb-border-default);border-radius:8px;background:var(--wb-bg-primary);color:var(--wb-color-text-primary);font:inherit;font-size:12px;min-width:140px}
+.wbh-localMcpInput:focus{outline:none;border-color:var(--wb-palette-blue-1,#2f6bff)}
+.wbh-localMcpUrl{flex:1 1 260px}
+.wbh-localMcpToken{flex:1 1 200px}
+.wbh-localMcpForm button[type="submit"]{flex:none}

@@ -23,6 +23,8 @@
  */
 
 const MCP_CLIENT_PACKAGE = '@deepseek-ai/dsh-mcp-client'
+/** 供宿主（本地 MCP 路由）复用同一常量，避免第二处字面量。 */
+export { MCP_CLIENT_PACKAGE }
 const SERVER_NAME_MAX = 32
 const NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/
 
@@ -162,6 +164,72 @@ export function buildMcpConfig(server, serverName, resolved) {
     env,
     cwd: typeof server.cwd === 'string' ? substitute(server.cwd, resolved) : '',
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * 本地 MCP 服务器（用户手工注册，与官方连接器分开管理）
+ *
+ * 两者共用 validateConnectorMcp / buildMcpConfig / createConnectorManager：
+ * 本地服务器只是「用户亲自注册的一个 mcp.json 条目」，准入与配置构造完全一致，
+ * 没必要也不应该存在第二套 mcp-client 配置逻辑。
+ * ------------------------------------------------------------------ */
+
+/** 条目名与官方连接器同一风格（路径安全字符）。 */
+export const LOCAL_MCP_NAME_PATTERN = /^[\w.-]+$/
+
+/** mcp-client 对 serverName 的硬约束（照抄官方包声明）。 */
+export const MCP_SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/
+
+/** 默认凭据引用：SCRAPLING → SCRAPLING_MCP_TOKEN。 */
+export function localTokenRefFor(name) {
+  return `${String(name || '').toUpperCase().replace(/[^A-Z0-9]/g, '_')}_MCP_TOKEN`
+}
+
+/**
+ * 只允许 loopback（127.0.0.1 / localhost / ::1，任意端口）。
+ * 返回 { ok:true } 或 { ok:false, reason }；DNS 一律不做 —— 名字只认字面
+ * localhost，绝不发起解析（解析本身就是一次信息泄漏 + TOCTOU 窗口）。
+ */
+export function isLoopbackUrl(rawUrl) {
+  let parsed
+  try { parsed = new URL(String(rawUrl ?? '')) } catch { return { ok: false, reason: '不是合法 URL' } }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { ok: false, reason: `协议必须是 http/https（当前 ${parsed.protocol}）` }
+  }
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, '').replace(/^\[|\]$/g, '')
+  if (host === 'localhost' || host === '::1' || /^127(\.\d{1,3}){3}$/.test(host)) return { ok: true }
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    return { ok: false, reason: `只允许本机地址（127.0.0.1 / localhost / ::1），当前是 ${host}` }
+  }
+  return { ok: false, reason: `只允许本机地址（127.0.0.1 / localhost / ::1），当前主机名 ${host} 无法静态判定为本机，一律拒绝` }
+}
+
+/**
+ * 注册表单 → 一个「与官方连接器等价」的 mcp 服务器定义。
+ * @param {{name:string, url:string, tokenRef?:string}} spec
+ * @returns {{ok:true, server:object, serverName:string, refs:string[]}|{ok:false, error:string}}
+ */
+export function localMcpSpec(spec) {
+  const name = String(spec?.name ?? '')
+  if (!LOCAL_MCP_NAME_PATTERN.test(name)) return { ok: false, error: `名称只允许字母数字._-（当前 "${name.slice(0, 40)}"）` }
+  if (name.length > 80) return { ok: false, error: '名称过长（≤80）' }
+  const serverName = name.toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 32)
+  if (!MCP_SERVER_NAME_PATTERN.test(serverName)) {
+    return { ok: false, error: `无法从名称推导出合法 serverName（mcp-client 要求 ${MCP_SERVER_NAME_PATTERN}）` }
+  }
+  const url = String(spec?.url ?? '').trim()
+  const verdict = isLoopbackUrl(url)
+  if (!verdict.ok) return { ok: false, error: verdict.reason }
+  const tokenRef = String(spec?.tokenRef ?? '').trim() || localTokenRefFor(name)
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tokenRef)) {
+    return { ok: false, error: 'tokenRef 必须是合法凭据引用名（字母数字下划线）' }
+  }
+  const server = { transport: 'streamable-http', url, headers: {} }
+  // token 缺省 = 服务器可能不鉴权（比如还没换到 0.0.0.0+auth-token 时的 scrapling）；
+  // 有值则只以 ${REF} 引用进 header，明文永远只进凭据库。启用时若 ref 解析不到值，
+  // 宿主会把这个 header 摘掉按「未鉴权」连接（降级是可见的，写进条目 auth 字段）。
+  if (tokenRef) server.headers.Authorization = `Bearer \${${tokenRef}}`
+  return { ok: true, server, serverName, tokenRef, refs: [tokenRef] }
 }
 
 /**
