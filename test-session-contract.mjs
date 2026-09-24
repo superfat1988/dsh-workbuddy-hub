@@ -37,7 +37,21 @@ const LIVE_TOOLS = [
 
 let handler = null
 const ctx = {
-  get: (name) => (name === 'tools' ? { schemas: () => LIVE_TOOLS } : undefined),
+  get: (name) => {
+    if (name === 'tools') return { schemas: () => LIVE_TOOLS }
+    // 工作区注册表：用于验证「nearSessionId → sessionIds 成员关系 → workspaceId」解析
+    if (name === 'workspaceRegistry') {
+      return {
+        list: () => [{
+          workspaceId: 'ws-browser', title: 'browser-sessions', path: '/tmp/browser-sessions',
+          sessionIds: ['session-from-client'],
+        }],
+        resolveByPath: async () => undefined,
+        create: async () => undefined,
+      }
+    }
+    return undefined
+  },
   sessions: { list: () => [{ header: { id: 'session-old', createdAt: 10 } }, { header: { id: 'session-new', createdAt: 99 } }] },
   agents: { get: () => ({ id: 'agent-1' }) },
   connection: {},
@@ -110,6 +124,17 @@ assert.deepEqual(unmountRes.json.keys, [])
 const mountsRaw = JSON.parse((await import('node:fs')).readFileSync(join(root, '.meta', 'mounts.json'), 'utf8'))
 assert.ok(Object.prototype.hasOwnProperty.call(mountsRaw.sessions, 'session-from-client'), 'mount must be keyed by the client session')
 assert.ok(!Object.prototype.hasOwnProperty.call(mountsRaw.sessions, 'session-new'), 'mount must not silently land on the fallback session')
+
+// ---- 1a. 召唤用的工作区解析：nearSessionId 的 sessionIds 成员关系优先 ----
+const wsHit = await call('GET', '/expert-resolve-workspace?nearSessionId=session-from-client')
+assert.equal(wsHit.status, 200)
+assert.equal(wsHit.json.ok, true)
+assert.equal(wsHit.json.workspaceId, 'ws-browser',
+  'the workspace containing that session in sessionIds must win (no cwd needed)')
+const wsMiss = await call('GET', '/expert-resolve-workspace?nearSessionId=no-such-session')
+assert.equal(wsMiss.json.workspaceId, '', 'an unknown session must resolve to empty, never a guess')
+const wsEmpty = await call('GET', '/expert-resolve-workspace')
+assert.equal(wsEmpty.json.workspaceId, '')
 
 // ---- 1b. 专家人设注入（方案 C：system-prompt/assemble 接管）----
 // 未挂载专家时：只读路由返回 injected:false 且不抛错

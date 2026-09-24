@@ -38,6 +38,18 @@ export function startNewSession() {
 }
 
 
+// 在指定工作区建/复用空白会话，并在主视图切换前用 beforeOpen(sessionId) 拿到会话 id。
+// 这是 DSH 官方「新建会话」路径（走客户端 sessions.create，客户端会话列表即时更新），
+// 与宿主的 sessionController.create 不同（后者客户端不会同步收到会话）。
+let _openWorkspace = null
+export function setOpenWorkspace(fn) { _openWorkspace = fn }
+export function openWorkspaceIn(workspaceId, beforeOpen) {
+  if (typeof _openWorkspace !== 'function' || !workspaceId) return false
+  try { _openWorkspace(workspaceId, beforeOpen); return true } catch (error) {
+    console.warn('[wbh] openWorkspace failed:', String(error?.message || error)); return false
+  }
+}
+
 // 当前会话 id：composer 槽由框架注入 props.sessionId，是权威来源
 let _composerSession = ''
 export function setComposerSession(id) { _composerSession = id || '' }
@@ -231,7 +243,7 @@ export const hub = {
  */
 export async function summonExpertInNewSession(entry, nearSessionId) {
   try {
-    // 先确保已安装（人设文件是注入的前置）
+    // 1) 确保已安装（人设文件是注入的前置）
     const key = `expert/${entry.name}`
     let already = false
     try { already = Boolean((await hub.installed())[key]) } catch { /* 读不到则走安装 */ }
@@ -243,19 +255,40 @@ export async function summonExpertInNewSession(entry, nearSessionId) {
         if (!fresh[key]) return { ok: false, error: `安装专家失败：${String(error?.message || error)}` }
       }
     }
-    // 官方语义：召唤 = 新建一个会话；工作区用**当前会话所属工作区**（可靠），
-    // 专家用方案 C 的注入+接管加载进这个新会话（不写 preset）。
-    const created = await post('/expert-new-session', { nearSessionId: nearSessionId || undefined })
-    if (!created?.ok || !created.sessionId) {
-      return { ok: false, error: created?.error || '创建新会话失败' }
+    // 2) 解析「当前会话所属工作区」（宿主侧解析，不建会话）
+    let workspaceId = ''
+    if (nearSessionId) {
+      try {
+        const r = await api(`/expert-resolve-workspace?nearSessionId=${encodeURIComponent(nearSessionId)}`)
+        workspaceId = r?.workspaceId || ''
+      } catch (error) {
+        console.warn('[wbh] resolve workspace failed:', String(error?.message || error))
+      }
     }
-    const sessionId = created.sessionId
-    await post('/mount', { sessionId, kind: 'expert', name: entry.name })
-    addSelection(entry, sessionId)
-    openSessionById(sessionId)
+    if (!workspaceId) {
+      return { ok: false, error: `无法确定新会话的工作区（当前会话 ${nearSessionId || '未知'}）。请先在工作区里打开一个会话再召唤。` }
+    }
+    // 3) 用 DSH 官方 openWorkspace 建会话 —— 走客户端 sessions.create，客户端会话列表
+    //    即时含新会话（宿主 sessionController.create 不会同步给客户端，会导致跳转落空）。
+    //    beforeOpen 在主视图切换前同步回调，拿到 sessionId 后立刻挂专家 + 显示 chip。
+    const sessionId = await new Promise(resolve => {
+      let settled = false
+      const done = sid => { if (!settled) { settled = true; resolve(sid || '') } }
+      const started = openWorkspaceIn(workspaceId, sid => {
+        addSelection(entry, sid)
+        void hub.mount(sid, 'expert', entry.name)
+        console.info('[wbh] summonExpert: session', sid, 'expert', entry.name)
+        done(sid)
+      })
+      if (!started) done('')
+      // 兜底：openWorkspace 若因导航被取代而未回调，8s 后返回失败而不是永久挂起
+      try { setTimeout(() => done(''), 8000) } catch { /* 无定时器环境 */ }
+    })
+    if (!sessionId) return { ok: false, error: '新会话未创建成功（openWorkspace 未回调）' }
     return { ok: true, sessionId }
   } catch (error) {
     return { ok: false, error: String(error?.message || error) }
   }
 }
+
 

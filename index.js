@@ -455,6 +455,48 @@ function readSessionCwdFromDisk(sessionId) {
   return ''
 }
 
+/**
+ * 解析 nearSessionId 所属的工作区 id（只解析，不建会话）。
+ * 顺序：① 工作区列表的 sessionIds 成员关系（基准事实，不依赖会话头 cwd）；
+ *      ② 会话 cwd（内存头或磁盘日志兜底）→ resolveByPath；
+ *      ③ 该目录从未注册 → 就地注册成工作区。
+ */
+async function resolveWorkspaceIdForSession(ctx, nearSessionId) {
+  const reg = ctx.get?.('workspaceRegistry') ?? ctx.workspaceRegistry
+  const near = nearSessionId ? String(nearSessionId) : ''
+  // ① sessionIds 成员关系
+  if (near) {
+    try {
+      for (const ws of (typeof reg?.list === 'function' ? reg.list() : [])) {
+        if (Array.isArray(ws.sessionIds) && ws.sessionIds.some(i => String(i) === near)) {
+          return ws.workspaceId
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  // ② cwd → resolveByPath
+  let cwd = ''
+  try {
+    cwd = ctx.sessions?.get?.(near)?.header?.cwd || readSessionCwdFromDisk(near)
+  } catch { /* ignore */ }
+  if (cwd && typeof reg?.resolveByPath === 'function') {
+    try {
+      const ws = await reg.resolveByPath(cwd)
+      if (ws?.workspaceId) return ws.workspaceId
+    } catch { /* ignore */ }
+  }
+  // ③ 注册新工作区
+  if (cwd && typeof reg?.create === 'function') {
+    try {
+      const ws = await reg.create(cwd)
+      if (ws?.workspaceId) return ws.workspaceId
+    } catch (error) {
+      console.warn('[wbh] workspace create failed:', String(error?.message || error))
+    }
+  }
+  return ''
+}
+
 /** 从 mounts.json 取该会话挂载的第一个专家目录名；轻量、容错，读不到就返回 ''。 */
 function firstMountedExpert(mountsPath, sessionId) {
   const store = loadJson(mountsPath, null)
@@ -1533,6 +1575,16 @@ export function apply(ctx, config = {}) {
     // 排障/验收：用 agent preset 直接建一个会话（等价于官方「新会话 + 选 preset」），
     // 返回会话 id 与 assemble 出的 deployment persona 片段，用来确认 preset 真的
     // 把 agent 的人设换成了专家（无需真实模型回合）。
+    // 只读：解析 nearSessionId 所属工作区 id（不建会话）—— 供客户端用 openWorkspace 建会话
+    if (route === 'GET /expert-resolve-workspace') {
+      try {
+        const nearSessionId = String(url.searchParams.get('nearSessionId') || '').trim()
+        const workspaceId = nearSessionId ? await resolveWorkspaceIdForSession(ctx, nearSessionId) : ''
+        json(res, 200, { ok: true, workspaceId })
+      } catch (error) { json(res, 500, { ok: false, error: String(error?.message || error) }) }
+      return true
+    }
+
     if (route === 'POST /expert-new-session') {
       try {
         const body = JSON.parse((await readBody(req)) || '{}')
@@ -1541,62 +1593,16 @@ export function apply(ctx, config = {}) {
         const sc = ctx.get?.('sessionController') ?? ctx.sessionController
         if (!sc || typeof sc.create !== 'function') { json(res, 503, { ok: false, error: 'sessionController unavailable' }); return true }
         let workspaceId = body.workspaceId ? String(body.workspaceId) : undefined
-        // 0) 基准事实：工作区列表里找「包含 nearSessionId」的工作区（sessionIds 成员关系）。
-        //    不依赖会话头的 cwd 字段 —— 632f6d4 之后由 create({agentPreset, workspaceId})
-        //    创建的会话，header.cwd 可能不写，但一定挂在工作区的 sessionIds 里。
-        if (!workspaceId && body.nearSessionId) {
-          try {
-            const reg0 = ctx.get?.('workspaceRegistry') ?? ctx.workspaceRegistry
-            for (const ws0 of (typeof reg0?.list === 'function' ? reg0.list() : [])) {
-              if (Array.isArray(ws0.sessionIds) && ws0.sessionIds.some(i => String(i) === String(body.nearSessionId))) {
-                workspaceId = ws0.workspaceId
-                break
-              }
-            }
-          } catch { /* ignore */ }
-        }
-        let cwd
-        // 没给 workspaceId 时，用 nearSessionId 所属会话的 cwd 精确匹配工作区（最稳：
-        // cwd 就是会话落的工作区路径）。这样新会话一定和当前会话在同一工作区，不会落错。
-        if (!workspaceId && body.nearSessionId) {
-          try {
-            const nearId = String(body.nearSessionId)
-            // 优先内存里的 live session；磁盘上有但未加载的会话 get 不到，
-            // 这时从会话日志第一行（type:session）直接读 cwd —— 会话头一定写了 cwd。
-            let nearCwd = ctx.sessions?.get?.(nearId)?.header?.cwd
-            if (typeof nearCwd !== 'string' || nearCwd === '') {
-              nearCwd = readSessionCwdFromDisk(nearId)
-            }
-            if (typeof nearCwd === 'string' && nearCwd !== '') {
-              cwd = nearCwd
-              const reg = ctx.get?.('workspaceRegistry') ?? ctx.workspaceRegistry
-              const ws = typeof reg?.resolveByPath === 'function' ? await reg.resolveByPath(nearCwd) : null
-              if (ws?.workspaceId) workspaceId = ws.workspaceId
-            }
-          } catch { /* 解析不到则退回 defaultCwd */ }
+        if (!workspaceId) workspaceId = await resolveWorkspaceIdForSession(ctx, body.nearSessionId)
+        if (!workspaceId) {
+          json(res, 409, { ok: false, error: `无法确定新会话的工作区（nearSessionId=${body.nearSessionId || ''}）` })
+          return true
         }
         const created = await sc.create({
           ...(presetId ? { agentPreset: presetId } : {}),
           ...(workspaceId ? { workspaceId } : {}),
-          ...(!workspaceId && cwd ? { cwd } : {}),
         })
-        // 关键：会话挂入工作区列表（sessionIds）。create({cwd}) 只定磁盘目录、
-        // 不调 attachSession —— 会话在侧边栏是隐形的，用户必须切工作区才能看到
-        // （这正是「召唤后要来回切工作区找专家」的根因）。这里显式补挂。
-        let attached = Boolean(workspaceId)
-        if (!attached && cwd) {
-          try {
-            const reg = ctx.get?.('workspaceRegistry') ?? ctx.workspaceRegistry
-            const ws = typeof reg?.resolveByPath === 'function' ? await reg.resolveByPath(cwd) : null
-            if (ws && typeof ws.attachSession === 'function') {
-              await ws.attachSession(created.sessionId)
-              attached = true
-            }
-          } catch (error) {
-            console.warn('[wbh] attachSession failed:', String(error?.message || error))
-          }
-        }
-        json(res, 200, { ok: true, sessionId: created.sessionId, agentPreset: created.agentPreset, attached })
+        json(res, 200, { ok: true, sessionId: created.sessionId, agentPreset: created.agentPreset, attached: true })
       } catch (error) {
         json(res, 500, { ok: false, error: String(error?.message || error) })
       }

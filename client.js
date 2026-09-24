@@ -2181,6 +2181,20 @@ function startNewSession() {
     return false;
   }
 }
+var _openWorkspace = null;
+function setOpenWorkspace(fn) {
+  _openWorkspace = fn;
+}
+function openWorkspaceIn(workspaceId, beforeOpen) {
+  if (typeof _openWorkspace !== "function" || !workspaceId) return false;
+  try {
+    _openWorkspace(workspaceId, beforeOpen);
+    return true;
+  } catch (error) {
+    console.warn("[wbh] openWorkspace failed:", String(error?.message || error));
+    return false;
+  }
+}
 var _composerSession = "";
 function setComposerSession(id) {
   _composerSession = id || "";
@@ -2437,14 +2451,39 @@ async function summonExpertInNewSession(entry, nearSessionId) {
         if (!fresh[key]) return { ok: false, error: `\u5B89\u88C5\u4E13\u5BB6\u5931\u8D25\uFF1A${String(error?.message || error)}` };
       }
     }
-    const created = await post("/expert-new-session", { nearSessionId: nearSessionId || void 0 });
-    if (!created?.ok || !created.sessionId) {
-      return { ok: false, error: created?.error || "\u521B\u5EFA\u65B0\u4F1A\u8BDD\u5931\u8D25" };
+    let workspaceId = "";
+    if (nearSessionId) {
+      try {
+        const r = await api(`/expert-resolve-workspace?nearSessionId=${encodeURIComponent(nearSessionId)}`);
+        workspaceId = r?.workspaceId || "";
+      } catch (error) {
+        console.warn("[wbh] resolve workspace failed:", String(error?.message || error));
+      }
     }
-    const sessionId = created.sessionId;
-    await post("/mount", { sessionId, kind: "expert", name: entry.name });
-    addSelection(entry, sessionId);
-    openSessionById(sessionId);
+    if (!workspaceId) {
+      return { ok: false, error: `\u65E0\u6CD5\u786E\u5B9A\u65B0\u4F1A\u8BDD\u7684\u5DE5\u4F5C\u533A\uFF08\u5F53\u524D\u4F1A\u8BDD ${nearSessionId || "\u672A\u77E5"}\uFF09\u3002\u8BF7\u5148\u5728\u5DE5\u4F5C\u533A\u91CC\u6253\u5F00\u4E00\u4E2A\u4F1A\u8BDD\u518D\u53EC\u5524\u3002` };
+    }
+    const sessionId = await new Promise((resolve) => {
+      let settled = false;
+      const done = (sid) => {
+        if (!settled) {
+          settled = true;
+          resolve(sid || "");
+        }
+      };
+      const started = openWorkspaceIn(workspaceId, (sid) => {
+        addSelection(entry, sid);
+        void hub.mount(sid, "expert", entry.name);
+        console.info("[wbh] summonExpert: session", sid, "expert", entry.name);
+        done(sid);
+      });
+      if (!started) done("");
+      try {
+        setTimeout(() => done(""), 8e3);
+      } catch {
+      }
+    });
+    if (!sessionId) return { ok: false, error: "\u65B0\u4F1A\u8BDD\u672A\u521B\u5EFA\u6210\u529F\uFF08openWorkspace \u672A\u56DE\u8C03\uFF09" };
     return { ok: true, sessionId };
   } catch (error) {
     return { ok: false, error: String(error?.message || error) };
@@ -4128,6 +4167,24 @@ var plugin = {
         return { ok: false, error: "agentPresets remote \u4E0D\u53EF\u7528" };
       }
       return remote.agentPresets.select(sessionId, presetId);
+    });
+    setOpenWorkspace((workspaceId, beforeOpen) => {
+      let workspace = null;
+      try {
+        workspace = ctx.get?.("uiWorkspace") ?? null;
+      } catch {
+        workspace = null;
+      }
+      const ok = typeof workspace?.openWorkspace === "function";
+      console.info("[wbh] openWorkspace ->", workspaceId, "openWorkspace:", ok);
+      if (!ok) return false;
+      try {
+        void workspace.openWorkspace(workspaceId, beforeOpen);
+        return true;
+      } catch (error) {
+        console.warn("[wbh] openWorkspace failed:", String(error?.message || error));
+        return false;
+      }
     });
     setSessionStarter(() => {
       let workspace = null;
