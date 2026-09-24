@@ -106,6 +106,8 @@ export async function installExpert(entry, destDir, prefix) {
 
   return {
     kind: 'expert', name: agentName, dest,
+    // 官方原始条目的更新时间：安装时记进 officialMeta，供「检查更新」做纯官方元数据比对
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : '',
     displayName: zh(raw.displayName),
     // 官方头像 URL：装完就记下来，picker/市场卡片直接用官方 icon，不再退化成字母块
     icon: raw.avatar ? `${REGISTRY}${raw.avatar}` : '',

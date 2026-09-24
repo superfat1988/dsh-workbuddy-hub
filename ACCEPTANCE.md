@@ -83,8 +83,9 @@ PY
 # 关键只读路由：
 #   GET  /workbuddy-hub/wb-auth                                  登录态（configured/stale/lastError/keepalive）
 #   GET  /workbuddy-hub/installed                                 已装清单
-#   GET  /workbuddy-hub/catalog                                   镜像目录计数
-#   GET  /workbuddy-hub/market-list?kind=…&q=…&page=1             市场列表（source=official|mirror）
+#   GET  /workbuddy-hub/catalog                                   镜像目录计数（mirrorFallback=false 时 503 + 原因）
+#   GET  /workbuddy-hub/market-list?kind=…&q=…&page=1             市场列表（source=official|mirror；默认关镜像兜底）
+#   GET  /workbuddy-hub/updates[?refresh=1]                       检查更新（纯官方元数据比对）
 #   GET  /workbuddy-hub/expert-injection?sessionId=…               该会话实际注入的专家
 #   GET  /workbuddy-hub/expert-assemble?sessionId=…                deployment:persona-prefix 正文
 #   GET  /workbuddy-hub/mounted?sessionId=…                        挂载列表
@@ -116,6 +117,8 @@ CDP 辅助（已存在）：`/tmp/wbh-cdp.mjs`（`listTabs/connect/newTab/closeT
 | **L5** | 进入任一会话，点输入框「＋」→ 悬停「专家」 | 面板**底部**有一行「未登录 · 登录后可加载官方目录」；点它弹出登录卡 | DOM 文本 + 点击后 modal |
 | **L6** | 二维码倒计时走完（或把 `LOCAL_QR_TTL_MS` 调小后重试） | 出现「二维码已过期」+ 一键刷新；点刷新重新出码 | 状态文案 |
 | **L7** | 未登录下从市场页**召唤**一位**已装**专家 | 能新建会话 + composer 出现该专家 chip（专家能力不依赖登录） | chip + `[wbh] pending expert applied` 日志 |
+| **L8** | 市场页 → 切到「技能」标签 | 与连接器页一致：显示**就地登录卡**（含二维码，原因「技能目录与技能包下载需要 WorkBuddy 账号」）；**不**显示「暂无技能」；**不**显示镜像技能列表 | 截图/DOM 文本 + 卡片数 |
+| **L9** | 探针 `GET /market-list?kind=skill`（未登录，`mirrorFallback` 默认关） | `ok:true`、`rows:[]`、`source:"official"`，且 `error` 是可读的「需要登录…」；**不得**返回镜像行 | 响应 JSON |
 
 > 注：官方 auth API **不暴露**「已扫码待确认」与 TTL（连伪造 state 也只返回同一个 `11217`），
 > 所以「已扫码」态不存在是**设计如此**，`src/auth-flow.js` 顶部有说明 —— **不要**当成缺陷。
@@ -169,21 +172,29 @@ CDP 辅助（已存在）：`/tmp/wbh-cdp.mjs`（`listTabs/connect/newTab/closeT
 |---|---|---|---|
 | **S1** | 市场页搜一个不存在的**技能**关键词 | 同样给出未命中空态（不是全量） | 空态文案 |
 | **S2** | 未装任何专家的环境调用 `/expert`（命令）或空态 | 给出可理解的提示，不崩 | 输出 |
-| **S3** | 断网/官方接口不可用时打开市场页 | 走镜像兜底或给出可读错误；**不得**白屏 | 页面文本 + `source` 字段 |
+| **S3** | 断网/官方接口不可用时打开市场页（`mirrorFallback` 默认关） | **给出可读错误**（「读取失败：需要登录…」/「官方…暂不可用」），**不得**白屏，也**不得**静默显示镜像内容；把 `mirrorFallback: true` 打开后才回落到镜像并在 `source` 里如实标注 | 页面文本 + `source` 字段 |
 | **S4** | `POST /mount` 传非法 name（含 `/`）与空 sessionId | 400/409 且不写脏数据 | 响应码 + mounts 未变 |
 | **S5** | 未登录时把 `storeRoot` 指向临时目录启动 | 插件正常起来，不报错、不写用户真实目录 | 启动日志 + 目录对比 |
+| **S6** | `GET /health` | 返回 `mirrorFallback:false`（默认值），可据此判断灾备开关状态 | 响应 JSON |
+| **S7** | `mirrorFallback:false` 下 `GET /catalog` 与 `GET /search?q=x&kind=skills` | 均为 503 且 `error` 说明「镜像兜底已关闭」；**不**返回镜像内容 | 响应码 + 响应 JSON |
 
 ## U. 检查更新 / 一键更新（设置区「已安装」）
 
+> 判定依据已改为**纯官方元数据**（技能比官方 `version`、专家比官方 `updatedAt`、
+> 连接器比官方 MCP 定义哈希）；**不再碰 GitHub、不再算文件 sha**，与 `mirrorFallback` 无关。
+
 | ID | 步骤 | 预期 | 证据 |
 |---|---|---|---|
-| **U1** | 探针 `GET /updates` | `ok:true`，`sources{official,mirror}` 各带 `ok/at`（失败时 `ok:false`+`reason`），`counts{update,current,unknown}`，`entries[]` 含 `key/kind/name/status/remoteAt/installedAt/files/bytes/remoteBytes/changedFiles/reason` | 响应 JSON |
-| **U2** | 连点两次 `GET /updates`（60s 内） | 第二次 `cached:true`，且不再打 GitHub tree / 官方注册表 | 响应 + 网络计数 |
-| **U3** | 断网或让 GitHub API 返回 403 时 `GET /updates?refresh=1` | 相关条目 `status:"unknown"` 且 `reason` 含 HTTP 状态；`counts.current` **必须为 0**（不得把「查不到」当「已是最新」） | 响应 JSON |
+| **U1** | 已登录实例探针 `GET /updates?refresh=1` | `ok:true`，`sources` **只有** `official:{ok,at,reason}`（**不再有 mirror**），`counts{update,current,unknown}`，`entries[]` 含 `key/kind/name/status/remoteVersion/localVersion/remoteAt/localAt/remoteHash/localHash/installedAt/files/bytes/reason` | 响应 JSON |
+| **U2** | 连点两次 `GET /updates`（60s 内） | 第二次 `cached:true`，且不再打官方注册表 / 官方技能接口 / 连接器注册表 | 响应 + 网络计数 |
+| **U3** | 未登录实例（0.2）`GET /updates?refresh=1` | 专家**仍给出判定**（注册表公开）；技能/连接器**全部 `unknown`** 且 reason 含「需要登录」；技能/连接器的 `counts.current` **必须为 0** | 响应 JSON |
+| **U3b** | 让官方技能接口失败（断网或打桩 500）后 `GET /updates?refresh=1` | 相关技能 `status:"unknown"` 且 reason 含「官方技能接口不可用」；`counts.current` **不得**包含这些条目 | 响应 JSON |
+| **U3c** | 检查 `sources.official.reason` 与每条 unknown 的 `reason` | 每个 unknown 都写清原因（未登录 / 接口不可用 / 已下架 / 缺安装时溯源）；**不得**出现「查不到却判 current」 | 响应 JSON |
 | **U4** | 设置区「已安装」→「检查更新」 | 每行出现徽标（有更新/已是最新/无法检查）；只有「有更新」行有「更新」按钮；顶部出现「全部更新（N）」 | DOM 文本 |
 | **U5** | 点「全部更新」 | 先出现行内确认并显示**总下载量**（MB，估算值带「约」）；确认后才开始逐项更新 | DOM + 安装日志 |
-| **U6** | 更新一项已装技能后再 `GET /updates?refresh=1` | 该项变 `current`；注册表 `installedAt` 更新、文件被重装（先删后落） | 前后响应 + 目录 mtime |
+| **U6** | 更新一项已装技能后再 `GET /updates?refresh=1` | 该项变 `current`（新记录写入了 `officialMeta.version`，与官方一致）；注册表 `installedAt` 更新、文件被重装（先删后落） | 前后响应 + 目录 mtime |
 | **U7** | 更新失败（限流/断网/安装失败） | 界面给出可区分的原因并带 HTTP 状态；**不得**静默，也不得显示「已是最新」 | 通知文案 |
+| **U8** | 注册表里造一条**没有** `officialMeta` 的老记录后再 `GET /updates?refresh=1` | 该条 `unknown`，reason 明确「缺少安装时记录的官方版本 / MCP 定义哈希，重装一次即可记录」；**不得**判「已是最新」 | 响应 JSON |
 
 ## R. 发布就绪与一致性
 

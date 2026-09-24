@@ -335,6 +335,9 @@ export const hub = {
       // 宿主在「已登录但官方接口失败」时用镜像目录兜底；镜像行不是官方条目，
       // 必须如实标注（否则安装时会按官方来源去下载）。
       const rows = (r.rows ?? []).map(x => ({ ...toEntry(x, 'connector'), official: r.source !== 'mirror', isConnected: x.isConnected, mcp: x.mcp, authType: x.authType }))
+      // 官方为空 + 有原因（未登录 / 官方不可用）→ 如实抛错，让界面显示原因而不是「暂无连接器」。
+      // mirrorFallback 打开时宿主会回镜像内容（source=mirror），这里不抛。
+      if (rows.length === 0 && r.error) throw new Error(String(r.error))
       return { rows, total: r.total ?? rows.length, hasMore: false, source: r.source }
     }
     // 专家以官方注册表为准：只有注册表条目带人设文件、可安装可召唤；
@@ -359,18 +362,27 @@ export const hub = {
         }
       } catch { /* fall through to the market */ }
     }
+    let listError = ''
     try {
       const r = await api(`/market-list?kind=${kind}&page=${page}&pageSize=${pageSize}&q=${q}&category=${c}`)
       if (r.source === 'official') {
         const rows = (r.rows ?? []).map(x => toEntry(x, kind))
         const total = r.total ?? rows.length
+        // 官方为空且宿主给了原因（未登录 / 官方目录不可用）→ 如实抛错，不落回镜像。
+        if (rows.length === 0 && r.error) throw new Error(String(r.error))
         return { rows, total, hasMore: page * pageSize < total, source: 'official' }
       }
-    } catch { /* fall through */ }
-    await api('/catalog')
-    const m = await api(`/search?q=${q}&kind=${kind}s&limit=${pageSize}`)
-    const rows = (m.hits ?? []).map(x => ({ ...toEntry(x, kind), official: false }))
-    return { rows, total: m.total ?? rows.length, hasMore: false, source: 'mirror' }
+    } catch (error) { listError = String(error?.message || error) }
+    // 官方失败 → 镜像兜底：**默认关闭**（宿主 mirrorFallback=false）。
+    // 关闭时宿主对 /catalog 返回 503 + 可读原因，这里如实抛出，绝不静默换成镜像内容。
+    try {
+      await api('/catalog')
+      const m = await api(`/search?q=${q}&kind=${kind}s&limit=${pageSize}`)
+      const rows = (m.hits ?? []).map(x => ({ ...toEntry(x, kind), official: false }))
+      return { rows, total: m.total ?? rows.length, hasMore: false, source: 'mirror' }
+    } catch (error) {
+      throw new Error(listError || String(error?.message || error) || '官方目录不可用')
+    }
   },
 
   /** Category chips for one kind (官方来源). */

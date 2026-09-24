@@ -7,7 +7,7 @@
 // danger button, failure reason) is pinned by source/CSS assertions, plus a real
 // unit test of its pure notice function via esbuild.
 import assert from 'node:assert/strict'
-import { readFileSync, readdirSync, mkdirSync, rmSync } from 'node:fs'
+import { readFileSync, readdirSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import vm from 'node:vm'
@@ -130,6 +130,8 @@ assert.ok(settingsSrc.includes('全部更新'), '存在有更新项时必须提�
 assert.ok(settingsSrc.includes('总下载量'), '「全部更新」确认时必须显示总下载量')
 assert.ok(settingsSrc.includes("entry.record.source === 'official' ? 'official' : undefined"),
   '更新必须复用安装链路：官方专家传 source=official')
+assert.ok(!settingsSrc.includes('sources.mirror'),
+  '官方是唯一真源：设置区不得再读镜像源状态（/updates 的 sources 只有 official）')
 for (const cls of ['.wbh-badgeUpdate{', '.wbh-badgeCurrent{', '.wbh-badgeUnknown{', '.wbh-updateBar{', '.wbh-updateWarn{', '.wbh-updateBtn,']) {
   assert.ok(appCss.includes(cls), `app.css must define ${cls}`)
 }
@@ -216,14 +218,14 @@ assert.ok(builtClient.includes('wbh-badgeUpdate'), 'the built client must carry 
   assert.ok(!updateRow.includes('wbh-btnPrimary'), '行内动作一律次要样式（更新也是）')
 
   const currentRow = renderToString(React.createElement(InstalledRow, { ...rowProps, status: { status: 'current' } }))
-  assert.ok(currentRow.includes('已是最新'), 'sha 全同 → 已是最新')
+  assert.ok(currentRow.includes('已是最新'), '官方 version/updatedAt/defHash 相同 → 已是最新')
   assert.ok(!currentRow.includes('aria-label="更新 演示连接器"'), '已是最新不显示更新按钮')
 
   const unknownRow = renderToString(React.createElement(InstalledRow, {
-    ...rowProps, status: { status: 'unknown', reason: 'mirror tree unavailable: tree api 403' },
+    ...rowProps, status: { status: 'unknown', reason: '缺少安装时记录的官方 MCP 定义哈希（officialMeta.defHash），重装一次即可记录' },
   }))
-  assert.ok(unknownRow.includes('无法检查'), '远端取不到 → 无法检查')
-  assert.ok(unknownRow.includes('403'), '无法检查必须把原因（含 HTTP 状态）带给用户（tooltip + aria-label）')
+  assert.ok(unknownRow.includes('无法检查'), '取不到官方元数据 → 无法检查')
+  assert.ok(unknownRow.includes('officialMeta.defHash'), '无法检查必须把原因带给用户（tooltip + aria-label）')
   assert.ok(!unknownRow.includes('已是最新'), '查不到时绝不能显示「已是最新」')
   assert.ok(!unknownRow.includes('aria-label="更新 演示连接器"'), '无法检查时不得提供「更新」')
 
@@ -259,12 +261,74 @@ assert.ok(builtClient.includes('wbh-badgeUpdate'), 'the built client must carry 
   assert.ok(installFail.includes('安装失败') && installFail.includes('500'), '安装失败必须带 HTTP 状态')
   assert.equal(updateNotice('expert', '演示', { ok: true }).text, '已更新专家「演示」')
   assert.equal(updateNotice('expert', '演示', { ok: false, message: 'tree api 403' }).ok, false)
-  const failedSummary = checkSummaryText({ ok: false, error: '镜像接口限流：tree api 403' }, false)
+  const failedSummary = checkSummaryText({ ok: false, error: '接口限流：tree api 403' }, false)
   assert.ok(failedSummary.includes('检查失败'), '整次检查失败要明说失败')
   assert.ok(!failedSummary.includes('已是最新'), '检查失败绝不能给出「已是最新」的结论')
   assert.ok(checkSummaryText(null, true).includes('正在检查'))
   assert.ok(checkSummaryText(null, false).includes('尚未检查'))
+
+  // ---- 技能页 / 连接器页的登录引导：真渲染（不是字符串断言）----------------
+  // 技能目录与技能包下载都需要账号；此前只有连接器页有就地登录卡，技能页只显示
+  // 「暂无技能」，用户看不出该去登录。这里把 Catalogue 与 hub 一起编出来，用真实
+  // 登录态（authState 缓存）驱动渲染，断言四个面：未登录技能页出卡、picker 不出卡、
+  // 已登录不出卡、stale 出「重新扫码」卡，且连接器页既有文案没被破坏。
+  const catEntry = join(cacheDir, 'catalogue-entry.jsx')
+  writeFileSync(catEntry, [
+    `export { default as Catalogue } from ${JSON.stringify(join(repoDir, 'src', 'Catalogue.jsx'))}`,
+    `export * as hub from ${JSON.stringify(join(repoDir, 'src', 'hub.js'))}`,
+  ].join('\n'))
+  const catOut = join(cacheDir, 'catalogue.mjs')
+  await build({
+    entryPoints: [catEntry],
+    bundle: true, format: 'esm', platform: 'node', jsx: 'transform',
+    external: ['react', 'react-dom', 'qrcode'], outfile: catOut, logLevel: 'silent',
+  })
+  const { Catalogue, hub: bundledHub } = await import(pathToFileURL(catOut).href)
+  const pageProps = {
+    sessionId: 'session-gate', onKind() {}, onQuery() {}, onDetail() {}, onAction() {},
+    installed: {}, mounted: new Set(), busy: '', variant: 'page',
+  }
+  const setAuth = async payload => {
+    const realFetch = globalThis.fetch
+    globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => payload })
+    try { await bundledHub.refreshAuth() } finally { globalThis.fetch = realFetch }
+  }
+  await setAuth({ configured: false })
+  const skillPage = renderToString(React.createElement(Catalogue, { ...pageProps, kind: 'skill' }))
+  assert.ok(skillPage.includes('技能目录与技能包下载需要 WorkBuddy 账号'),
+    '未登录的技能页必须就地显示登录卡，并说明为什么需要登录')
+  assert.ok(!skillPage.includes('暂无技能'), '未登录的技能页不得显示「暂无技能」空白态')
+  const connPage = renderToString(React.createElement(Catalogue, { ...pageProps, kind: 'connector' }))
+  assert.ok(connPage.includes('连接器目录、账号绑定与授权需要 WorkBuddy 账号'),
+    '连接器页既有登录卡行为不得被破坏')
+  const pickerSkill = renderToString(React.createElement(Catalogue, { ...pageProps, kind: 'skill', variant: 'picker' }))
+  assert.ok(!pickerSkill.includes('技能目录与技能包下载需要 WorkBuddy 账号'),
+    'picker 不得被加上登录卡（footer 登录行已覆盖三个面板）')
+  await setAuth({ configured: true, stale: false })
+  const loggedInSkill = renderToString(React.createElement(Catalogue, { ...pageProps, kind: 'skill' }))
+  assert.ok(!loggedInSkill.includes('技能目录与技能包下载需要 WorkBuddy 账号'),
+    '已登录（且未 stale）时技能页不得再显示登录卡')
+  await setAuth({ configured: true, stale: true })
+  const staleSkill = renderToString(React.createElement(Catalogue, { ...pageProps, kind: 'skill' }))
+  assert.ok(staleSkill.includes('登录已失效，请重新扫码'),
+    '已登录但凭证失效（stale）时技能页要与连接器页一样提示重新扫码')
+
   rmSync(cacheDir, { recursive: true, force: true })
 }
+
+// ---- 技能页未登录也必须走登录引导（与连接器页一致，picker 不动）--------------
+// 技能目录与技能包下载都需要账号；此前只有连接器页有就地登录卡，技能页只会显示
+// 「暂无技能」，用户看不出该去登录。
+const catalogueSrc = readFileSync(new URL('./src/Catalogue.jsx', import.meta.url), 'utf8')
+assert.ok(catalogueSrc.includes("const pageLoginGate = (variant === 'page' && (kind === 'connector' || kind === 'skill'))"),
+  '技能页与连接器页必须共用就地登录卡（page 变体）')
+assert.ok(catalogueSrc.includes('技能目录与技能包下载需要 WorkBuddy 账号'),
+  '技能页登录卡要说清为什么需要登录')
+assert.ok(catalogueSrc.includes('pageLoginGate || skillDetailView'),
+  '登录卡必须真的渲染进页面主体（不是死代码）')
+assert.ok(!catalogueSrc.includes('connectorLoginGate'),
+  '旧的「仅连接器」登录卡不得残留（否则技能页会漏掉引导）')
+assert.ok(catalogueSrc.includes('STALE_LOGIN_REASON'),
+  '已登录但凭证失效（stale）时必须与连接器页同样处理')
 
 console.log('render smoke + hub import completeness: OK')

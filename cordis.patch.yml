@@ -6,6 +6,11 @@
         # 内容主仓（镜像 fork 的 raw 源；上游删库后仍可用）
         mirrorRepo: 'superfat1988/workbuddyskills'
         mirrorBranch: 'mirror'
+        # 镜像兜底开关：**默认 false**。官方源是唯一真源；GitHub 镜像只是灾备
+        # （官方列表/目录取不到时才会用镜像内容兜底），不是真源。
+        # 打开后才会在官方失败时回落到镜像列表；关闭时如实暴露失败（空列表 + 可读原因）。
+        # 注意：GET /updates 永远不用镜像（纯官方元数据比对），与本开关无关。
+        mirrorFallback: false
         # 本地内容仓（git 仓库，插件初始化并管理）
         storeRoot: '~/workbuddyskills'
         # DSH skills 挂载前缀：~/.dsh/skills/workbuddy-<name> → storeRoot/skills/<name>

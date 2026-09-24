@@ -74,7 +74,7 @@ export function updateFailureReason(error) {
   const message = String(error?.message || error || '宿主未返回原因')
   const status = Number(error?.status) || 0
   const withStatus = status ? `（HTTP ${status}）` : ''
-  if (/\b(403|429)\b|rate limit|api rate/i.test(message)) return `镜像接口限流：${message}${withStatus}`
+  if (/\b(403|429)\b|rate limit|api rate/i.test(message)) return `接口限流：${message}${withStatus}`
   if (/fetch failed|ENOTFOUND|ETIMEDOUT|ECONNRESET|EAI_AGAIN|socket hang up|network|请求超时/i.test(message)) {
     return `网络不可达：${message}${withStatus}`
   }
@@ -306,8 +306,8 @@ export default function SettingsPage() {
   const updatable = rows.filter(row => row.status?.status === 'update')
   const checkFailed = updates?.ok === false
   const sources = updates?.sources ?? {}
+  // 只有一个真源：官方。ok=false 时 reason 说明哪一路取不到（未登录 / 接口失败）
   const officialDown = sources.official?.ok === false
-  const mirrorDown = sources.mirror?.ok === false
 
   const remove = useCallback(async entry => {
     const label = entry.record.displayName || entry.name
@@ -469,11 +469,10 @@ export default function SettingsPage() {
         </span>
       </div>
 
-      {(officialDown || mirrorDown) && (
+      {officialDown && (
         <p className="wbh-updateWarn" role="status">
-          {officialDown && <>官方注册表不可用：{sources.official.reason} —— 相关专家显示「无法检查」。</>}
-          {officialDown && mirrorDown && <br />}
-          {mirrorDown && <>镜像不可用：{sources.mirror.reason} —— 相关技能/连接器显示「无法检查」。</>}
+          官方数据源不可用：{sources.official.reason} —— 相关条目显示「无法检查」。
+          {!loggedIn && '（技能与连接器的检查需要登录官方账号）'}
         </p>
       )}
       {updateNoticeState && (
@@ -513,8 +512,9 @@ export default function SettingsPage() {
       <p className="wbh-muted" style={{ marginTop: 16 }}>
         需要 OAuth 或 API Key 的连接器会在启用时发起独立授权；本页与浏览器端不会展示任何凭据值。
         移除连接器会先停用（拆掉 MCP 传输）再删文件；移除专家会一并摘掉各会话里的挂载。
-        更新 = 重新下载安装（先清目录再落盘），官方专家按官方注册表的时间戳判断，
-        技能/连接器按镜像内容逐文件比对；取不到远端时显示「无法检查」而不是「已是最新」。
+        更新 = 重新下载安装（先清目录再落盘）。检查更新只比**官方元数据**：技能比官方 version、
+        专家比官方 updatedAt、连接器比官方 MCP 定义哈希；取不到官方数据（未登录/接口不可用/
+        记录缺安装时溯源）一律显示「无法检查」，绝不显示「已是最新」。
       </p>
       {showAuth && <WbAuthCard reason={stale ? STALE_LOGIN_REASON : ''} onClose={() => { setShowAuth(false); void refresh() }} />}
     </section>

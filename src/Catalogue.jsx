@@ -516,9 +516,11 @@ export default function Catalogue({
 
   const busyAll = busyLocal || busy
 
-  // 连接器页未登录（或已登录但凭证失效）：不显示「暂无连接器」空白、也不显示镜像
-  // 目录，直接就地嵌登录卡（无遮罩、不可关闭），并在卡上说明原因。
-  const connectorLoginGate = (variant === 'page' && kind === 'connector')
+  // 连接器页 / 技能页未登录（或已登录但凭证失效）：不显示「暂无连接器/技能」空白、
+  // 也不显示镜像目录，直接就地嵌登录卡（无遮罩、不可关闭），并在卡上说明原因。
+  // 技能与连接器的官方数据都需要账号（技能目录 + 技能包下载、连接器注册表 + 授权）。
+  // picker（variant==='picker'）不改：它的 footer 登录行已覆盖三个面板。
+  const pageLoginGate = (variant === 'page' && (kind === 'connector' || kind === 'skill'))
     ? (auth === null
       ? <div className="wbh-state"><p>正在读取登录状态…</p></div>
       : (loggedIn && !authStaleNow
@@ -526,7 +528,10 @@ export default function Catalogue({
         : (
           <div className="wbh-loginGate">
             <WbAuthCard variant="inline" title="登录 WorkBuddy 账号"
-              reason={authStaleNow ? STALE_LOGIN_REASON : '连接器目录、账号绑定与授权需要 WorkBuddy 账号'} />
+              reason={authStaleNow ? STALE_LOGIN_REASON
+                : (kind === 'connector'
+                  ? '连接器目录、账号绑定与授权需要 WorkBuddy 账号'
+                  : '技能目录与技能包下载需要 WorkBuddy 账号')} />
           </div>
         )))
     : null
@@ -1057,7 +1062,7 @@ export default function Catalogue({
           )}
           <div className="ec-main-scroll" ref={scrollRef} onScroll={onScroll}>
             {view === 'installed' ? installedGrid : view === 'local' ? localGrid : (
-              connectorLoginGate || skillDetailView || (
+              pageLoginGate || skillDetailView || (
                 <>
                   {sourceNote}
                   {kind === 'skill' && !query && segment === 0 && featured.length > 0 && featuredSection}

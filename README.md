@@ -9,29 +9,44 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 
 | 层 | 位置 | 说明 |
 |---|---|---|
-| 镜像控制面 | `superfat1988/workbuddyskills` 的 `main` | 只放 workflow，永不被改写 |
-| 内容快照 | 同仓 `mirror` 分支 | 上游全量内容，插件从这里按需下载 |
+| 官方真源 | `expert_center.json`（专家注册表，公开） + `copilot.tencent.com/v2/operation-platform/market/*`（技能/连接器，需登录） | **唯一真源**：目录、元数据、包下载、更新判定全部以官方为准 |
+| 镜像灾备 | `superfat1988/workbuddyskills` 的 `mirror` 分支 | **默认关闭**的灾备开关（`mirrorFallback`）；官方挂了才临时打开 |
 | 本地内容仓 | `~/workbuddyskills/` | `.meta/registry.json`、`.meta/mounts.json`、`.meta/icons/`、`skills/ experts/ connectors/` |
 | DSH 挂载 | `~/.dsh/skills/<prefix><name>` | 符号链接（DSH 扫描器原生跟随） |
 | 随插件 skill | `skills/workbuddy-find-tools`、`skills/workbuddy-experts` | 工具检索 / 专家推荐与召唤 |
 
-同步：GitHub Actions 每日 05:17（北京）从 `main` 触发，把上游 `main` 快照推到 `mirror`。
-`schedule` 只从默认分支读取 workflow，因此 workflow 必须留在 `main`。
+**官方源是唯一真源，GitHub 镜像只是灾备**（`mirrorFallback: false` 是默认值）：
+- 列表 / 目录 / 检索（`/market-list`、`/catalog`、`/search`）在官方失败时**不再静默换成镜像内容**，
+  而是返回空列表 + 可读原因（未登录就直说「需要登录」）；
+- 只有把 `mirrorFallback` 打开（`cordis.patch.yml` 或 profile patch）才会回落到镜像，
+  此时响应里的 `source: "mirror"` 会如实标注「这不是官方数据」；
+- **`GET /updates` 永远不用镜像**（纯官方元数据比对），与这个开关无关。
 
-**镜像来源只有 `mirrorRepo`**（默认 `superfat1988/workbuddyskills`）：内容、图标、包下载全部从它取。
+镜像的 `main` 分支只放 workflow，永不被改写；同步由 GitHub Actions 每日 05:17（北京）从
+`main` 触发，把上游快照推到 `mirror`。`schedule` 只从默认分支读取 workflow，因此 workflow 必须留在 `main`。
 `cordis.patch.yml` 里声明的 `upstreamRepo` 目前**没有任何代码读取**，不参与「在线检查 changelog、
 失败回退镜像」之类的逻辑 —— 那套机制并不存在，不要据此预期任何上游在线检查行为。
+
+## 配置
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `mirrorRepo` / `mirrorBranch` | `superfat1988/workbuddyskills` / `mirror` | 镜像仓（灾备时才用） |
+| `mirrorFallback` | **`false`** | 镜像兜底开关。官方失败时是否用镜像内容兜底；默认关闭（官方是唯一真源），仅在官方出问题时临时打开救急 |
+| `storeRoot` | `~/workbuddyskills` | 本地内容仓 |
+| `skillPrefix` | `workbuddy-` | `~/.dsh/skills/` 下的挂载前缀 |
+| `keepalive` | `true` | 后台每 30 分钟巡检并主动刷新凭证 |
 
 ## HTTP 路由（Host 侧 `/workbuddy-hub`，全部先过 `ctx.connection.requestRejection`）
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/health` | 运行状态 / store / mirror 分支 |
-| GET | `/catalog[?refresh=1]` | 拉取并缓存目录索引（树 + CATALOG.md，6h） |
-| GET | `/search?q=&kind=experts\|skills\|connectors&limit=` | 检索，返回中文名/简介/能力标记 |
+| GET | `/health` | 运行状态 / store / mirror 分支 / `mirrorFallback` 当前值 |
+| GET | `/catalog[?refresh=1]` | 镜像目录索引（6h 缓存）。**`mirrorFallback=false` 时返回 503 + 原因**，不再拉镜像 |
+| GET | `/search?q=&kind=experts\|skills\|connectors&limit=` | 镜像检索。同上，默认关闭时返回 503 + 原因 |
 | GET | `/installed` | 已装清单（连接器附带实时 `enabled`/`status`/`credentialRefs`） |
-| GET | `/updates[?refresh=1]` | **检查更新**（只读）：官方专家比 `updatedAt` vs `installedAt`，镜像条目逐文件比 git blob sha1；远端不可用一律 `unknown` + 原因，**绝不**判「已是最新」。结果缓存 60s，`refresh=1` 强制重算 |
-| POST | `/install {kind,name}` | 按需下载落地（二进制安全） |
+| GET | `/updates[?refresh=1]` | **检查更新**（只读）：纯官方元数据比对 —— 技能比官方 `version`、专家比官方 `updatedAt`、连接器比官方 MCP 定义哈希；取不到官方数据一律 `unknown` + 原因，**绝不**判「已是最新」。结果缓存 60s，`refresh=1` 强制重算；**永远不用镜像** |
+| POST | `/install {kind,name}` | 按需安装（官方优先；技能/专家/连接器都记 `officialMeta` 溯源） |
 | POST | `/uninstall {kind,name}` | 先拆传输层与技能链接，再删文件，并摘掉各会话里的挂载 |
 | GET | `/mounted?sessionId=` | 本会话已挂载条目（只读，缺 sessionId 时按最近会话兜底并标 `sessionSource`） |
 | POST | `/mount` \| `/unmount {sessionId,kind,name}` | 会话级挂载（安装 ≠ 挂载）；**写操作必须显式传 `sessionId`，缺失返回 409**，绝不兜底猜会话 |
@@ -43,21 +58,25 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 设置区「已安装」列表顶部有「检查更新」；逐项徽标为 **有更新 / 已是最新 / 无法检查**，
 只有「有更新」的行出现「更新」按钮，且顶部出现「全部更新（N）」（确认框里显示总下载量）。
 
-判定规则（`GET /updates`，只读；实现见 `src/updates.js`）：
+判定规则（`GET /updates`，只读；实现见 `src/updates.js`）—— **只认官方元数据，不碰 GitHub、不算文件 sha**：
 
 | 条目 | 依据 | 说明 |
 |---|---|---|
-| `source === "official"` 的专家 | 官方注册表原始条目的 `updatedAt` vs 本地 `installedAt` | 必须用 `wb-experts.registry()` 的**原始条目**（`normalise()` 会把 `updatedAt` 丢掉）；缺字段或日期非法 → `unknown` |
-| 技能 / 连接器（镜像来源） | 镜像 tree 的 blob `sha` vs 本地算的 git blob sha1 | 只有 rel 集合与每个 sha **完全相同**才 `current`；远端多 / 本地多 / 内容变都算 `update` |
+| 技能 | 官方 skill 记录的 `version` vs 安装时记的 `officialMeta.version` | `version` 不同 → `update`；相同 → `current`；记录缺 `officialMeta.version` → `unknown`（重装一次即可记录）；官方按 `skill_id` 查不到 → `unknown`（已下架） |
+| 专家 | 官方注册表原始条目的 `updatedAt` vs `officialMeta.updatedAt`（老记录退回 `installedAt`） | 必须用 `wb-experts.registry()` 的**原始条目**（`normalise()` 会把 `updatedAt` 丢掉）；远端更新 → `update`，相等/更旧 → `current`，缺任一时间戳或日期非法 → `unknown` |
+| 连接器 | 官方该行 `mcp` 定义的规范化 JSON sha256 vs `officialMeta.defHash` | 规范化只取 `gateway_url / transport / auth_mode / ide_server_name / upstream_url / sandbox_url` 六个字段（键序固定、缺失 == 空串）；哈希不同 → `update`；缺 `defHash` → `unknown` |
 
-- **安装时被跳过的图标不参与比对**（`downloadEntry` 默认跳过 `avatars/`、`icons/` 图片），
-  否则任何带头像的条目都会被永久判成「有更新」。
+- **安装时记录官方溯源**：`record.officialMeta = { version, updatedAt }`（技能）、
+  `{ updatedAt }`（专家）、`{ defHash }`（连接器）；老记录没有 `officialMeta` 时**不伪造**，
+  `/updates` 给 `unknown` 并提示「重装一次即可记录」。
+- **未登录整体行为**：技能（`skill/get-by-ids`）与连接器（`registry2c/list`）都需要账号，
+  未登录时相关条目**全部 `unknown`**，原因写明「需要登录」；专家注册表公开，未登录仍可正常比对。
 - **更新 = 重新安装**：安装链路本来就先 `rm -rf` 再落盘（幂等），客户端直接复用
   `hub.install(kind, name, source==='official' ? 'official' : undefined)`。
-- **查不到就说查不到**：镜像限流（未授权 GitHub API 会 403）或官方注册表不可用时，相关条目显示
-  「无法检查」并给出原因（含 HTTP 状态），界面**不会**把它渲染成「已是最新」。
-- 镜像 tree 一次全量取回后缓存 10 分钟（成功才写），检查结果缓存 60 秒（`?refresh=1` 强制重算）；
-  两个缓存都只在内存里，路由不写注册表、不动文件。
+- **查不到就说查不到**：官方接口失败 / 未登录 / 记录缺溯源时，相关条目显示「无法检查」并给出原因，
+  界面**不会**把它渲染成「已是最新」。
+- 响应里 `sources` 只有 `official: { ok, at, reason }`（不再有 `mirror`）；检查结果缓存 60 秒
+  （`?refresh=1` 强制重算），缓存只在内存里，路由不写注册表、不动文件。
 
 ## 斜杠命令
 
@@ -111,6 +130,8 @@ systemctl --user restart dsh-web.service    # 由用户执行
   config:
     mirrorRepo: 'superfat1988/workbuddyskills'
     mirrorBranch: 'mirror'
+    # 默认 false：官方是唯一真源，镜像只是灾备；要复现「官方失败→镜像兜底」才打开
+    mirrorFallback: false
     storeRoot: '/tmp/wbh-accept/store'
     skillPrefix: 'wbh-accept-'
 ```
@@ -158,8 +179,8 @@ UI 层：左栏入口存在 → 市场页标题 `专家 · 技能 · 连接器`�
 |---|---|---|
 | 专家目录（约 430，随官方注册表变动；中英名/职称/简介/Tag/快捷提示词） | 官方 COS 注册表 `expert_center.json`（MIT，无需登录） | `hub.marketList('expert')` |
 | 专家头像 PNG / 人设 Markdown | 同一 COS 源直链 | 召唤用的人设与官方同源 |
-| 技能 / 连接器目录 | GitHub 镜像 `superfat1988/workbuddyskills` | 亦是包下载源 |
-| 官方登录（技能页数据、用量） | OAuth 设备授权：`POST /wb-auth/start` 给出官方 authUrl → 浏览器登录 → `POST /wb-auth/poll` 轮换取 `{access_token, refresh_token, expires_in, uid}`，存 `~/workbuddyskills/.meta/state/` | 协议与上游 workbuddy2api 的两个实现一致（[linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel) · [ardeyouxipianyi/workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub)；`copilot.tencent.com/v2/...`，Bearer + X-User-Id + CLI UA）；凭证不出本机 |
+| 技能 / 连接器目录 | 官方市场 API / 官方连接器注册表（需登录） | 官方失败时不再静默回镜像；镜像只在 `mirrorFallback: true` 时兜底 |
+| 官方登录（技能页数据、连接器目录、用量） | OAuth 设备授权：`POST /wb-auth/start` 给出官方 authUrl → 浏览器登录 → `POST /wb-auth/poll` 轮换取 `{access_token, refresh_token, expires_in, uid}`，存 `~/workbuddyskills/.meta/state/` | 协议与上游 workbuddy2api 的两个实现一致（[linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel) · [ardeyouxipianyi/workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub)；`copilot.tencent.com/v2/...`，Bearer + X-User-Id + CLI UA）；凭证不出本机 |
 
 插件不依赖 DeepSeek 浏览器 cookie；官方会话由设备授权获得、可刷新、可 `/wb-auth/logout` 注销。
 

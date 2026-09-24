@@ -2455,19 +2455,20 @@ var hub = {
     const c = encodeURIComponent(category || "");
     if (kind === "connector") {
       const r = await api(`/market-list?kind=connector&pageSize=${pageSize}&q=${q}`);
-      const rows2 = (r.rows ?? []).map((x) => ({ ...toEntry(x, "connector"), official: r.source !== "mirror", isConnected: x.isConnected, mcp: x.mcp, authType: x.authType }));
-      return { rows: rows2, total: r.total ?? rows2.length, hasMore: false, source: r.source };
+      const rows = (r.rows ?? []).map((x) => ({ ...toEntry(x, "connector"), official: r.source !== "mirror", isConnected: x.isConnected, mcp: x.mcp, authType: x.authType }));
+      if (rows.length === 0 && r.error) throw new Error(String(r.error));
+      return { rows, total: r.total ?? rows.length, hasMore: false, source: r.source };
     }
     if (kind === "expert") {
       try {
         const e = await api(`/official-experts?limit=500&q=${q}&category=${c}`);
-        const rows2 = (e.rows ?? []).map((x) => toEntry(x, kind));
-        if (rows2.length) {
+        const rows = (e.rows ?? []).map((x) => toEntry(x, kind));
+        if (rows.length) {
           const start = (page - 1) * pageSize;
           return {
-            rows: rows2.slice(start, start + pageSize),
-            total: e.total ?? rows2.length,
-            hasMore: start + pageSize < (e.total ?? rows2.length),
+            rows: rows.slice(start, start + pageSize),
+            total: e.total ?? rows.length,
+            hasMore: start + pageSize < (e.total ?? rows.length),
             source: "official-registry"
           };
         }
@@ -2477,19 +2478,26 @@ var hub = {
       } catch {
       }
     }
+    let listError = "";
     try {
       const r = await api(`/market-list?kind=${kind}&page=${page}&pageSize=${pageSize}&q=${q}&category=${c}`);
       if (r.source === "official") {
-        const rows2 = (r.rows ?? []).map((x) => toEntry(x, kind));
-        const total = r.total ?? rows2.length;
-        return { rows: rows2, total, hasMore: page * pageSize < total, source: "official" };
+        const rows = (r.rows ?? []).map((x) => toEntry(x, kind));
+        const total = r.total ?? rows.length;
+        if (rows.length === 0 && r.error) throw new Error(String(r.error));
+        return { rows, total, hasMore: page * pageSize < total, source: "official" };
       }
-    } catch {
+    } catch (error) {
+      listError = String(error?.message || error);
     }
-    await api("/catalog");
-    const m = await api(`/search?q=${q}&kind=${kind}s&limit=${pageSize}`);
-    const rows = (m.hits ?? []).map((x) => ({ ...toEntry(x, kind), official: false }));
-    return { rows, total: m.total ?? rows.length, hasMore: false, source: "mirror" };
+    try {
+      await api("/catalog");
+      const m = await api(`/search?q=${q}&kind=${kind}s&limit=${pageSize}`);
+      const rows = (m.hits ?? []).map((x) => ({ ...toEntry(x, kind), official: false }));
+      return { rows, total: m.total ?? rows.length, hasMore: false, source: "mirror" };
+    } catch (error) {
+      throw new Error(listError || String(error?.message || error) || "\u5B98\u65B9\u76EE\u5F55\u4E0D\u53EF\u7528");
+    }
   },
   /** Category chips for one kind (官方来源). */
   async categories(kind) {
@@ -3363,12 +3371,12 @@ function Catalogue({
   }, [rows]);
   const kindMeta = KINDS.find((k) => k.id === kind) || KINDS[0];
   const busyAll = busyLocal || busy;
-  const connectorLoginGate = variant === "page" && kind === "connector" ? auth === null ? /* @__PURE__ */ import_react4.default.createElement("div", { className: "wbh-state" }, /* @__PURE__ */ import_react4.default.createElement("p", null, "\u6B63\u5728\u8BFB\u53D6\u767B\u5F55\u72B6\u6001\u2026")) : loggedIn && !authStaleNow ? null : /* @__PURE__ */ import_react4.default.createElement("div", { className: "wbh-loginGate" }, /* @__PURE__ */ import_react4.default.createElement(
+  const pageLoginGate = variant === "page" && (kind === "connector" || kind === "skill") ? auth === null ? /* @__PURE__ */ import_react4.default.createElement("div", { className: "wbh-state" }, /* @__PURE__ */ import_react4.default.createElement("p", null, "\u6B63\u5728\u8BFB\u53D6\u767B\u5F55\u72B6\u6001\u2026")) : loggedIn && !authStaleNow ? null : /* @__PURE__ */ import_react4.default.createElement("div", { className: "wbh-loginGate" }, /* @__PURE__ */ import_react4.default.createElement(
     WbAuthCard,
     {
       variant: "inline",
       title: "\u767B\u5F55 WorkBuddy \u8D26\u53F7",
-      reason: authStaleNow ? STALE_LOGIN_REASON : "\u8FDE\u63A5\u5668\u76EE\u5F55\u3001\u8D26\u53F7\u7ED1\u5B9A\u4E0E\u6388\u6743\u9700\u8981 WorkBuddy \u8D26\u53F7"
+      reason: authStaleNow ? STALE_LOGIN_REASON : kind === "connector" ? "\u8FDE\u63A5\u5668\u76EE\u5F55\u3001\u8D26\u53F7\u7ED1\u5B9A\u4E0E\u6388\u6743\u9700\u8981 WorkBuddy \u8D26\u53F7" : "\u6280\u80FD\u76EE\u5F55\u4E0E\u6280\u80FD\u5305\u4E0B\u8F7D\u9700\u8981 WorkBuddy \u8D26\u53F7"
     }
   )) : null;
   const sourceNote = kind === "connector" && loggedIn && source === "mirror" ? /* @__PURE__ */ import_react4.default.createElement("div", { className: "wbh-sourceNote" }, "\u5B98\u65B9\u8FDE\u63A5\u5668\u63A5\u53E3\u6682\u4E0D\u53EF\u7528\uFF0C\u5F53\u524D\u663E\u793A\u955C\u50CF\u76EE\u5F55\uFF08source: mirror\uFF09") : null;
@@ -3716,7 +3724,7 @@ function Catalogue({
     "\u2190 \u8FD4\u56DE",
     kindMeta.label,
     "\u5E02\u573A"
-  ), /* @__PURE__ */ import_react4.default.createElement("span", { className: "wbh-viewTitle" }, view === "installed" ? "\u6211\u5B89\u88C5\u7684" : "\u4ECE\u672C\u5730\u6DFB\u52A0\u6280\u80FD")), view === "market" && /* @__PURE__ */ import_react4.default.createElement(import_react4.default.Fragment, null, sortGroup ? /* @__PURE__ */ import_react4.default.createElement("div", { className: "wbh-sortRow" }, sortGroup) : null, /* @__PURE__ */ import_react4.default.createElement("div", { className: "wbh-filterRow" }, categoryChips)), /* @__PURE__ */ import_react4.default.createElement("div", { className: "ec-main-scroll", ref: scrollRef, onScroll }, view === "installed" ? installedGrid : view === "local" ? localGrid : connectorLoginGate || skillDetailView || /* @__PURE__ */ import_react4.default.createElement(import_react4.default.Fragment, null, sourceNote, kind === "skill" && !query && segment === 0 && featured.length > 0 && featuredSection, kind === "skill" && segmentBar, cardGrid)))), connectorDetailModal);
+  ), /* @__PURE__ */ import_react4.default.createElement("span", { className: "wbh-viewTitle" }, view === "installed" ? "\u6211\u5B89\u88C5\u7684" : "\u4ECE\u672C\u5730\u6DFB\u52A0\u6280\u80FD")), view === "market" && /* @__PURE__ */ import_react4.default.createElement(import_react4.default.Fragment, null, sortGroup ? /* @__PURE__ */ import_react4.default.createElement("div", { className: "wbh-sortRow" }, sortGroup) : null, /* @__PURE__ */ import_react4.default.createElement("div", { className: "wbh-filterRow" }, categoryChips)), /* @__PURE__ */ import_react4.default.createElement("div", { className: "ec-main-scroll", ref: scrollRef, onScroll }, view === "installed" ? installedGrid : view === "local" ? localGrid : pageLoginGate || skillDetailView || /* @__PURE__ */ import_react4.default.createElement(import_react4.default.Fragment, null, sourceNote, kind === "skill" && !query && segment === 0 && featured.length > 0 && featuredSection, kind === "skill" && segmentBar, cardGrid)))), connectorDetailModal);
 }
 
 // src/SummonModal.jsx
@@ -4399,7 +4407,7 @@ function updateFailureReason(error) {
   const message = String(error?.message || error || "\u5BBF\u4E3B\u672A\u8FD4\u56DE\u539F\u56E0");
   const status = Number(error?.status) || 0;
   const withStatus = status ? `\uFF08HTTP ${status}\uFF09` : "";
-  if (/\b(403|429)\b|rate limit|api rate/i.test(message)) return `\u955C\u50CF\u63A5\u53E3\u9650\u6D41\uFF1A${message}${withStatus}`;
+  if (/\b(403|429)\b|rate limit|api rate/i.test(message)) return `\u63A5\u53E3\u9650\u6D41\uFF1A${message}${withStatus}`;
   if (/fetch failed|ENOTFOUND|ETIMEDOUT|ECONNRESET|EAI_AGAIN|socket hang up|network|请求超时/i.test(message)) {
     return `\u7F51\u7EDC\u4E0D\u53EF\u8FBE\uFF1A${message}${withStatus}`;
   }
@@ -4633,7 +4641,6 @@ function SettingsPage() {
   const checkFailed = updates?.ok === false;
   const sources = updates?.sources ?? {};
   const officialDown = sources.official?.ok === false;
-  const mirrorDown = sources.mirror?.ok === false;
   const remove = (0, import_react10.useCallback)(async (entry) => {
     const label = entry.record.displayName || entry.name;
     setBusyKey(entry.key);
@@ -4773,7 +4780,7 @@ function SettingsPage() {
       onClick: () => void checkUpdates({ refresh: true })
     },
     checking ? "\u68C0\u67E5\u4E2D\u2026" : "\u68C0\u67E5\u66F4\u65B0"
-  ))), (officialDown || mirrorDown) && /* @__PURE__ */ import_react10.default.createElement("p", { className: "wbh-updateWarn", role: "status" }, officialDown && /* @__PURE__ */ import_react10.default.createElement(import_react10.default.Fragment, null, "\u5B98\u65B9\u6CE8\u518C\u8868\u4E0D\u53EF\u7528\uFF1A", sources.official.reason, " \u2014\u2014 \u76F8\u5173\u4E13\u5BB6\u663E\u793A\u300C\u65E0\u6CD5\u68C0\u67E5\u300D\u3002"), officialDown && mirrorDown && /* @__PURE__ */ import_react10.default.createElement("br", null), mirrorDown && /* @__PURE__ */ import_react10.default.createElement(import_react10.default.Fragment, null, "\u955C\u50CF\u4E0D\u53EF\u7528\uFF1A", sources.mirror.reason, " \u2014\u2014 \u76F8\u5173\u6280\u80FD/\u8FDE\u63A5\u5668\u663E\u793A\u300C\u65E0\u6CD5\u68C0\u67E5\u300D\u3002")), updateNoticeState && /* @__PURE__ */ import_react10.default.createElement(
+  ))), officialDown && /* @__PURE__ */ import_react10.default.createElement("p", { className: "wbh-updateWarn", role: "status" }, "\u5B98\u65B9\u6570\u636E\u6E90\u4E0D\u53EF\u7528\uFF1A", sources.official.reason, " \u2014\u2014 \u76F8\u5173\u6761\u76EE\u663E\u793A\u300C\u65E0\u6CD5\u68C0\u67E5\u300D\u3002", !loggedIn && "\uFF08\u6280\u80FD\u4E0E\u8FDE\u63A5\u5668\u7684\u68C0\u67E5\u9700\u8981\u767B\u5F55\u5B98\u65B9\u8D26\u53F7\uFF09"), updateNoticeState && /* @__PURE__ */ import_react10.default.createElement(
     "p",
     {
       className: `wbh-removeNotice${updateNoticeState.ok ? "" : " is-error"}`,
@@ -4809,7 +4816,7 @@ function SettingsPage() {
       onCancelUpdate: () => setUpdateConfirmKey(""),
       onConfirmUpdate: () => void updateOne(row)
     }
-  )), /* @__PURE__ */ import_react10.default.createElement("p", { className: "wbh-muted", style: { marginTop: 16 } }, "\u9700\u8981 OAuth \u6216 API Key \u7684\u8FDE\u63A5\u5668\u4F1A\u5728\u542F\u7528\u65F6\u53D1\u8D77\u72EC\u7ACB\u6388\u6743\uFF1B\u672C\u9875\u4E0E\u6D4F\u89C8\u5668\u7AEF\u4E0D\u4F1A\u5C55\u793A\u4EFB\u4F55\u51ED\u636E\u503C\u3002 \u79FB\u9664\u8FDE\u63A5\u5668\u4F1A\u5148\u505C\u7528\uFF08\u62C6\u6389 MCP \u4F20\u8F93\uFF09\u518D\u5220\u6587\u4EF6\uFF1B\u79FB\u9664\u4E13\u5BB6\u4F1A\u4E00\u5E76\u6458\u6389\u5404\u4F1A\u8BDD\u91CC\u7684\u6302\u8F7D\u3002 \u66F4\u65B0 = \u91CD\u65B0\u4E0B\u8F7D\u5B89\u88C5\uFF08\u5148\u6E05\u76EE\u5F55\u518D\u843D\u76D8\uFF09\uFF0C\u5B98\u65B9\u4E13\u5BB6\u6309\u5B98\u65B9\u6CE8\u518C\u8868\u7684\u65F6\u95F4\u6233\u5224\u65AD\uFF0C \u6280\u80FD/\u8FDE\u63A5\u5668\u6309\u955C\u50CF\u5185\u5BB9\u9010\u6587\u4EF6\u6BD4\u5BF9\uFF1B\u53D6\u4E0D\u5230\u8FDC\u7AEF\u65F6\u663E\u793A\u300C\u65E0\u6CD5\u68C0\u67E5\u300D\u800C\u4E0D\u662F\u300C\u5DF2\u662F\u6700\u65B0\u300D\u3002"), showAuth && /* @__PURE__ */ import_react10.default.createElement(WbAuthCard, { reason: stale ? STALE_LOGIN_REASON : "", onClose: () => {
+  )), /* @__PURE__ */ import_react10.default.createElement("p", { className: "wbh-muted", style: { marginTop: 16 } }, "\u9700\u8981 OAuth \u6216 API Key \u7684\u8FDE\u63A5\u5668\u4F1A\u5728\u542F\u7528\u65F6\u53D1\u8D77\u72EC\u7ACB\u6388\u6743\uFF1B\u672C\u9875\u4E0E\u6D4F\u89C8\u5668\u7AEF\u4E0D\u4F1A\u5C55\u793A\u4EFB\u4F55\u51ED\u636E\u503C\u3002 \u79FB\u9664\u8FDE\u63A5\u5668\u4F1A\u5148\u505C\u7528\uFF08\u62C6\u6389 MCP \u4F20\u8F93\uFF09\u518D\u5220\u6587\u4EF6\uFF1B\u79FB\u9664\u4E13\u5BB6\u4F1A\u4E00\u5E76\u6458\u6389\u5404\u4F1A\u8BDD\u91CC\u7684\u6302\u8F7D\u3002 \u66F4\u65B0 = \u91CD\u65B0\u4E0B\u8F7D\u5B89\u88C5\uFF08\u5148\u6E05\u76EE\u5F55\u518D\u843D\u76D8\uFF09\u3002\u68C0\u67E5\u66F4\u65B0\u53EA\u6BD4**\u5B98\u65B9\u5143\u6570\u636E**\uFF1A\u6280\u80FD\u6BD4\u5B98\u65B9 version\u3001 \u4E13\u5BB6\u6BD4\u5B98\u65B9 updatedAt\u3001\u8FDE\u63A5\u5668\u6BD4\u5B98\u65B9 MCP \u5B9A\u4E49\u54C8\u5E0C\uFF1B\u53D6\u4E0D\u5230\u5B98\u65B9\u6570\u636E\uFF08\u672A\u767B\u5F55/\u63A5\u53E3\u4E0D\u53EF\u7528/ \u8BB0\u5F55\u7F3A\u5B89\u88C5\u65F6\u6EAF\u6E90\uFF09\u4E00\u5F8B\u663E\u793A\u300C\u65E0\u6CD5\u68C0\u67E5\u300D\uFF0C\u7EDD\u4E0D\u663E\u793A\u300C\u5DF2\u662F\u6700\u65B0\u300D\u3002"), showAuth && /* @__PURE__ */ import_react10.default.createElement(WbAuthCard, { reason: stale ? STALE_LOGIN_REASON : "", onClose: () => {
     setShowAuth(false);
     void refresh();
   } }));

@@ -11,7 +11,7 @@ import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { apply, replacePersonaPrefix, mountEntry, unmountEntry, pruneMounts } from './index.js'
-import { gitBlobSha } from './src/updates.js'
+import { connectorDefHash } from './src/updates.js'
 
 const root = '/tmp/wbh-session-contract'
 rmSync(root, { recursive: true, force: true })
@@ -520,80 +520,149 @@ if (existsSync(REAL_STANDARD)) {
   assert.deepEqual(read().s3, s3Before, 'no-op 不得改动任何会话')
 }
 
-// ---- 5. GET /updates：远端取不到时必须 unknown，绝不能判 current ----------------
-// 语义纪律：限流/断网时把「查不到」渲染成「已是最新」是静默的错误结论 —— 用户会以为
-// 一切正常。这里用打桩 fetch 把两条远端路径都打成失败，断言路由如实返回 unknown + 原因
-// （含 HTTP 状态），并断言 60s 结果缓存与 ?refresh=1 的行为；随后切成成功桩，验证
-// 「镜像 tree 的 blob sha == 本地 gitBlobSha」这条判定确实成立（current/update 两侧都测）。
+// ---- 5. GET /updates：只认官方元数据；取不到时一律 unknown，绝不能判 current ----
+// 语义纪律：把「查不到」渲染成「已是最新」是静默的错误结论 —— 用户会以为一切正常。
+// 判定依据已从「镜像 blob sha 比对」换成**纯官方元数据**：
+//   技能 = 官方 version vs 安装时记的 officialMeta.version；
+//   专家 = 官方 updatedAt vs officialMeta.updatedAt（老记录退回 installedAt）；
+//   连接器 = 官方 mcp 定义的规范化 sha256 vs officialMeta.defHash。
+// 这里用打桩 fetch 覆盖三条官方数据路径（专家注册表公开，技能/连接器需要登录），断言：
+// 未登录 → 专家照常判定、技能/连接器一律 unknown 且写明「需要登录」；已登录 → 三类各有判定；
+// 官方接口失败 → unknown + 原因且绝不判 current；结果 60s 缓存与 ?refresh=1；
+// 以及整条链路**一次都不碰 GitHub**（检查更新与镜像彻底解耦）。
 {
   const upRoot = '/tmp/wbh-updates-contract'
   rmSync(upRoot, { recursive: true, force: true })
   mkdirSync(join(upRoot, '.meta'), { recursive: true })
-  const upExpertDir = join(upRoot, 'experts', 'demo-official')
-  mkdirSync(join(upExpertDir, 'agents'), { recursive: true })
-  writeFileSync(join(upExpertDir, 'agents', 'demo.md'), '---\nname: demo\n---\n你是演示专家。\n')
   const upSkillDir = join(upRoot, 'skills', 'demo-skill')
   mkdirSync(upSkillDir, { recursive: true })
   const SKILL_CONTENT = '# 演示技能\n'
   writeFileSync(join(upSkillDir, 'SKILL.md'), SKILL_CONTENT)
-  const skillSha = gitBlobSha(SKILL_CONTENT)                 // 本地算出的 git blob sha1
   const skillBytes = Buffer.byteLength(SKILL_CONTENT)
-  // 顶层 avatars/ 图片：downloadEntry **会**下载它（rel 不含前导段），必须参与比对 ——
-  // 实测用户仓里就有这种条目，一刀切过滤会把本地已有头像算成「本地多出」→ 假更新。
-  const upSkill2Dir = join(upRoot, 'skills', 'demo-skill2')
-  mkdirSync(join(upSkill2Dir, 'avatars'), { recursive: true })
-  const AVATAR_CONTENT = 'PNGDATA'
-  writeFileSync(join(upSkill2Dir, 'avatars', 'pic.png'), AVATAR_CONTENT)
-  const avatarSha = gitBlobSha(AVATAR_CONTENT)
-  const avatarBytes = Buffer.byteLength(AVATAR_CONTENT)
-  writeFileSync(join(upRoot, '.meta', 'registry.json'), JSON.stringify({
+  const upOldSkillDir = join(upRoot, 'skills', 'demo-skill-old')
+  mkdirSync(upOldSkillDir, { recursive: true })
+  const upDelistedDir = join(upRoot, 'skills', 'demo-delisted')
+  mkdirSync(upDelistedDir, { recursive: true })
+  const upMirrorSkillDir = join(upRoot, 'skills', 'demo-mirror-skill')
+  mkdirSync(upMirrorSkillDir, { recursive: true })
+  const upExpertDir = join(upRoot, 'experts', 'demo-official')
+  mkdirSync(join(upExpertDir, 'agents'), { recursive: true })
+  writeFileSync(join(upExpertDir, 'agents', 'demo.md'), '---\nname: demo\n---\n你是演示专家。\n')
+  const upConnDir = join(upRoot, 'connectors', 'demo-connector')
+  mkdirSync(upConnDir, { recursive: true })
+
+  // 官方那一行的 MCP 定义：安装时记的就是它的规范化 sha256
+  const OFFICIAL_MCP = {
+    gateway_url: 'https://gw.example/mcp',
+    transport: 'streamable-http',
+    auth_mode: 'oauth',
+    ide_server_name: 'demo',
+    upstream_url: '',
+    sandbox_url: '',
+  }
+  const OFFICIAL_DEF_HASH = connectorDefHash(OFFICIAL_MCP)
+
+  const REGISTRY = {
     version: 1,
     installed: {
       'expert/demo-official': {
         kind: 'expert', name: 'demo-official', displayName: '官方演示专家',
-        dest: upExpertDir, source: 'official', installedAt: '2020-01-01T00:00:00.000Z',
+        dest: upExpertDir, source: 'official', official: true,
+        installedAt: '2020-01-01T00:00:00.000Z',
+        officialMeta: { updatedAt: '2020-01-01T00:00:00.000Z' },
         files: 1, bytes: 40,
       },
       'skill/demo-skill': {
         kind: 'skill', name: 'demo-skill', displayName: '演示技能',
-        dest: upSkillDir, installedAt: '2020-01-01T00:00:00.000Z', files: 1, bytes: skillBytes,
+        dest: upSkillDir, source: 'official', officialId: 'sk-1',
+        installedAt: '2020-01-01T00:00:00.000Z',
+        officialMeta: { version: '1.0.0', updatedAt: '2020-01-01T00:00:00.000Z' },
+        files: 1, bytes: skillBytes,
       },
-      'skill/demo-skill2': {
-        kind: 'skill', name: 'demo-skill2', displayName: '演示技能二',
-        dest: upSkill2Dir, installedAt: '2020-01-01T00:00:00.000Z', files: 1, bytes: avatarBytes,
+      // 老记录：有 officialId 但没有安装时的官方版本 → unknown（提示重装一次）
+      'skill/demo-skill-old': {
+        kind: 'skill', name: 'demo-skill-old', dest: upOldSkillDir,
+        source: 'official', officialId: 'sk-2',
+        installedAt: '2020-01-01T00:00:00.000Z', files: 1, bytes: 10,
+      },
+      // 官方已下架：officialId 在官方记录里查不到
+      'skill/demo-delisted': {
+        kind: 'skill', name: 'demo-delisted', dest: upDelistedDir,
+        source: 'official', officialId: 'sk-gone',
+        installedAt: '2020-01-01T00:00:00.000Z',
+        officialMeta: { version: '0.9.0' }, files: 1, bytes: 10,
+      },
+      // 镜像来源（无 officialId）→ unknown
+      'skill/demo-mirror-skill': {
+        kind: 'skill', name: 'demo-mirror-skill', dest: upMirrorSkillDir,
+        installedAt: '2020-01-01T00:00:00.000Z', files: 1, bytes: 10,
+      },
+      'connector/demo-connector': {
+        kind: 'connector', name: 'demo-connector', displayName: '演示连接器',
+        dest: upConnDir, source: 'official', official: true,
+        installedAt: '2020-01-01T00:00:00.000Z',
+        officialMeta: { defHash: OFFICIAL_DEF_HASH },
+        files: 1, bytes: 10,
       },
     },
-  }))
+  }
+  writeFileSync(join(upRoot, '.meta', 'registry.json'), JSON.stringify(REGISTRY, null, 2))
+  const registryText = readFileSync(join(upRoot, '.meta', 'registry.json'), 'utf8')
+
+  // 假登录态（**绝不用真实 refresh_token**）：obtainedAt=现在、寿命 1 小时 → bearer() 不触发刷新
+  const authPath = join(upRoot, '.meta', 'state', 'workbuddy-auth.json')
+  const writeFakeAuth = () => {
+    mkdirSync(join(upRoot, '.meta', 'state'), { recursive: true })
+    writeFileSync(authPath, JSON.stringify({
+      access_token: 'FAKE-TOKEN', refresh_token: 'FAKE-REFRESH',
+      expires_in: 3600, obtainedAt: Date.now(), uid: 'fake', nickname: '假账号',
+    }))
+  }
+  const removeAuth = () => rmSync(authPath, { force: true })
 
   const realFetch = globalThis.fetch
-  const seen = { tree: 0, registry: 0, other: [] }
-  let mode = 'down'      // down = 两条远端都失败；ok / current = 成功桩
+  const seen = { expert: 0, skill: 0, connector: 0, github: 0, other: [] }
+  let mode = 'ok'                 // ok | skillDown | connectorDown
+  let skillVersion = '1.0.0'
+  let connectorMcp = OFFICIAL_MCP
+  const stub = (status, payload) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+  })
   globalThis.fetch = async input => {
     const target = String(input?.url ?? input)
-    if (target.includes('api.github.com')) {
-      seen.tree += 1
-      if (mode === 'down') return { ok: false, status: 403, json: async () => ({}), text: async () => '' }
-      const tree = [
-        { type: 'blob', path: 'skills/demo-skill/SKILL.md', sha: skillSha, size: skillBytes },
-        // 嵌套 avatars/ 图片：downloadEntry 默认不下载 → 两侧都必须忽略
-        { type: 'blob', path: 'skills/demo-skill/assets/avatars/a.png', sha: '1'.repeat(40), size: 999 },
-        // 顶层 avatars/ 图片：会被下载 → 必须参与比对
-        { type: 'blob', path: 'skills/demo-skill2/avatars/pic.png', sha: avatarSha, size: avatarBytes },
-      ]
-      return { ok: true, status: 200, json: async () => ({ tree }) }
-    }
+    if (target.includes('github')) { seen.github += 1; throw new Error(`检查更新不得碰 GitHub：${target}`) }
     if (target.includes('expert_center.json')) {
-      seen.registry += 1
-      if (mode === 'down') return { ok: false, status: 503, json: async () => ({}), text: async () => '' }
-      return {
-        ok: true, status: 200,
-        json: async () => ({
-          experts: [{
-            id: 'demo-official', agentName: 'demo-official', plugin: 'demo-plugin',
-            updatedAt: '2024-06-01T00:00:00.000Z', createdAt: '2020-01-01T00:00:00.000Z',
-          }],
-        }),
-      }
+      seen.expert += 1
+      return stub(200, {
+        experts: [{
+          id: 'demo-official', agentName: 'demo-official', plugin: 'demo-plugin',
+          updatedAt: '2024-06-01T00:00:00.000Z', createdAt: '2020-01-01T00:00:00.000Z',
+        }],
+      })
+    }
+    if (target.includes('/market/skill/get-by-ids')) {
+      seen.skill += 1
+      if (mode === 'skillDown') return stub(500, { code: 500, msg: 'upstream boom' })
+      return stub(200, {
+        code: 0,
+        data: {
+          skills: [
+            { skill_id: 'sk-1', version: skillVersion, updated_at: '2026-09-03T08:47:48Z', download_url: 'https://x.invalid/sk1.zip' },
+            { skill_id: 'sk-2', version: '2.0.0', updated_at: '2026-09-03T08:47:48Z', download_url: 'https://x.invalid/sk2.zip' },
+          ],
+        },
+      })
+    }
+    if (target.includes('/connector/registry2c/list')) {
+      seen.connector += 1
+      if (mode === 'connectorDown') return stub(503, { code: 503, msg: 'registry down' })
+      return stub(200, {
+        code: 0,
+        data: { list: [{ name: 'demo-connector', auth_type: 'oauth', is_connected: true, mcp: connectorMcp }] },
+      })
     }
     seen.other.push(target)
     throw new Error(`unexpected fetch: ${target}`)
@@ -618,84 +687,108 @@ if (existsSync(REAL_STANDARD)) {
       try { parsed = JSON.parse(res.body) } catch { parsed = null }
       return { status: res.statusCode, json: parsed }
     }
+    const byKey = body => new Map(body.entries.map(e => [e.key, e]))
 
-    // 5a. 远端全不可用 → 两条都 unknown（绝不能是 current）
-    const down = await callUp('/updates')
-    assert.equal(down.status, 200)
-    assert.equal(down.json.ok, true)
-    assert.equal(down.json.sources.mirror.ok, false, '镜像不可用必须如实标注')
-    assert.ok(down.json.sources.mirror.reason.includes('403'), '镜像失败原因必须带 HTTP 状态')
-    assert.equal(down.json.sources.official.ok, false, '官方注册表不可用必须如实标注')
-    assert.ok(down.json.sources.official.reason.includes('503'), '官方失败原因必须带 HTTP 状态')
-    assert.equal(down.json.counts.current, 0, '远端取不到时绝不能出现「已是最新」')
-    assert.equal(down.json.counts.update, 0)
-    assert.equal(down.json.counts.unknown, 3)
-    for (const entry of down.json.entries) {
-      assert.equal(entry.status, 'unknown', `${entry.key} 在远端不可用时必须是 unknown`)
-      assert.ok(entry.reason.length > 0, `${entry.key} 的 unknown 必须带原因`)
+    // 5a. 未登录：专家（公开注册表）照常判定；技能/连接器一律 unknown + 「需要登录」
+    removeAuth()
+    const noLogin = await callUp('/updates')
+    assert.equal(noLogin.status, 200)
+    assert.equal(noLogin.json.ok, true)
+    assert.equal(noLogin.json.sources.official.ok, false, '未登录时官方源必须如实标不可用')
+    assert.ok(noLogin.json.sources.official.reason.includes('需要登录'),
+      `原因要说明需要登录：${noLogin.json.sources.official.reason}`)
+    assert.equal(noLogin.json.counts.current, 0, '未登录时绝不能出现「已是最新」')
+    const noLoginByKey = byKey(noLogin.json)
+    assert.equal(noLoginByKey.get('expert/demo-official').status, 'update',
+      '专家注册表公开：未登录也能给出判定（官方 2024 > 本地 2020）')
+    for (const key of ['skill/demo-skill', 'skill/demo-skill-old', 'skill/demo-delisted', 'skill/demo-mirror-skill']) {
+      const row = noLoginByKey.get(key)
+      assert.equal(row.status, 'unknown', `${key} 未登录时必须 unknown`)
+      assert.ok(row.reason.includes('需要登录'), `${key} 的原因要说明需要登录：${row.reason}`)
     }
-    const downByKey = new Map(down.json.entries.map(e => [e.key, e]))
-    assert.ok(downByKey.get('expert/demo-official').reason.includes('official registry unavailable'))
-    assert.ok(downByKey.get('skill/demo-skill').reason.includes('mirror tree unavailable'))
+    const noLoginConn = noLoginByKey.get('connector/demo-connector')
+    assert.equal(noLoginConn.status, 'unknown')
+    assert.ok(noLoginConn.reason.includes('需要登录'), `连接器未登录原因：${noLoginConn.reason}`)
+    assert.deepEqual(noLogin.json.counts, { update: 1, current: 0, unknown: 5 })
+    assert.equal(seen.github, 0, '检查更新一次都不许碰 GitHub')
 
-    // 5b. 60s 结果缓存：第二次调用不再打网络（重复调用要便宜）
-    const treeAfterFirst = seen.tree
-    const registryAfterFirst = seen.registry
+    // 5b. 已登录：三类各有判定（技能 current / 老记录 unknown / 已下架 unknown / 连接器 current）
+    writeFakeAuth()
+    const ok = await callUp('/updates?refresh=1')
+    assert.equal(ok.json.sources.official.ok, true,
+      `已登录且官方可用时 official.ok 必须为 true：${ok.json.sources.official.reason}`)
+    assert.equal(ok.json.sources.mirror, undefined, 'sources 里不再有 mirror')
+    const okByKey = byKey(ok.json)
+    const skillRow = okByKey.get('skill/demo-skill')
+    assert.equal(skillRow.status, 'current', '官方 version 与安装时记录的相同 → 已是最新')
+    assert.equal(skillRow.remoteVersion, '1.0.0')
+    assert.equal(skillRow.localVersion, '1.0.0')
+    const oldRow = okByKey.get('skill/demo-skill-old')
+    assert.equal(oldRow.status, 'unknown', '老记录缺 officialMeta.version → unknown（不伪造）')
+    assert.ok(oldRow.reason.includes('officialMeta.version') && oldRow.reason.includes('重装'),
+      `老技能记录的原因：${oldRow.reason}`)
+    const delistedRow = okByKey.get('skill/demo-delisted')
+    assert.equal(delistedRow.status, 'unknown')
+    assert.ok(delistedRow.reason.includes('下架'), `已下架技能的原因：${delistedRow.reason}`)
+    const mirrorRow = okByKey.get('skill/demo-mirror-skill')
+    assert.equal(mirrorRow.status, 'unknown')
+    assert.ok(mirrorRow.reason.includes('officialId'), `缺 officialId 的原因：${mirrorRow.reason}`)
+    const connRow = okByKey.get('connector/demo-connector')
+    assert.equal(connRow.status, 'current', '官方 MCP 定义哈希与安装时记录的一致 → 已是最新')
+    assert.equal(connRow.remoteHash, OFFICIAL_DEF_HASH)
+    assert.equal(connRow.localHash, OFFICIAL_DEF_HASH)
+    const expertRow = okByKey.get('expert/demo-official')
+    assert.equal(expertRow.status, 'update', '官方 updatedAt 比安装时记录的更新 → 有更新')
+    assert.equal(expertRow.remoteAt, '2024-06-01T00:00:00.000Z')
+    assert.deepEqual(ok.json.counts, { update: 1, current: 2, unknown: 3 })
+
+    // 5c. 60s 结果缓存：第二次不再打官方接口；?refresh=1 强制重算
+    const seenAfter = { ...seen }
     const cachedCall = await callUp('/updates')
     assert.equal(cachedCall.json.cached, true, '60s 内的第二次调用必须命中结果缓存')
-    assert.equal(seen.tree, treeAfterFirst, '命中缓存不得再打 GitHub tree')
-    assert.equal(seen.registry, registryAfterFirst, '命中缓存不得再打官方注册表')
-    // ?refresh=1 强制重算（失败不写 tree 缓存 → 会再试一次）
+    assert.equal(seen.expert, seenAfter.expert, '命中缓存不得再打官方注册表')
+    assert.equal(seen.skill, seenAfter.skill, '命中缓存不得再打官方技能接口')
     const refreshed = await callUp('/updates?refresh=1')
     assert.equal(refreshed.json.cached, false)
-    assert.ok(seen.tree > treeAfterFirst, 'refresh=1 必须真的重新检查，而不是复用失败结果')
-    assert.equal(refreshed.json.counts.current, 0)
+    assert.ok(seen.skill > seenAfter.skill, 'refresh=1 必须真的重新检查，而不是复用缓存结果')
 
-    // 5c. 远端可用：本地 sha == tree 的 blob sha → current；本地漂移 → update
-    //     （tree 缓存 10 分钟是设计行为，所以这里只改本地文件来制造差异）
+    // 5d. 官方数据变化 → update（技能版本、连接器 MCP 定义）
+    skillVersion = '1.0.1'
+    connectorMcp = { ...OFFICIAL_MCP, gateway_url: 'https://gw2.example/mcp' }
+    const bumped = await callUp('/updates?refresh=1')
+    const bumpedByKey = byKey(bumped.json)
+    const bumpedSkill = bumpedByKey.get('skill/demo-skill')
+    assert.equal(bumpedSkill.status, 'update', '官方版本变了 → 有更新')
+    assert.equal(bumpedSkill.remoteVersion, '1.0.1')
+    assert.ok(bumpedSkill.reason.includes('1.0.1') && bumpedSkill.reason.includes('1.0.0'),
+      `版本变化原因要能读出新旧版本：${bumpedSkill.reason}`)
+    const bumpedConn = bumpedByKey.get('connector/demo-connector')
+    assert.equal(bumpedConn.status, 'update', '官方 MCP 定义变了 → 有更新')
+    assert.notEqual(bumpedConn.remoteHash, bumpedConn.localHash)
+    assert.deepEqual(bumped.json.counts, { update: 3, current: 0, unknown: 3 })
+
+    // 5e. 官方接口失败（已登录）→ unknown + 原因，绝不判 current
+    mode = 'skillDown'
+    skillVersion = '1.0.0'
+    connectorMcp = OFFICIAL_MCP
+    const down = await callUp('/updates?refresh=1')
+    assert.equal(down.json.sources.official.ok, false, '官方接口失败时 official.ok 必须为 false')
+    const downSkill = byKey(down.json).get('skill/demo-skill')
+    assert.equal(downSkill.status, 'unknown', '官方技能接口失败时必须 unknown')
+    assert.ok(downSkill.reason.includes('官方技能接口不可用'), `接口失败原因：${downSkill.reason}`)
+    mode = 'connectorDown'
+    const connDown = await callUp('/updates?refresh=1')
+    const connDownRow = byKey(connDown.json).get('connector/demo-connector')
+    assert.equal(connDownRow.status, 'unknown', '官方连接器注册表失败时必须 unknown')
+    assert.ok(connDownRow.reason.includes('官方连接器注册表不可用'), `连接器失败原因：${connDownRow.reason}`)
+    assert.equal(connDown.json.counts.current, 1, '只有没失败的那条技能仍是 current')
     mode = 'ok'
-    const ok = await callUp('/updates?refresh=1')
-    assert.equal(ok.json.sources.mirror.ok, true)
-    assert.equal(ok.json.sources.official.ok, true)
-    const okByKey = new Map(ok.json.entries.map(e => [e.key, e]))
-    const skillRow = okByKey.get('skill/demo-skill')
-    assert.equal(skillRow.status, 'current', '本地 gitBlobSha 与 tree 的 blob sha 相同 → 已是最新')
-    assert.equal(skillRow.changedFiles, 0)
-    assert.equal(skillRow.remoteBytes, skillBytes, 'remoteBytes 不含嵌套 avatars 图片（安装时本就不下载）')
-    const skill2Row = okByKey.get('skill/demo-skill2')
-    assert.equal(skill2Row.status, 'current', '顶层 avatars 图片会被下载，参与比对后仍是「已是最新」')
-    assert.equal(skill2Row.remoteBytes, avatarBytes)
-    const expertRow = okByKey.get('expert/demo-official')
-    assert.equal(expertRow.status, 'update', '官方 updatedAt 比 installedAt 新 → 有更新')
-    assert.equal(expertRow.remoteAt, '2024-06-01T00:00:00.000Z')
-    assert.deepEqual(ok.json.counts, { update: 1, current: 2, unknown: 0 })
-
-    // 本地多出一个文件（远端没有）→ 也**不是** current，且原因说清是「本地多出」
-    writeFileSync(join(upSkillDir, 'note.txt'), 'local only\n')
-    const drifted = await callUp('/updates?refresh=1')
-    const driftSkill = new Map(drifted.json.entries.map(e => [e.key, e])).get('skill/demo-skill')
-    assert.equal(driftSkill.status, 'update', '本地多出文件说明两边不一致，不能判 current')
-    assert.equal(driftSkill.changedFiles, 1)
-    assert.ok(driftSkill.reason.includes('多出'), `原因要说明本地多出文件：${driftSkill.reason}`)
-    assert.equal(driftSkill.remoteBytes, skillBytes)
-    assert.deepEqual(drifted.json.counts, { update: 2, current: 1, unknown: 0 })
-
-    // 本地内容变了 → changed（同样不是 current）
-    rmSync(join(upSkillDir, 'note.txt'), { force: true })
-    writeFileSync(join(upSkillDir, 'SKILL.md'), '# 演示技能（本地改过）\n')
-    const changedLocal = await callUp('/updates?refresh=1')
-    const changedSkill = new Map(changedLocal.json.entries.map(e => [e.key, e])).get('skill/demo-skill')
-    assert.equal(changedSkill.status, 'update')
-    assert.equal(changedSkill.changedFiles, 1)
-    assert.ok(changedSkill.reason.includes('内容'), `原因要说明内容已变化：${changedSkill.reason}`)
 
     assert.deepEqual(seen.other, [], '只读检查路由不得打别的网络地址')
+    assert.equal(seen.github, 0, '检查更新与镜像彻底解耦：一次都不打 GitHub')
     // 只读自检：整个检查过程不得改动注册表
-    assert.equal(
-      JSON.parse(readFileSync(join(upRoot, '.meta', 'registry.json'), 'utf8')).installed['skill/demo-skill'].files,
-      1,
-      '检查更新不得写注册表',
-    )
+    assert.equal(readFileSync(join(upRoot, '.meta', 'registry.json'), 'utf8'), registryText,
+      '检查更新不得写注册表')
   } finally {
     globalThis.fetch = realFetch
   }

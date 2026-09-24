@@ -20,7 +20,10 @@ import { join, resolve, dirname } from 'node:path'
 import { loginStart, loginPoll, loadAuth, saveAuth, bearer, marketList, marketCategories, connectorRegistry, connectorBound, connectorAuthStart, connectorRevoke, connectorOauthStatus, refreshIfNeeded, loadAuthHealth, saveAuthHealth, clearAuthHealth, onAuthEvent } from './wb-market.js'
 import { KEEPALIVE_THRESHOLD_MS, reduceHealth, touchCheck, isStale } from './src/keepalive.js'
 import { listExperts, categories as officialCategories, installExpert, registry as officialRegistry } from './wb-experts.js'
-import { gitBlobSha, compareOfficial, compareMirror, summarizeUpdates } from './src/updates.js'
+import {
+  compareOfficial, compareSkillVersion, compareConnectorDef, summarizeUpdates,
+  connectorDefHash, skillProvenance, expertProvenance, connectorProvenance,
+} from './src/updates.js'
 import { skillDetails } from './wb-market.js'
 import { unzip } from './wb-unzip.js'
 import { execSync } from 'node:child_process'
@@ -680,6 +683,10 @@ export function apply(ctx, config = {}) {
   const cfg = config ?? {}
   const mirrorRepo = cfg.mirrorRepo || 'superfat1988/workbuddyskills'
   const mirrorBranch = cfg.mirrorBranch || 'main'
+  // 官方源是唯一真源；GitHub 镜像只是**默认关闭**的灾备开关（官方挂了才临时打开）。
+  // 为 false 时：官方失败就如实暴露失败（列表空 + 可读原因），绝不静默换成镜像内容。
+  // 注意：/updates 永远不用镜像（纯官方元数据比对），与这个开关无关。
+  const mirrorFallback = cfg.mirrorFallback === true
   const skillPrefix = cfg.skillPrefix || 'workbuddy-'
       const P = storePaths(cfg)
   for (const d of [P.root, P.store, P.skills, P.experts, P.connectors, P.meta, P.icons]) {
@@ -970,63 +977,13 @@ export function apply(ctx, config = {}) {
   /* ---------------------------------------------------------------- *
    * 「检查更新」辅助（GET /updates 用）
    *
-   *  · 镜像 tree 只取一次全量，成功才写 10 分钟缓存（失败不缓存，下次重试）；
-   *  · 检查结果整体再缓存 60 秒（?refresh=1 强制重算），让重复调用便宜；
-   *  · 两个缓存都只在内存里，**不写盘、不碰注册表**（路由是只读的）。
+   *  判定**只认官方元数据**（技能 version / 专家 updatedAt / 连接器 MCP 定义哈希），
+   *  不再碰 GitHub 镜像、不再算任何文件 sha；安装时记下的 officialMeta 是唯一本地依据。
+   *  · 检查结果整体缓存 60 秒（?refresh=1 强制重算），让重复调用便宜；
+   *  · 缓存只在内存里，**不写盘、不碰注册表**（路由是只读的）。
    * ---------------------------------------------------------------- */
-  const UPDATES_TREE_TTL_MS = 10 * 60 * 1000
   const UPDATES_RESULT_TTL_MS = 60 * 1000
-  let updatesTreeCache = { at: 0, blobs: null }
   let updatesResultCache = null
-
-  /** 与 downloadEntry 的**确切**跳过规则一致（基于相对条目目录的 rel）：
-   *  · 嵌套的 avatars/ 图片（rel 里含 `/avatars/`）默认不下载；
-   *  · 嵌套的 icons/ 图片（rel 里含 `/icons/`）一律不下载。
-   *  注意顶层 `avatars/x.png`（rel 不含前导段）是**会**被下载的，必须参与比对 ——
-   *  实测用户仓里就有这种条目，一刀切按 `/avatars/` 过滤会把本地已有的头像算成
-   *  「本地多出 N 个文件」，凭空报「有更新」。两侧用同一规则过滤，才不会互相冤枉。 */
-  const skippedFromMirrorInstall = rel => {
-    const base = rel.split('/').pop() || rel
-    if (rel.includes('/avatars/') && IMAGE_EXT.test(base)) return true
-    if (rel.includes('/icons/') && IMAGE_EXT.test(base)) return true
-    return false
-  }
-
-  /**
-   * 只读遍历某个已装条目的目录：限定在 storeRoot 内、不跟随符号链接、
-   * 逐个文件算 git blob sha1（与镜像 tree 的 blob sha 同口径）。
-   * 目录不存在 / 越界 / 读不到 → ok:false（调用方一律按 unknown 处理，不猜）。
-   */
-  const listLocalFiles = (storeRoot, dest) => {
-    const rootAbs = resolve(storeRoot)
-    const destRaw = typeof dest === 'string' ? dest : ''
-    if (!destRaw) return { ok: false, reason: '注册表记录里没有 dest，无法比对本地文件' }
-    const destAbs = resolve(destRaw)
-    if (destAbs !== rootAbs && !destAbs.startsWith(rootAbs + '/')) {
-      return { ok: false, reason: `dest 不在 storeRoot 内（拒绝比对）：${destAbs}` }
-    }
-    if (!existsSync(destAbs)) return { ok: false, reason: `本地目录不存在：${destAbs}` }
-    const files = []
-    const walk = (dir, relBase) => {
-      let dirents
-      try { dirents = readdirSync(dir, { withFileTypes: true }) } catch { return }
-      for (const dirent of dirents) {
-        const abs = join(dir, dirent.name)
-        const rel = relBase ? `${relBase}/${dirent.name}` : dirent.name
-        if (dirent.isSymbolicLink()) continue           // 不跟随：软链可能指向 storeRoot 之外
-        if (dirent.isDirectory()) { walk(abs, rel); continue }
-        if (!dirent.isFile()) continue
-        // 安装时本来就不会下载的图标：远端已被过滤，本地也必须忽略，否则报假更新
-        if (skippedFromMirrorInstall(rel)) continue
-        try {
-          const buf = readFileSync(abs)
-          files.push({ rel, sha: gitBlobSha(buf), size: buf.byteLength })
-        } catch { /* 读不到 → 远端有、本地无 = 有更新；绝不静默当成最新 */ }
-      }
-    }
-    walk(destAbs, '')
-    return { ok: true, files }
-  }
 
   /* ---------------------------------------------------------------- *
    * 账号保活（keepalive）+「已登录但凭证失效」判定
@@ -1100,6 +1057,55 @@ export function apply(ctx, config = {}) {
     return () => { stopped = true; clearTimeout(first); clearInterval(timer) }
   }, 'workbuddy-hub: auth keepalive timer')
 
+  /**
+   * 官方连接器落地（连接器安装的唯一真源）：官方注册表该行 → 本地 mcp.json。
+   * 密钥只以 `${WORKBUDDY_TOKEN}` 引用落盘，绝不写明文。
+   *
+   * 返回 { ok:true, dest, row, flags, bytes, defHash } 或 { ok:false, status, error }。
+   * 用返回值而不是抛错，是为了让两条调用方（POST /connectors/install 与 POST /install）
+   * 各自保留原有的状态码语义（404 未收录 / 400 无 MCP 网关 / 502 上游失败）。
+   */
+  const landOfficialConnector = async entryName => {
+    let rows
+    try {
+      rows = await connectorRegistry(P.state)
+    } catch (error) {
+      return { ok: false, status: 502, error: `connector install failed: ${String(error?.message || error)}` }
+    }
+    const row = rows.find(r => r.name === entryName)
+    if (!row) return { ok: false, status: 404, error: `connector not in official registry: ${entryName}` }
+    const gateway = row.mcp?.gateway_url
+    if (!gateway) return { ok: false, status: 400, error: 'connector has no MCP gateway (CLI or skill-only connector)' }
+    const flags = []
+    // bearer() 会按需刷新并返回当前 access_token（auth 文件里是 access_token 字段）。
+    let token = ''
+    try { token = await bearer(P.state) } catch { token = '' }
+    if (token) {
+      try { await ctx.credentials?.set?.(WB_TOKEN_REF, token) }
+      catch (error) { flags.push(`credential store failed: ${String(error?.message || error)}`) }
+    } else {
+      flags.push('no official token: connector stays unusable until the account is connected')
+    }
+    const dest = join(P.connectors, entryName)
+    mkdirSync(dest, { recursive: true })
+    const mcp = {
+      mcpServers: {
+        [entryName]: {
+          transport: 'streamable-http',
+          url: gateway,
+          headers: { Authorization: `Bearer $\{${WB_TOKEN_REF}}` },
+        },
+      },
+    }
+    const mcpText = JSON.stringify(mcp, null, 2)
+    writeFileSync(join(dest, 'mcp.json'), mcpText)
+    return {
+      ok: true, dest, row, flags,
+      bytes: Buffer.byteLength(mcpText),
+      defHash: connectorDefHash(row.mcp),
+    }
+  }
+
   const handler = async (req, res) => {
     const url = new URL(req.url, 'http://localhost')
     if (!url.pathname.startsWith(PREFIX)) return false
@@ -1107,7 +1113,11 @@ export function apply(ctx, config = {}) {
     const route = `${req.method} ${url.pathname.slice(PREFIX.length) || '/'}`
 
     if (route === 'GET /health') {
-      json(res, 200, { ok: true, store: P.root, mirror: mirrorRepo, branch: mirrorBranch })
+      json(res, 200, {
+        ok: true, store: P.root, mirror: mirrorRepo, branch: mirrorBranch,
+        // 官方是唯一真源；这里如实报告灾备开关状态（默认 false）
+        mirrorFallback,
+      })
       return true
     }
 
@@ -1225,11 +1235,24 @@ export function apply(ctx, config = {}) {
 
     if (route === 'GET /market-list') {
       const kindQ = url.searchParams.get('kind') || 'expert'
+      const q0 = (url.searchParams.get('q') || '').trim()
+      const configured = Boolean(loadAuth(P.state)?.access_token)
+      /** 官方失败时的可读原因：未登录就直说「需要登录」，否则原样带出上游错误。 */
+      const officialListError = (kind, error) => {
+        const what = kind === 'skill' ? '技能' : '专家'
+        const detail = error ? String(error?.message || error) : ''
+        if (!configured) return `需要登录才能查看官方${what}目录${detail ? `（${detail}）` : ''}`
+        return `官方${what}目录暂不可用${detail ? `：${detail}` : ''}`
+      }
+      const mirrorHits = (bucket, matcher) => {
+        if (!mirrorFallback) return []
+        const cache = loadIndex()
+        if (!cache) return []
+        return Object.values(cache.index?.[bucket] ?? {}).filter(matcher)
+      }
       if (kindQ === 'connector') {
-        // 官方连接器注册表需要登录。未登录时前端显示就地登录卡（不显示镜像目录），
-        // 这里只在「已登录但官方接口失败/返回空」时用镜像 catalog 的 connectors 兜底，
-        // 并如实标注 source=mirror，避免页面空白。
-        const configured = Boolean(loadAuth(P.state)?.access_token)
+        // 官方连接器注册表需要登录。未登录时前端显示就地登录卡（不显示镜像目录）。
+        // mirrorFallback 打开时才用镜像 catalog 的 connectors 兜底（灾备），并如实标 source=mirror。
         let rows = []
         let officialError = ''
         try { rows = await connectorRegistry(P.state) } catch (error) { officialError = String(error?.message || error) }
@@ -1237,22 +1260,20 @@ export function apply(ctx, config = {}) {
           json(res, 200, { ok: true, source: 'official', total: rows.length, rows })
           return true
         }
-        let mirrorRows = []
-        if (configured) {
-          const cache = loadIndex()
-          const q2 = (url.searchParams.get('q') || '').trim().toLowerCase()
-          mirrorRows = cache
-            ? Object.values(cache.index?.connectors ?? {})
-                .filter(e => !q2 || `${e.name} ${e.displayName || ''} ${e.description || ''}`.toLowerCase().includes(q2))
-            : []
-        }
+        const q2 = q0.toLowerCase()
+        const mirrorRows = configured
+          ? mirrorHits('connectors', e => !q2 || `${e.name} ${e.displayName || ''} ${e.description || ''}`.toLowerCase().includes(q2))
+          : []
+        const reason = !configured
+          ? '需要登录才能查看官方连接器目录'
+          : (officialError || '官方连接器注册表为空或暂不可用')
         json(res, 200, {
           ok: true,
-          // 官方失败时即使镜像为空也标 mirror：如实告诉前端「这不是官方数据」
-          source: (mirrorRows.length || officialError) ? 'mirror' : 'official',
+          // 有镜像内容才标 mirror（灾备）；否则如实标 official + 空列表 + 原因
+          source: mirrorRows.length ? 'mirror' : 'official',
           total: mirrorRows.length,
           rows: mirrorRows,
-          error: officialError || undefined,
+          error: mirrorRows.length ? (officialError || undefined) : reason,
         })
         return true
       }
@@ -1261,22 +1282,25 @@ export function apply(ctx, config = {}) {
         page: Math.max(1, Number(url.searchParams.get('page') || 1) || 1),
         page_size: Math.min(100, Number(url.searchParams.get('pageSize') || 60) || 60),
       }
-      const q = (url.searchParams.get('q') || '').trim()
-      if (q) payload.keyword = q
+      if (q0) payload.keyword = q0
       const cat = url.searchParams.get('category')
       if (cat && cat !== 'all') payload.categories = [cat]
       try {
         const { total, rows } = await marketList(kind, payload, P.state)
         json(res, 200, { ok: true, source: 'official', total, rows })
       } catch (error) {
-        // mirror fallback keeps the page usable without an official login
-        const cache = loadIndex()
-        const q2 = (url.searchParams.get('q') || '').trim().toLowerCase()
-        const hits = cache
-          ? Object.values(cache.index?.[kind === 'expert' ? 'experts' : 'skills'] ?? {})
-              .filter(e => !q2 || (e.displayName || '').toLowerCase().includes(q2) || (e.description || '').toLowerCase().includes(q2))
-              .slice(0, payload.page_size)
-          : []
+        const q2 = q0.toLowerCase()
+        const hits = mirrorHits(kind === 'expert' ? 'experts' : 'skills',
+          e => !q2 || (e.displayName || '').toLowerCase().includes(q2) || (e.description || '').toLowerCase().includes(q2))
+          .slice(0, payload.page_size)
+        if (hits.length === 0) {
+          // mirrorFallback=false（默认）：不静默换成镜像内容，如实暴露失败
+          json(res, 200, {
+            ok: true, source: 'official', total: 0, rows: [],
+            error: officialListError(kind, error),
+          })
+          return true
+        }
         json(res, 200, { ok: true, source: 'mirror', total: hits.length, rows: hits, error: error.message })
       }
       return true
@@ -1287,12 +1311,19 @@ export function apply(ctx, config = {}) {
         const items = await marketCategories(kind, P.state)
         json(res, 200, { ok: true, source: 'official', items })
       } catch (error) {
-        json(res, 200, { ok: true, source: 'mirror', items: [] })
+        json(res, 200, { ok: true, source: 'official', items: [], error: error.message })
       }
       return true
     }
 
     if (route === 'GET /catalog') {
+      // 镜像目录索引：官方是唯一真源，这里只在灾备开关打开时可用
+      if (!mirrorFallback) {
+        json(res, 503, {
+          error: '镜像目录兜底已关闭（mirrorFallback=false）：官方源是唯一真源，不再静默换成镜像内容',
+        })
+        return true
+      }
       const cache = loadJson(P.catalogCache, null)
       const force = url.searchParams.get('refresh') === '1'
       if (!force && cache?.fetchedAt && Date.now() - cache.fetchedAt < 6 * 3600 * 1000 && cache.index) {
@@ -1307,6 +1338,13 @@ export function apply(ctx, config = {}) {
     }
 
     if (route === 'GET /search') {
+      // 镜像检索：同 /catalog，只在灾备开关打开时可用
+      if (!mirrorFallback) {
+        json(res, 503, {
+          error: '镜像检索已关闭（mirrorFallback=false）：官方源是唯一真源，不再静默换成镜像内容',
+        })
+        return true
+      }
       const cache = loadIndex()
       if (!cache) { json(res, 503, { error: 'catalog not loaded' }); return true }
       const q = (url.searchParams.get('q') || '').trim().toLowerCase()
@@ -1385,11 +1423,12 @@ export function apply(ctx, config = {}) {
     }
 
     // ---- 检查更新（只读；不写注册表、不动文件）----
-    // 判定依据：
-    //  · source==='official' 的专家 → 官方注册表原始条目的 updatedAt vs 本地 installedAt；
-    //  · 其余（镜像来源的技能/连接器，以及 source 非 official 的条目）→ 内容比对：
-    //    镜像 tree 的 blob sha 就是 git blob sha1，本地同法算一遍即可精确比对。
-    // 纪律：远端取不到（限流/断网）一律 unknown + 原因，**绝不**判 current。
+    // 判定依据（**纯官方元数据**，永远不用镜像，与 mirrorFallback 无关）：
+    //  · 技能   → 官方 skill 记录的 version vs 安装时记的 officialMeta.version；
+    //  · 专家   → 官方注册表原始条目的 updatedAt vs officialMeta.updatedAt（老记录退回 installedAt）；
+    //  · 连接器 → 官方注册表该行 mcp 定义的规范化 sha256 vs officialMeta.defHash。
+    // 纪律：取不到官方数据（未登录 / 接口失败 / 记录缺 officialMeta）一律 unknown + 原因，
+    //       **绝不**判 current —— 静默的假「已是最新」比报错更糟。
     if (route === 'GET /updates') {
       const force = url.searchParams.get('refresh') === '1'
       const now = Date.now()
@@ -1400,44 +1439,67 @@ export function apply(ctx, config = {}) {
 
       const registry = loadJson(P.registry, { version: 1, installed: {} })
       const records = Object.entries(registry.installed ?? {})
-      const isOfficialExpert = record => record?.kind === 'expert' && record?.source === 'official'
-      const needsOfficial = records.some(([, record]) => isOfficialExpert(record))
-      const needsMirror = records.some(([, record]) => !isOfficialExpert(record))
+      const kindOf = record => String(record?.kind || '')
+      const needs = {
+        expert: records.some(([, record]) => kindOf(record) === 'expert'),
+        skill: records.some(([, record]) => kindOf(record) === 'skill'),
+        connector: records.some(([, record]) => kindOf(record) === 'connector'),
+      }
+      // 技能（market/skill/get-by-ids）与连接器（registry2c/list）都需要登录；
+      // 专家注册表是公开的，未登录也能正常比对。
+      const loggedIn = Boolean(loadAuth(P.state)?.access_token)
+      const failures = []
+      const sourceError = { expert: '', skill: '', connector: '' }
 
-      // 官方注册表：成功时 wb-experts.registry() 自带永久缓存，失败只影响本次判定。
-      const official = { ok: !needsOfficial, at: now, reason: '', skipped: !needsOfficial, find: () => null }
-      if (needsOfficial) {
+      // 专家：官方注册表原始条目（按 agentName / plugin / id 建索引；后写覆盖前写）
+      let expertIndex = null
+      if (needs.expert) {
         try {
           const data = await officialRegistry()
-          const byName = new Map()
-          // 匹配优先级 agentName > plugin > id（后写覆盖前写）
+          expertIndex = new Map()
           for (const raw of data?.experts ?? []) {
-            if (raw?.id) byName.set(String(raw.id), raw)
-            if (raw?.plugin) byName.set(String(raw.plugin), raw)
-            if (raw?.agentName) byName.set(String(raw.agentName), raw)
+            if (raw?.id) expertIndex.set(String(raw.id), raw)
+            if (raw?.plugin) expertIndex.set(String(raw.plugin), raw)
+            if (raw?.agentName) expertIndex.set(String(raw.agentName), raw)
           }
-          official.ok = true
-          official.find = entryName => byName.get(String(entryName)) ?? null
         } catch (error) {
-          official.reason = String(error?.message || error)
+          sourceError.expert = String(error?.message || error)
+          failures.push(`官方专家注册表不可用：${sourceError.expert}`)
         }
       }
 
-      // 镜像 tree：一次全量（缓存 10 分钟，成功才写）。
-      const mirror = { ok: !needsMirror, at: now, reason: '', skipped: !needsMirror }
-      let mirrorBlobs = []
-      if (needsMirror) {
-        if (updatesTreeCache.blobs && now - updatesTreeCache.at < UPDATES_TREE_TTL_MS) {
-          mirrorBlobs = updatesTreeCache.blobs
-          mirror.ok = true
-          mirror.at = updatesTreeCache.at
+      // 技能：按记录里的 officialId 批量取官方记录（缺 officialId 的条目单独报 unknown）
+      let skillIndex = null
+      if (needs.skill) {
+        if (!loggedIn) {
+          failures.push('技能：需要登录才能读取官方技能数据')
+        } else {
+          const ids = [...new Set(records
+            .filter(([, record]) => kindOf(record) === 'skill')
+            .map(([, record]) => (record?.officialId === undefined || record?.officialId === null ? '' : String(record.officialId)))
+            .filter(Boolean))]
+          try {
+            const skills = ids.length ? await skillDetails(ids, P.state) : []
+            skillIndex = new Map(skills.map(row => [String(row?.skill_id ?? row?.skillId ?? ''), row]))
+          } catch (error) {
+            sourceError.skill = String(error?.message || error)
+            failures.push(`官方技能接口不可用：${sourceError.skill}`)
+          }
+        }
+      }
+
+      // 连接器：官方注册表（需要登录；未登录拿不到 → 该条 unknown，绝不判 current）
+      let connectorIndex = null
+      if (needs.connector) {
+        if (!loggedIn) {
+          failures.push('连接器：需要登录才能读取官方连接器注册表')
         } else {
           try {
-            mirrorBlobs = await ghTree(mirrorRepo, mirrorBranch)
-            updatesTreeCache = { at: now, blobs: mirrorBlobs }
-            mirror.ok = true
+            const rows = await connectorRegistry(P.state)
+            connectorIndex = new Map(rows.map(row => [String(row?.name ?? ''), row]))
           } catch (error) {
-            mirror.reason = String(error?.message || error)
+            sourceError.connector = String(error?.message || error)
+            failures.push(`官方连接器注册表不可用：${sourceError.connector}`)
           }
         }
       }
@@ -1452,36 +1514,52 @@ export function apply(ctx, config = {}) {
           installedAt: typeof record?.installedAt === 'string' ? record.installedAt : '',
           files: Number(record?.files) || 0,
           bytes: Number(record?.bytes) || 0,
+          // 元数据比对没有「远端字节数」这个概念：保持字段形状（前端据此退回本地估算并标「约」）
           remoteBytes: null,
           changedFiles: 0,
           remoteAt: '',
+          localAt: '',
+          remoteVersion: '',
+          localVersion: '',
+          remoteHash: '',
+          localHash: '',
           reason: '',
         }
-        if (isOfficialExpert(record)) {
-          if (!official.ok) {
-            return { ...base, status: 'unknown', reason: `official registry unavailable: ${official.reason}` }
+        if (kind === 'expert') {
+          if (expertIndex === null) {
+            return { ...base, status: 'unknown', reason: `官方专家注册表不可用：${sourceError.expert}` }
           }
-          const cmp = compareOfficial(record, official.find(entryName))
-          return { ...base, status: cmp.status, remoteAt: cmp.remoteAt, reason: cmp.reason }
+          const cmp = compareOfficial(record, expertIndex.get(String(entryName)) ?? null)
+          return { ...base, status: cmp.status, remoteAt: cmp.remoteAt, localAt: cmp.localAt, reason: cmp.reason }
         }
-        if (!mirror.ok) {
-          return { ...base, status: 'unknown', reason: `mirror tree unavailable: ${mirror.reason}` }
+        if (kind === 'skill') {
+          if (!loggedIn) {
+            return { ...base, status: 'unknown', reason: '需要登录才能检查官方技能（官方技能数据需要 WorkBuddy 账号）' }
+          }
+          if (skillIndex === null) {
+            return { ...base, status: 'unknown', reason: `官方技能接口不可用：${sourceError.skill}` }
+          }
+          const officialId = record?.officialId === undefined || record?.officialId === null ? '' : String(record.officialId)
+          if (!officialId) {
+            return {
+              ...base, status: 'unknown',
+              reason: '本地记录缺少官方技能 ID（officialId），无法与官方比对；重装一次即可记录',
+            }
+          }
+          const cmp = compareSkillVersion(record, skillIndex.get(officialId) ?? null)
+          return { ...base, status: cmp.status, remoteVersion: cmp.remoteVersion, localVersion: cmp.localVersion, reason: cmp.reason }
         }
-        const prefix = `${kind}s/${entryName}/`
-        const remote = mirrorBlobs
-          .filter(blob => blob.path.startsWith(prefix))
-          .map(blob => ({ rel: blob.path.slice(prefix.length), sha: blob.sha, size: blob.size || 0 }))
-          .filter(blob => !skippedFromMirrorInstall(blob.rel))
-        const local = listLocalFiles(P.root, record?.dest)
-        if (!local.ok) return { ...base, status: 'unknown', reason: local.reason }
-        const cmp = compareMirror(record, remote, local.files)
-        return {
-          ...base,
-          status: cmp.status,
-          remoteBytes: cmp.remoteBytes,
-          changedFiles: cmp.changed.length + cmp.missing.length + cmp.extra.length,
-          reason: cmp.reason,
+        if (kind === 'connector') {
+          if (!loggedIn) {
+            return { ...base, status: 'unknown', reason: '需要登录才能检查官方连接器' }
+          }
+          if (connectorIndex === null) {
+            return { ...base, status: 'unknown', reason: `官方连接器注册表不可用：${sourceError.connector}` }
+          }
+          const cmp = compareConnectorDef(record, connectorIndex.get(String(entryName)) ?? null)
+          return { ...base, status: cmp.status, remoteHash: cmp.remoteHash, localHash: cmp.localHash, reason: cmp.reason }
         }
+        return { ...base, status: 'unknown', reason: `未知条目类型：${kind || '(空)'}` }
       })
 
       const body = {
@@ -1489,12 +1567,8 @@ export function apply(ctx, config = {}) {
         checkedAt: new Date(now).toISOString(),
         cached: false,
         sources: {
-          official: official.ok
-            ? { ok: true, at: official.at, skipped: Boolean(official.skipped) }
-            : { ok: false, at: official.at, reason: `official registry unavailable: ${official.reason}` },
-          mirror: mirror.ok
-            ? { ok: true, at: mirror.at, skipped: Boolean(mirror.skipped) }
-            : { ok: false, at: mirror.at, reason: `mirror tree unavailable: ${mirror.reason}` },
+          // 只有一个真源：官方。ok=false 时 reason 说明是哪一路取不到（未登录/接口失败）
+          official: { ok: failures.length === 0, at: now, reason: failures.join('；') },
         },
         counts: summarizeUpdates(entries),
         entries,
@@ -1505,11 +1579,26 @@ export function apply(ctx, config = {}) {
     }
 
     if (route === 'GET /connector-registry') {
+      const configured = Boolean(loadAuth(P.state)?.access_token)
+      if (!configured) {
+        json(res, 200, { ok: true, source: 'official', rows: [], error: '需要登录才能读取官方连接器注册表' })
+        return true
+      }
       try {
         const rows = await connectorRegistry(P.state)
-        json(res, 200, { ok: true, source: rows.length ? 'official' : 'mirror', rows })
+        json(res, 200, {
+          ok: true,
+          source: rows.length ? 'official' : (mirrorFallback ? 'mirror' : 'official'),
+          rows,
+          error: rows.length ? undefined : '官方连接器注册表为空',
+        })
       } catch (error) {
-        json(res, 200, { ok: true, source: 'mirror', rows: [], error: error.message })
+        json(res, 200, {
+          ok: true,
+          source: mirrorFallback ? 'mirror' : 'official',
+          rows: [],
+          error: String(error?.message || error),
+        })
       }
       return true
     }
@@ -1713,55 +1802,31 @@ export function apply(ctx, config = {}) {
       const body = JSON.parse((await readBody(req)) || '{}')
       const entryName = String(body.name || '')
       if (!/^[\w.-]+$/.test(entryName)) { json(res, 400, { error: 'invalid name' }); return true }
-      try {
-        const rows = await connectorRegistry(P.state)
-        const row = rows.find(r => r.name === entryName)
-        if (!row) { json(res, 404, { error: `connector not in official registry: ${entryName}` }); return true }
-        const gateway = row.mcp?.gateway_url
-        if (!gateway) { json(res, 400, { error: 'connector has no MCP gateway (CLI or skill-only connector)' }); return true }
-        const flags = []
-        // bearer() 会按需刷新并返回当前 access_token（auth 文件里是 access_token 字段）。
-        let token = ''
-        try { token = await bearer(P.state) } catch { token = '' }
-        if (token) {
-          try { await ctx.credentials?.set?.(WB_TOKEN_REF, token) }
-          catch (error) { flags.push(`credential store failed: ${String(error?.message || error)}`) }
-        } else {
-          flags.push('no official token: connector stays unusable until the account is connected')
-        }
-        const dest = join(P.connectors, entryName)
-        mkdirSync(dest, { recursive: true })
-        const mcp = {
-          mcpServers: {
-            [entryName]: {
-              transport: 'streamable-http',
-              url: gateway,
-              headers: { Authorization: `Bearer $\{${WB_TOKEN_REF}}` },
-            },
-          },
-        }
-        const mcpText = JSON.stringify(mcp, null, 2)
-        writeFileSync(join(dest, 'mcp.json'), mcpText)
-        const registry = loadJson(P.registry, { version: 1, installed: {} })
-        if (!registry.installed) registry.installed = {}
-        const key = `connector/${entryName}`
-        const previous = registry.installed[key]
-        registry.installed[key] = {
-          kind: 'connector', name: entryName, dest,
-          displayName: row.displayName || entryName,
-          description: row.description || '',
-          icon: row.icon || '',
-          installedAt: new Date().toISOString(),
-          files: 1, bytes: Buffer.byteLength(mcpText), flags,
-          linked: false,
-          enabled: Boolean(previous?.enabled),
-          official: true,
-        }
-        saveJson(P.registry, registry)
-        json(res, 200, { ok: true, key, dest, flags })
-      } catch (error) {
-        json(res, 502, { error: `connector install failed: ${String(error?.message || error)}` })
+      const landed = await landOfficialConnector(entryName)
+      if (!landed.ok) { json(res, landed.status, { error: landed.error }); return true }
+      const { dest, row, flags, bytes, defHash } = landed
+      const registry = loadJson(P.registry, { version: 1, installed: {} })
+      if (!registry.installed) registry.installed = {}
+      const key = `connector/${entryName}`
+      const previous = registry.installed[key]
+      registry.installed[key] = {
+        kind: 'connector', name: entryName, dest,
+        displayName: row.displayName || entryName,
+        description: row.description || '',
+        icon: row.icon || '',
+        installedAt: new Date().toISOString(),
+        files: 1, bytes, flags,
+        linked: false,
+        enabled: Boolean(previous?.enabled),
+        // 官方溯源：连接器没有 version/updatedAt，只有「安装时官方那行 MCP 定义」的哈希，
+        // 供 /updates 纯元数据比对（不碰 GitHub、不算文件 sha）。
+        source: 'official',
+        officialId: null,
+        official: true,
+        officialMeta: defHash ? { defHash } : null,
       }
+      saveJson(P.registry, registry)
+      json(res, 200, { ok: true, key, dest, flags })
       return true
     }
 
@@ -2071,10 +2136,14 @@ export function apply(ctx, config = {}) {
       if (!['expert', 'skill', 'connector'].includes(kind) || !/^[\w.-]+$/.test(entryName)) {
         json(res, 400, { error: 'invalid kind or name' }); return true
       }
-      // Experts prefer the official registry (same catalogue/copy the official
-      // client shows); the mirror is the fallback for anything not published there.
+      // 官方源优先（官方是唯一真源）：技能/专家/连接器都先走官方，
+      // 官方拿不到时才回落到 GitHub 镜像（灾备；连接器见下面的 mirrorFallback 说明）。
       let files, dest, report, officialMeta = null
-      if (kind === 'skill' && body.source === 'official') {
+      // 官方溯源：安装时把「装的是官方哪一版 / 哪份定义」如实记进注册表，
+      // 供 /updates 做纯官方元数据比对（技能 version / 专家 updatedAt / 连接器 defHash）。
+      let provenance = null
+      let officialFailure = ''
+      if (kind === 'skill' && body.source !== 'mirror') {
         // Official skill: the install request carries the human name, so resolve
         // name → skill_id first, then fetch the record with its download_url.
         try {
@@ -2117,21 +2186,59 @@ export function apply(ctx, config = {}) {
             source: 'official', officialId: rec.skill_id,
             icon: rec.icon,
           }
+          // 官方版本 / updated_at：老记录没有 officialMeta → /updates 给 unknown，不伪造
+          provenance = skillProvenance(rec)
         files = entries
         report = { files: count, bytes: total, flags: officialMeta.flags }
         } catch (error) {
-          json(res, 502, { error: `official skill install failed: ${error.message}` })
-          return true
+          officialFailure = String(error?.message || error)
+          // 官方装不上：只有显式打开灾备（mirrorFallback=true）才允许装镜像内容；
+          // 默认关时必须如实失败 —— 否则「官方是唯一真源」就成了一句空话。
+          if (!mirrorFallback) {
+            json(res, 502, { error: `官方技能安装失败，且镜像兜底已关闭（mirrorFallback=false）：${officialFailure}` })
+            return true
+          }
+          officialMeta = null // 灾备：回落到镜像内容（记录不带 officialMeta，/updates 会如实报 unknown）
         }
       } else if (kind === 'expert' && body.source !== 'mirror') {
         try {
           officialMeta = await installExpert(entryName, P.experts, skillPrefix)
           dest = officialMeta.dest
           report = { files: officialMeta.files, bytes: officialMeta.bytes, flags: officialMeta.flags }
+          provenance = expertProvenance(officialMeta)
           invalidateExpertCache() // 人设文件更新过，缓存作废
         } catch (error) {
+          officialFailure = String(error?.message || error)
           if (body.source === 'official') throw error
-          officialMeta = null // fall through to the mirror
+          if (!mirrorFallback) {
+            json(res, 502, { error: `官方专家安装失败，且镜像兜底已关闭（mirrorFallback=false）：${officialFailure}` })
+            return true
+          }
+          officialMeta = null // 灾备：回落到镜像内容
+        }
+      } else if (kind === 'connector') {
+        // 连接器只认官方注册表（与 POST /connectors/install 同一条链路）：
+        // 镜像里的 connectors 数据不参与安装；官方拿不到时才回落到镜像灾备。
+        const landed = await landOfficialConnector(entryName)
+        if (landed.ok) {
+          dest = landed.dest
+          report = { files: 1, bytes: landed.bytes, flags: landed.flags }
+          provenance = connectorProvenance(landed.row)
+          officialMeta = {
+            kind: 'connector', name: entryName, dest,
+            displayName: landed.row.displayName || entryName,
+            description: landed.row.description || '',
+            icon: landed.row.icon || '',
+            source: 'official', officialId: null,
+          }
+        } else if (!mirrorFallback) {
+          // 官方拿不到（未登录 / 上游失败）且灾备关闭 → 如实失败，不静默装镜像内容。
+          officialFailure = String(landed.error || 'official connector install failed')
+          json(res, landed.status || 502, { error: `官方连接器安装失败，且镜像兜底已关闭（mirrorFallback=false）：${officialFailure}` })
+          return true
+        } else {
+          // 灾备：回落到镜像内容，此时记录**不带** officialMeta —— /updates 会如实报 unknown。
+          officialMeta = null
         }
       }
       if (!officialMeta) {
@@ -2180,6 +2287,8 @@ export function apply(ctx, config = {}) {
         record.officialId = officialMeta.officialId ?? null
         if (officialMeta.icon) record.icon = officialMeta.icon
         record.official = true
+        // 官方溯源（可能为 null：官方记录本身缺字段时如实留空，/updates 会报 unknown）
+        record.officialMeta = provenance
       }
       registry.installed[key] = record
       saveJson(P.registry, registry)

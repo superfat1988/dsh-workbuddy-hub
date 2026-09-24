@@ -266,12 +266,22 @@ export async function skillDetails(ids, stateDir) {
   return json.data?.skills ?? []
 }
 
-/** Official connector registry (name/display/description/icon/auth_type/mcp). */
+/**
+ * Official connector registry (name/display/description/icon/auth_type/mcp).
+ *
+ * 需要登录，且失败**抛错**（不再静默返回 []）：调用方必须能区分「官方注册表为空」
+ * 与「未登录 / 上游失败」—— 检查更新时把后者判成「已是最新」或「已下架」都是错的。
+ */
 export async function connectorRegistry(stateDir) {
   const token = await bearer(stateDir)
-  if (!token) return []
+  if (!token) throw officialError('connector registry requires login', { status: 401 })
   const { status, json } = await call('GET', '/console/as/connector/registry2c/list?scope=all', { token })
-  if (status !== 200 || json?.code !== 0) return []
+  if (status !== 200 || json?.code !== 0) {
+    throw officialError(
+      `official connector registry failed: HTTP ${status} code=${json?.code} msg=${json?.msg}`,
+      { status, code: json?.code },
+    )
+  }
   const arr = json.data?.list ?? json.data?.items ?? json.data ?? []
   if (!Array.isArray(arr)) return []
   return arr.map(c => ({

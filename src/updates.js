@@ -1,91 +1,188 @@
 /**
- * 「检查更新」纯逻辑 —— 宿主（index.js 的 GET /updates）与单测共用。
+ * 「检查更新」纯逻辑 —— 宿主（index.js 的 GET /updates）与安装链路共用。
  *
  * 这里刻意**不依赖 DSH、不做任何 IO**（不读盘、不联网、不写注册表）：判定规则
  * 必须能被离线单测钉死，尤其是「查不到时不能判成已是最新」这条语义纪律 ——
  * 静默的假「已是最新」比报错更糟，用户会以为一切正常。
  *
- * 判定依据（数据事实）：
- *  · 官方专家有 updatedAt（expert_center.json 原始条目）→ 与本地 installedAt 比时间戳；
- *  · 技能/连接器没有版本字段 → 只能内容比对：镜像 tree API 的 blob sha 就是
- *    git blob sha1（"blob <len>\0<content>" 的 sha1），本地同法算一遍即可精确比对。
+ * 判定依据（**只认官方元数据**，不再碰 GitHub 镜像、不再算任何文件 sha）：
+ *  · 技能：官方 skill 记录的 `version` vs 安装时记下的 `officialMeta.version`；
+ *  · 专家：官方注册表原始条目的 `updatedAt` vs 安装时记下的 `officialMeta.updatedAt`
+ *    （老记录没有该字段时退回 `installedAt`）；
+ *  · 连接器：官方注册表该行 `mcp` 定义的规范化 JSON sha256 vs
+ *    安装时记下的 `officialMeta.defHash`。
+ *
+ * 安装链路用下面的 provenance 构造器把「装的是什么」如实记进注册表；老记录没有
+ * `officialMeta` 时一律 unknown（**不伪造**），提示用户重装一次即可记录。
  */
 import { createHash } from 'node:crypto'
 
-/** git blob sha1：`blob <字节长度>\0<内容>` 的 SHA-1 十六进制。
- *  与 `git hash-object --stdin` 完全一致（test-updates.mjs 会交叉验证）。
- *  @param {Buffer|string} content 二进制请直接传 Buffer（文本按 UTF-8 编码）
- */
-export function gitBlobSha(content) {
-  const buf = Buffer.isBuffer(content)
-    ? content
-    : Buffer.from(content == null ? '' : String(content), 'utf8')
-  const header = Buffer.from(`blob ${buf.length}\u0000`, 'utf8')
-  return createHash('sha1').update(header).update(buf).digest('hex')
+/* ------------------------------------------------------------------ *
+ * 官方连接器 MCP 定义的规范化哈希
+ * ------------------------------------------------------------------ */
+
+/** 参与哈希的字段（只取有语义的：地址、传输、鉴权、服务名）。顺序即规范顺序。 */
+export const MCP_DEF_FIELDS = [
+  'auth_mode',
+  'gateway_url',
+  'ide_server_name',
+  'sandbox_url',
+  'transport',
+  'upstream_url',
+]
+
+/** 稳定的 JSON 序列化：对象键按字典序，数组保序，其它按 JSON 原样。 */
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
+  const keys = Object.keys(value).sort()
+  return `{${keys.map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`
+}
+
+/** 标量 → 文本；null/undefined → ''（字段缺失与空串同值，避免「补了字段」就报更新）。 */
+function scalarText(value) {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return stableStringify(value)
 }
 
 /**
- * 官方专家：官方 updatedAt vs 本地 installedAt。
+ * 规范化 JSON：只取 {@link MCP_DEF_FIELDS}，每个字段都出现（缺失为 ''），键序固定。
+ * 非对象输入 → ''（调用方按「无法比对」处理，绝不猜）。
+ */
+export function canonicalMcpDef(mcp) {
+  if (mcp === null || typeof mcp !== 'object' || Array.isArray(mcp)) return ''
+  const out = {}
+  for (const key of MCP_DEF_FIELDS) out[key] = scalarText(mcp[key])
+  return JSON.stringify(out)
+}
+
+/** 官方 MCP 定义的 sha256（hex）。非对象 → ''。 */
+export function connectorDefHash(mcp) {
+  const canonical = canonicalMcpDef(mcp)
+  if (!canonical) return ''
+  return createHash('sha256').update(canonical, 'utf8').digest('hex')
+}
+
+/* ------------------------------------------------------------------ *
+ * 安装时记录的官方溯源（registry.installed[key].officialMeta）
+ * ------------------------------------------------------------------ */
+
+/** 技能：官方记录的 version / updated_at（缺 → null，不伪造）。 */
+export function skillProvenance(rec) {
+  if (!rec || typeof rec !== 'object') return null
+  const version = scalarText(rec.version) || null
+  const updatedAt = scalarText(rec.updated_at ?? rec.updatedAt) || null
+  return { version, updatedAt }
+}
+
+/** 专家：官方原始条目的 updatedAt（专家没有 version 字段）。 */
+export function expertProvenance(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  return { updatedAt: scalarText(raw.updatedAt) || null }
+}
+
+/** 连接器：官方该行 mcp 定义的规范化 sha256（没有 mcp 定义 → null）。 */
+export function connectorProvenance(row) {
+  const defHash = connectorDefHash(row?.mcp)
+  return defHash ? { defHash } : null
+}
+
+/* ------------------------------------------------------------------ *
+ * 三类比对
+ * ------------------------------------------------------------------ */
+
+function str(value) {
+  return typeof value === 'string' ? value : (value === null || value === undefined ? '' : String(value))
+}
+
+/**
+ * 官方专家：官方 updatedAt vs 安装时记录的官方 updatedAt（老记录退回 installedAt）。
  * 缺任一时间戳（或日期非法）→ unknown，绝不退化成 current。
- * @param {{installedAt?: string}} record 注册表记录
+ * @param {{installedAt?: string, officialMeta?: {updatedAt?: string}}} record 注册表记录
  * @param {{updatedAt?: string}|null|undefined} officialEntry 官方注册表**原始**条目
  *   （注意：wb-experts.normalise() 会把 updatedAt 丢掉，所以必须用 registry() 的原始条目）
  * @returns {{status:'current'|'update'|'unknown', remoteAt:string, localAt:string, reason:string}}
  */
 export function compareOfficial(record, officialEntry) {
-  const localAt = typeof record?.installedAt === 'string' ? record.installedAt : ''
-  if (!officialEntry) return { status: 'unknown', remoteAt: '', localAt, reason: '官方注册表未收录该条目' }
-  const remoteAt = typeof officialEntry.updatedAt === 'string' ? officialEntry.updatedAt : ''
-  if (!localAt) return { status: 'unknown', remoteAt, localAt, reason: '本地记录缺少 installedAt' }
+  const localAt = str(record?.officialMeta?.updatedAt) || str(record?.installedAt)
+  if (!officialEntry) {
+    return { status: 'unknown', remoteAt: '', localAt, reason: '官方注册表未收录该专家（可能已下架）' }
+  }
+  const remoteAt = str(officialEntry.updatedAt)
+  if (!localAt) {
+    return { status: 'unknown', remoteAt, localAt, reason: '本地记录缺少官方安装时间戳（officialMeta.updatedAt / installedAt）' }
+  }
   if (!remoteAt) return { status: 'unknown', remoteAt, localAt, reason: '官方条目缺少 updatedAt' }
   const remote = Date.parse(remoteAt)
   const local = Date.parse(localAt)
   if (Number.isNaN(remote)) return { status: 'unknown', remoteAt, localAt, reason: `官方 updatedAt 非法：${remoteAt}` }
-  if (Number.isNaN(local)) return { status: 'unknown', remoteAt, localAt, reason: `本地 installedAt 非法：${localAt}` }
+  if (Number.isNaN(local)) return { status: 'unknown', remoteAt, localAt, reason: `本地时间戳非法：${localAt}` }
   // 相等 = 已是最新（官方时间戳不会比安装时刻更晚才是更新）
   return { status: remote > local ? 'update' : 'current', remoteAt, localAt, reason: '' }
 }
 
 /**
- * 镜像条目：远端 blob 清单 vs 本地文件清单（rel 都是相对条目目录）。
- * **只有 rel 集合与每个 rel 的 sha 完全相同才判 current**；远端多一个（missing）、
- * 本地多一个（extra）、内容变了（changed）都算有差异 → update。
- * 远端清单为空 → unknown（镜像里根本没有这个条目，无法判断，绝不能当最新）。
- * @param {object} record 注册表记录（签名保留，便于将来加入更多依据）
- * @param {Array<{rel:string,sha:string,size?:number}>} remoteBlobs
- * @param {Array<{rel:string,sha:string,size?:number}>} localFiles
- * @returns {{status:'current'|'update'|'unknown', changed:string[], missing:string[],
- *   extra:string[], remoteBytes:number, reason:string}}
+ * 官方技能：官方记录的 version vs 安装时记录的 officialMeta.version。
+ * 找不到官方记录 / 本地缺 version / 官方缺 version → unknown。
+ * @param {{officialMeta?: {version?: string}}} record 注册表记录
+ * @param {{version?: string}|null|undefined} officialSkill 官方 skill 记录（按 skill_id 匹配）
+ * @returns {{status:'current'|'update'|'unknown', remoteVersion:string, localVersion:string, reason:string}}
  */
-export function compareMirror(record, remoteBlobs, localFiles) {
-  const remote = Array.isArray(remoteBlobs) ? remoteBlobs : null
-  const local = Array.isArray(localFiles) ? localFiles : null
-  const remoteBytes = remote ? remote.reduce((sum, blob) => sum + (Number(blob?.size) || 0), 0) : 0
-  if (!remote || !local) {
-    return { status: 'unknown', changed: [], missing: [], extra: [], remoteBytes, reason: '缺少远端或本地文件清单' }
+export function compareSkillVersion(record, officialSkill) {
+  const localVersion = str(record?.officialMeta?.version)
+  if (!officialSkill) {
+    return { status: 'unknown', remoteVersion: '', localVersion, reason: '官方市场已下架该技能（按 skill_id 查不到）' }
   }
-  const remoteMap = new Map(remote.map(blob => [String(blob?.rel ?? ''), String(blob?.sha ?? '')]))
-  const localMap = new Map(local.map(blob => [String(blob?.rel ?? ''), String(blob?.sha ?? '')]))
-  const changed = []
-  const missing = []
-  const extra = []
-  for (const [rel, sha] of remoteMap) {
-    if (!localMap.has(rel)) missing.push(rel)
-    else if (localMap.get(rel) !== sha) changed.push(rel)
+  const remoteVersion = str(officialSkill.version)
+  if (!localVersion) {
+    return {
+      status: 'unknown', remoteVersion, localVersion,
+      reason: '缺少安装时记录的官方版本（officialMeta.version），重装一次即可记录',
+    }
   }
-  for (const rel of localMap.keys()) if (!remoteMap.has(rel)) extra.push(rel)
-  changed.sort(); missing.sort(); extra.sort()
-  if (remote.length === 0) {
-    return { status: 'unknown', changed, missing, extra, remoteBytes, reason: '镜像里找不到该条目的文件' }
+  if (!remoteVersion) {
+    return { status: 'unknown', remoteVersion, localVersion, reason: '官方技能记录缺少 version，无法比对' }
   }
-  if (changed.length === 0 && missing.length === 0 && extra.length === 0) {
-    return { status: 'current', changed, missing, extra, remoteBytes, reason: '' }
+  if (remoteVersion !== localVersion) {
+    return {
+      status: 'update', remoteVersion, localVersion,
+      reason: `官方版本 ${remoteVersion} 与本地记录的 ${localVersion} 不同`,
+    }
   }
-  const parts = []
-  if (changed.length > 0) parts.push(`${changed.length} 个文件内容已变化`)
-  if (missing.length > 0) parts.push(`${missing.length} 个文件本地缺失`)
-  if (extra.length > 0) parts.push(`本地多出 ${extra.length} 个文件`)
-  return { status: 'update', changed, missing, extra, remoteBytes, reason: parts.join('、') }
+  return { status: 'current', remoteVersion, localVersion, reason: '' }
+}
+
+/**
+ * 官方连接器：官方该行 mcp 定义的规范化 sha256 vs 安装时记录的 officialMeta.defHash。
+ * 找不到官方行 / 本地缺 defHash / 官方缺 mcp 定义 → unknown。
+ * @param {{officialMeta?: {defHash?: string}}} record 注册表记录
+ * @param {{mcp?: object}|null|undefined} officialRow 官方注册表行
+ * @returns {{status:'current'|'update'|'unknown', remoteHash:string, localHash:string, reason:string}}
+ */
+export function compareConnectorDef(record, officialRow) {
+  const localHash = str(record?.officialMeta?.defHash)
+  if (!officialRow) {
+    return { status: 'unknown', remoteHash: '', localHash, reason: '官方连接器注册表未收录该连接器（可能已下架）' }
+  }
+  if (!localHash) {
+    return {
+      status: 'unknown', remoteHash: '', localHash,
+      reason: '缺少安装时记录的官方 MCP 定义哈希（officialMeta.defHash），重装一次即可记录',
+    }
+  }
+  if (!officialRow.mcp) {
+    return { status: 'unknown', remoteHash: '', localHash, reason: '官方连接器条目缺少 MCP 定义，无法比对' }
+  }
+  const remoteHash = connectorDefHash(officialRow.mcp)
+  if (!remoteHash) {
+    return { status: 'unknown', remoteHash: '', localHash, reason: '官方 MCP 定义无法规范化，无法比对' }
+  }
+  if (remoteHash !== localHash) {
+    return { status: 'update', remoteHash, localHash, reason: '官方 MCP 定义已变化' }
+  }
+  return { status: 'current', remoteHash, localHash, reason: '' }
 }
 
 /** 汇总计数：只认 current / update / unknown 三种状态（其它值忽略，不臆造桶）。 */
