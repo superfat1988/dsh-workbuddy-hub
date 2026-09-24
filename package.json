@@ -32,19 +32,20 @@
   "client.css",
   "client.js",
   "cordis.patch.yml",
-  "expert-persona.js",
   "index.js",
+  "expert-persona.js",
   "mcp-manager.js",
+  "wb-market.js",
+  "wb-experts.js",
+  "wb-cats.js",
+  "wb-unzip.js",
+  "skills",
   "src",
-  "test-client.mjs",
-  "test-connector-cli.mjs",
-  "test-expert-persona.mjs",
-  "test-session-contract.mjs",
-  "test-summon.mjs"
+  "test-*.mjs"
  ],
  "scripts": {
   "build:client": "node scripts/build.mjs",
-  "test": "node --check index.js && node --check wb-market.js && node --check src/keepalive.js && node --check client.js && node --check mcp-manager.js && node --check expert-persona.js && node test-mcp-manager.mjs && node test-expert-persona.mjs && node test-connector-cli.mjs && node test-summon.mjs && node test-client.mjs && node test-render.mjs && node test-session-contract.mjs && node test-pending-expert.mjs && node test-auth-store.mjs && node test-keepalive.mjs && node test-install.mjs",
+  "test": "node --check index.js && node --check wb-market.js && node --check src/keepalive.js && node --check client.js && node --check mcp-manager.js && node --check expert-persona.js && node test-mcp-manager.mjs && node test-expert-persona.mjs && node test-connector-cli.mjs && node test-summon.mjs && node test-client.mjs && node test-render.mjs && node test-session-contract.mjs && node test-pending-expert.mjs && node test-auth-store.mjs && node test-keepalive.mjs && node test-install.mjs && node test-package.mjs",
   "pack:check": "npm pack --dry-run",
   "test:live": "node test-install-live.mjs"
  },
