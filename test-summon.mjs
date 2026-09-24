@@ -36,7 +36,10 @@ const ctx = {
   },
 }
 
-apply(ctx, { storeRoot: '~/workbuddyskills' })
+// keepalive:false —— 本测试用的是**真实** storeRoot（~/workbuddyskills），里面可能
+// 存着用户真实凭证；保活定时器一旦跑起来会真的去调官方 refresh 接口，消耗用户的
+// refresh_token。测试里必须关掉它（保活本身由 test-keepalive.mjs 用假凭证覆盖）。
+apply(ctx, { storeRoot: '~/workbuddyskills', keepalive: false })
 
 assert.deepEqual([...registered.keys()].sort(), ['connector', 'expert'])
 // credential rotation listener must be installed

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react'
-import { hub, addSelection, peekPendingExpert, clearPendingExpert, onCatalogChange, onMarketRequest, setComposerSession, authState, onAuthChange, refreshAuth, onAuthRequired, claimAuthGate, settleAuthGate } from './hub.js'
+import { hub, addSelection, peekPendingExpert, clearPendingExpert, onCatalogChange, onMarketRequest, setComposerSession, authState, onAuthChange, refreshAuth, onAuthRequired, claimAuthGate, settleAuthGate, STALE_LOGIN_REASON } from './hub.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
 import Catalogue from './Catalogue.jsx'
@@ -235,15 +235,16 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
     return pool
   }, [installed, mounted])
 
-  // 二级面板底部：未登录时加一行登录入口（三个面板都能看到，因为放在 footer 里）。
-  // 登录方式只有二维码一种，点开的是 variant="modal" 的同一个登录卡组件。
+  // 二级面板底部：未登录（或已登录但凭证失效）时加一行登录入口（三个面板都能看到，
+  // 因为放在 footer 里）。登录方式只有二维码一种，点开的是 variant="modal" 的同一个登录卡组件。
   // auth 还没拉到时先不显示（避免「已登录」被闪成未登录）。
-  const authFooter = (auth == null || auth.configured === true) ? null : (
+  const authStaleNow = auth?.configured === true && auth?.stale === true
+  const authFooter = (auth == null || (auth.configured === true && !authStaleNow)) ? null : (
     <div className="wbh-flyoutFooterItem wbh-flyoutLogin" role="menuitem" tabIndex={0}
       onClick={e => { e.stopPropagation(); setShowAuth(true) }}
       onKeyDown={e => { if (e.key === 'Enter') setShowAuth(true) }}>
       <span className="wbh-flyoutFooterIcon"><PickIcon name="tabExpert" size={16} /></span>
-      <span className="wbh-flyoutFooterLabel">未登录 · 登录后可加载官方目录</span>
+      <span className="wbh-flyoutFooterLabel">{authStaleNow ? '登录已失效 · 重新扫码' : '未登录 · 登录后可加载官方目录'}</span>
     </div>
   )
 
@@ -323,6 +324,7 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
       )}
       {showAuth && (
         <WbAuthCard variant="modal"
+          reason={authStaleNow ? STALE_LOGIN_REASON : ''}
           onClose={() => { setShowAuth(false); settleAuthGate(false); void refreshAuth() }}
           onDone={() => { void refresh() }} />
       )}

@@ -217,6 +217,8 @@
 .wbh-accountChip:hover{background:var(--wb-bg-hover,#f0f0f0)}
 .wbh-accountChip.is-on{background:var(--wb-bg-primary,#fff)}
 .wbh-accountChip.is-loading{cursor:default;color:var(--wb-color-text-tertiary)}
+/* 已登录但凭证失效（stale）：用警示色提示「需要重新登录」，不再伪装成正常账号 */
+.wbh-accountChip.is-stale{background:#fff7e6;border-color:#ffd591;color:#ad4e00}
 .wbh-accountChip .wbh-dot{flex:none}
 .wbh-accountPop{position:absolute;top:calc(100% + 6px);right:0;z-index:6250;min-width:220px;padding:8px;border:1px solid var(--wb-border-default,#e5e5e5);border-radius:12px;background:var(--wb-bg-primary,#fff);box-shadow:0 10px 30px rgba(0,0,0,.12);animation:wbhPopIn .15s ease}
 .wbh-accountRow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:5px 8px;font-size:12px;color:var(--wb-color-text-primary)}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { hub, addSelection, summonExpertInNewSession, authState, onAuthChange, refreshAuth, onAuthRequired, claimAuthGate, settleAuthGate } from './hub.js'
+import { hub, addSelection, summonExpertInNewSession, authState, onAuthChange, refreshAuth, onAuthRequired, claimAuthGate, settleAuthGate, authStale, STALE_LOGIN_REASON } from './hub.js'
 import { insertPromptIntoComposer } from './insert-prompt.js'
 import { WbIcon } from './icons.js'
 import Catalogue from './Catalogue.jsx'
@@ -12,17 +12,25 @@ import './app.css'
 /**
  * 顶栏右侧账号胶囊（紧邻搜索框）：
  *  · 未登录 → 可点胶囊「未登录 · 登录」，点开 modal 登录卡
+ *  · 已登录但 stale（凭证已彻底失效）→ 可点胶囊「登录已失效 · 重新登录」，点开登录卡
  *  · 已登录 → 显示昵称（无昵称退化为 uid /「已登录」），点开小下拉：账号信息 + 注销
  */
 function AccountCapsule({ auth, onLogin }) {
   const [open, setOpen] = useState(false)
   const loggedIn = auth?.configured === true
-  const label = loggedIn ? (auth?.nickname || auth?.uid || '已登录') : '未登录 · 登录'
+  const stale = loggedIn && auth?.stale === true
+  const label = !loggedIn
+    ? '未登录 · 登录'
+    : (stale ? '登录已失效 · 重新登录' : (auth?.nickname || auth?.uid || '已登录'))
   // 登录态还没拉到时先不猜：显示占位胶囊，避免「已登录」被闪成「未登录」
   if (auth == null) return <span className="wbh-accountChip is-loading" aria-hidden="true">…</span>
-  if (!loggedIn) {
+  // stale 视同未登录：不再展示账号下拉，直接引导重新扫码
+  if (!loggedIn || stale) {
     return (
-      <button type="button" className="wbh-accountChip" aria-label="登录 WorkBuddy 账号" onClick={onLogin}>
+      <button type="button" className={`wbh-accountChip${stale ? ' is-stale' : ''}`}
+        aria-label={stale ? 'WorkBuddy 登录已失效，重新登录' : '登录 WorkBuddy 账号'}
+        title={stale ? (auth?.lastError || STALE_LOGIN_REASON) : undefined}
+        onClick={onLogin}>
         <i className="wbh-dot off" />{label}
       </button>
     )
@@ -169,6 +177,7 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
       )}
       {showAuth && (
         <WbAuthCard variant="modal"
+          reason={authStale(auth) ? STALE_LOGIN_REASON : ''}
           onClose={() => { setShowAuth(false); settleAuthGate(false); void refresh() }}
           onDone={() => { void refresh() }} />
       )}

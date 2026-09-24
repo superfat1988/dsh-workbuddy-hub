@@ -145,12 +145,27 @@ const _emitChange = () => { for (const fn of _changeListeners) { try { fn() } ca
  * 登录态 store（市场页 / 连接器页 / picker / 设置区共用）
  * ------------------------------------------------------------------ */
 
-/** 缓存的登录态 { configured, nickname, uid, expiresAt }；未拉取过时为 null。 */
+/**
+ * 缓存的登录态；未拉取过时为 null。宿主 GET /wb-auth 返回：
+ * { configured, uid, nickname, expiresAt, stale, lastError, keepalive:{ lastCheckAt, consecutiveFailures } }
+ * stale=true 表示「已登录但凭证已彻底失效」（连续 3 次保活刷新失败 / 官方 12153
+ * 累计到阈值）—— 必须当作**需要重新登录**看待，否则用户只会看到一堆静默失败。
+ */
 let _authCache = null
 const _authListeners = new Set()
 
 /** 读取缓存的登录态（同步；null = 还没拉过）。 */
 export function authState() { return _authCache }
+
+/**
+ * 登录态是否「已失效」：已登录但 stale。
+ * 界面据此把 stale 视同未登录（显示登录卡 / 登录行），requireAuth 据此拦下动作。
+ */
+export function authStale(auth = _authCache) { return auth?.configured === true && auth?.stale === true }
+
+/** stale 时统一的提示文案（登录卡 / 账号胶囊共用，避免各处措辞不一）。 */
+export const STALE_LOGIN_REASON = '登录已失效，请重新扫码'
+
 /** 订阅登录态变化；返回取消函数。 */
 export function onAuthChange(fn) { _authListeners.add(fn); return () => { _authListeners.delete(fn) } }
 const _emitAuth = () => { for (const fn of _authListeners) { try { fn(_authCache) } catch {} } }
@@ -212,22 +227,26 @@ export function settleAuthGate(ok) {
 }
 
 /**
- * 动作级 JIT 登录：已登录直接 resolve；否则打开登录卡并等待结果。
+ * 动作级 JIT 登录：已登录（且凭证未失效）直接 resolve；否则打开登录卡并等待结果。
  * 成功 → resolve(登录态)；取消 → reject；没有任何界面能显示登录卡 → reject（不挂起）。
  * @param {{ reason?: string, surface?: string }} options
  *   reason 会显示在登录卡上（说明为什么要登录）；surface 指定由哪个界面显示登录卡。
  */
 export function requireAuth({ reason = '', surface = '' } = {}) {
-  if (_authCache?.configured === true) return Promise.resolve(_authCache)
+  // 「已登录但 stale」= 凭证已失效，同样要拦下来重新扫码（不能只看 configured）
+  const stale = authStale()
+  if (_authCache?.configured === true && !stale) return Promise.resolve(_authCache)
+  // stale 且调用方没给原因时，用统一文案（用户得知道为什么要再扫一次）
+  const why = reason || (stale ? STALE_LOGIN_REASON : '')
   // 单槽位：新动作取代旧的未决请求，避免多个动作同时等同一张卡
   if (_authGate) {
-    const stale = _authGate
+    const staleGate = _authGate
     _authGate = null
-    stale.reject(new Error('登录请求已被新的操作取代'))
+    staleGate.reject(new Error('登录请求已被新的操作取代'))
   }
   return new Promise((resolve, reject) => {
-    _authGate = { reason, surface, at: Date.now(), claimed: false, resolve, reject }
-    for (const fn of _authRequiredListeners) { try { fn({ reason, surface }) } catch { /* 忽略单个订阅者 */ } }
+    _authGate = { reason: why, surface, at: Date.now(), claimed: false, resolve, reject }
+    for (const fn of _authRequiredListeners) { try { fn({ reason: why, surface }) } catch { /* 忽略单个订阅者 */ } }
     // 订阅者是同步回调：这里就能知道有没有界面认领。没人认领就别挂起调用方。
     if (!_authGate?.claimed) {
       _authGate = null

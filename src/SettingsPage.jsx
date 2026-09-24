@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react'
-import { hub, refreshAuth, onAuthChange } from './hub.js'
+import { hub, refreshAuth, onAuthChange, STALE_LOGIN_REASON } from './hub.js'
 import { WbIcon } from './icons.js'
 import WbAuthCard from './WbAuthCard.jsx'
 
@@ -18,6 +18,8 @@ export default function SettingsPage() {
   useEffect(() => onAuthChange(setAuth), [])
 
   const loggedIn = auth?.configured === true
+  // 已登录但凭证彻底失效（连续保活刷新失败 / 官方 12153 达阈值）→ 显示重新登录
+  const stale = loggedIn && auth?.stale === true
   const entries = Object.values(installed)
 
   return (
@@ -25,18 +27,29 @@ export default function SettingsPage() {
       <h2 className="wbh-secTitle">腾讯账号（官方市场数据）</h2>
       <div className="wbh-row">
         <span className="wbh-authState">
-          <i className={`wbh-dot${loggedIn ? '' : ' off'}`} />
-          {loggedIn
-            ? `已登录${auth?.nickname ? ` · ${auth.nickname}` : ''}`
-            : '未登录 — 官方专家/技能目录与用量数据需要登录'}
+          <i className={`wbh-dot${loggedIn && !stale ? '' : ' off'}`} />
+          {stale
+            ? `登录已失效${auth?.nickname ? ` · ${auth.nickname}` : ''} — ${auth?.lastError || STALE_LOGIN_REASON}`
+            : (loggedIn
+              ? `已登录${auth?.nickname ? ` · ${auth.nickname}` : ''}`
+              : '未登录 — 官方专家/技能目录与用量数据需要登录')}
         </span>
-        {loggedIn
+        {loggedIn && !stale
           ? <button type="button" className="wbh-btnGhost" onClick={async () => { await hub.authLogout(); await refresh() }}>注销</button>
           : <button type="button" className="wbh-btnPrimary" onClick={() => setShowAuth(true)}>扫码登录</button>}
       </div>
-      {loggedIn && auth?.expiresAt && (
+      {loggedIn && !stale && auth?.expiresAt && (
         <div className="wbh-row">
-          <span className="wbh-muted">授权到期：{new Date(auth.expiresAt).toLocaleString('zh-CN')}；token 到期前自动刷新</span>
+          <span className="wbh-muted">授权到期：{new Date(auth.expiresAt).toLocaleString('zh-CN')}；token 到期前自动刷新（后台每 30 分钟巡检一次保活）</span>
+        </div>
+      )}
+      {stale && (
+        <div className="wbh-row">
+          <span className="wbh-muted">
+            后台保活已连续失败 {auth?.keepalive?.consecutiveFailures ?? 0} 次
+            {auth?.keepalive?.lastCheckAt ? `（最后巡检 ${new Date(auth.keepalive.lastCheckAt).toLocaleString('zh-CN')}）` : ''}
+            ；refresh_token 已失效，需要重新扫码登录。
+          </span>
         </div>
       )}
 
@@ -58,7 +71,7 @@ export default function SettingsPage() {
       <p className="wbh-muted" style={{ marginTop: 16 }}>
         需要 OAuth 或 API Key 的连接器会在启用时发起独立授权；本页与浏览器端不会展示任何凭据值。
       </p>
-      {showAuth && <WbAuthCard onClose={() => { setShowAuth(false); void refresh() }} />}
+      {showAuth && <WbAuthCard reason={stale ? STALE_LOGIN_REASON : ''} onClose={() => { setShowAuth(false); void refresh() }} />}
     </section>
   )
 }

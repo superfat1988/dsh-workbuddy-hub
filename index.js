@@ -17,7 +17,8 @@
  */
 import { homedir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
-import { loginStart, loginPoll, loadAuth, saveAuth, bearer, marketList, marketCategories, connectorRegistry, connectorBound, connectorAuthStart, connectorRevoke, connectorOauthStatus } from './wb-market.js'
+import { loginStart, loginPoll, loadAuth, saveAuth, bearer, marketList, marketCategories, connectorRegistry, connectorBound, connectorAuthStart, connectorRevoke, connectorOauthStatus, refreshIfNeeded, loadAuthHealth, saveAuthHealth, clearAuthHealth, onAuthEvent } from './wb-market.js'
+import { KEEPALIVE_THRESHOLD_MS, reduceHealth, touchCheck, isStale } from './src/keepalive.js'
 import { listExperts, categories as officialCategories, installExpert } from './wb-experts.js'
 import { skillDetails } from './wb-market.js'
 import { unzip } from './wb-unzip.js'
@@ -926,6 +927,78 @@ export function apply(ctx, config = {}) {
     return cache
   }
 
+  /* ---------------------------------------------------------------- *
+   * 账号保活（keepalive）+「已登录但凭证失效」判定
+   *
+   * 背景：refresh_token 本身也会过期 —— 长期不打开 DSH / 不访问市场时，只有
+   * 「有请求才刷」的惰性刷新（wb-market.bearer）根本不会触发，凭证最终彻底失效。
+   * 因此这里按上游 workbuddy2api 的规则做**主动**保活：
+   *  · 周期 30 分钟巡检一次（上游按整点、每日 22:00 集中保活；本插件随 DSH 长驻，
+   *    30 分钟一次成本可忽略且更稳）；启动后先立刻巡检一次，但不阻塞插件加载；
+   *  · 剩余寿命不足 2 小时（KEEPALIVE_THRESHOLD_MS）就主动 refresh；
+   *  · 连续 3 次失败（含官方 12153）判「会话失效」→ 需要用户重新扫码；
+   *  · 用「运行中」标志防重入（对应上游调度器的运行锁）。
+   * 纯判定逻辑在 src/keepalive.js（可单测），这里只做调度与落盘。
+   * ---------------------------------------------------------------- */
+  const AUTH_KEEPALIVE_INTERVAL_MS = 30 * 60 * 1000
+
+  /** 读健康档 → 应用一个保活事件 → 落盘；返回最新健康档。 */
+  const noteAuthHealth = (type, error) => {
+    const next = reduceHealth(loadAuthHealth(P.state), {
+      type,
+      at: Date.now(),
+      error: error ? String(error?.message || error).slice(0, 300) : '',
+    })
+    saveAuthHealth(P.state, next)
+    return next
+  }
+
+  /** 未到阈值（本次没有真正刷新）：只更新巡检时间，成功/失败计数都不动。 */
+  const noteAuthCheckOnly = () => saveAuthHealth(P.state, touchCheck(loadAuthHealth(P.state), Date.now()))
+
+  // 官方任意接口返回 12153（session 失效）→ 与定时巡检走同一套计数。
+  // refresh 端点自身的 12153 不在广播范围内（由 refreshIfNeeded 的返回值计数），
+  // 所以同一次失败不会被记两遍。
+  ctx.effect(() => onAuthEvent(event => {
+    if (event?.type === 'session-dead') noteAuthHealth('session-dead', event.error)
+    else if (event?.type === 'refresh-ok') noteAuthHealth('refresh-ok')
+  }), 'workbuddy-hub: auth keepalive events')
+
+  // 保活定时器：apply() 时启动，插件卸载 / ctx 销毁时清掉。
+  ctx.effect(() => {
+    if (cfg.keepalive === false) return () => {}   // 显式关闭（测试/排障用）
+    let running = false       // 运行锁：上一轮没跑完就跳过本轮，绝不重入
+    let stopped = false
+    const tick = async () => {
+      if (stopped || running) return
+      running = true
+      try {
+        const auth = loadAuth(P.state)
+        if (!auth?.access_token) return                     // 未登录：跳过，不写健康档
+        const result = await refreshIfNeeded(P.state, { thresholdMs: KEEPALIVE_THRESHOLD_MS })
+        if (result.ok) {
+          if (result.refreshed) noteAuthHealth('refresh-ok') // 成功 → 连续失败清零
+          else noteAuthCheckOnly()                          // 未到阈值 → 不算成功也不算失败
+        } else if (result.reason === 'no-credentials') {
+          return                                            // 没有 refresh_token：交给重新登录
+        } else {
+          // 刷新失败 → 计数加一；官方 12153 直接按 session-dead 记（共用同一计数器）
+          noteAuthHealth(result.sessionDead ? 'session-dead' : 'refresh-fail', result.error)
+        }
+      } catch (error) {
+        noteAuthHealth('refresh-fail', error)               // 兜底：任何异常都算一次失败
+      } finally {
+        running = false
+      }
+    }
+    // 「开服先巡检」：立刻排一次，但用 setTimeout 0 让出加载流程（不阻塞 apply）
+    const first = setTimeout(() => { void tick() }, 0)
+    const timer = setInterval(() => { void tick() }, AUTH_KEEPALIVE_INTERVAL_MS)
+    // unref：定时器不把进程吊住（短命进程 / 测试里不会因为它在后台而挂住）
+    first.unref?.(); timer.unref?.()
+    return () => { stopped = true; clearTimeout(first); clearInterval(timer) }
+  }, 'workbuddy-hub: auth keepalive timer')
+
   const handler = async (req, res) => {
     const url = new URL(req.url, 'http://localhost')
     if (!url.pathname.startsWith(PREFIX)) return false
@@ -975,10 +1048,21 @@ export function apply(ctx, config = {}) {
     // ---- official account (OAuth device flow) ----
     if (route === 'GET /wb-auth') {
       const auth = loadAuth(P.state)
+      const health = loadAuthHealth(P.state)
+      const configured = Boolean(auth?.access_token)
       json(res, 200, {
-        configured: Boolean(auth?.access_token),
+        // 以下三个字段保持原样（客户端已在用，只增不改）
+        configured,
         uid: auth?.uid, nickname: auth?.nickname,
         expiresAt: auth ? (auth.obtainedAt ?? 0) + (auth.expires_in ?? 3600) * 1000 : null,
+        // 新增：保活健康度。stale = 连续 3 次刷新失败（或官方 12153 累计到阈值）
+        // → 凭证已彻底失效，需要用户重新扫码登录。
+        stale: configured && isStale(health),
+        lastError: health.lastError || '',
+        keepalive: {
+          lastCheckAt: health.lastCheckAt || 0,
+          consecutiveFailures: health.consecutiveFailures || 0,
+        },
       })
       return true
     }
@@ -998,6 +1082,8 @@ export function apply(ctx, config = {}) {
       try {
         const auth = await loginPoll(st.state)
         saveAuth(P.state, auth)
+        // 重新登录成功 = 一次成功：清空保活健康档（stale 立即解除）
+        clearAuthHealth(P.state)
         rmSync(P.loginState, { force: true })
         json(res, 200, { ok: true, nickname: auth.nickname, uid: auth.uid })
       } catch (error) {
@@ -1006,7 +1092,11 @@ export function apply(ctx, config = {}) {
       return true
     }
     if (route === 'POST /wb-auth/logout') {
-      rmSync(P.state.join('workbuddy-auth.json'), { force: true })
+      // 修 bug：P.state 是**字符串**路径，旧代码写 P.state.join(...) 必然抛 TypeError
+      // （被兜底 handler 变成 500），注销从来没真正删掉凭证 —— 用户点了注销仍显示已登录。
+      rmSync(join(P.state, 'workbuddy-auth.json'), { force: true })
+      // 注销后不该残留「会话失效」状态（否则下次登录前会显示旧错误）
+      clearAuthHealth(P.state)
       json(res, 200, { ok: true })
       return true
     }

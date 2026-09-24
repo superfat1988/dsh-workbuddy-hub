@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { hub, onCatalogChange, addSelection, openMarket, onMarketRequest, consumePendingMarket, recentExpertNames, authState, onAuthChange, refreshAuth, requireAuth } from './hub.js'
+import { hub, onCatalogChange, addSelection, openMarket, onMarketRequest, consumePendingMarket, recentExpertNames, authState, onAuthChange, refreshAuth, requireAuth, authStale, STALE_LOGIN_REASON } from './hub.js'
 import { insertPromptIntoComposer } from './insert-prompt.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
@@ -292,13 +292,17 @@ export default function Catalogue({
       setAuth(next)
       // 登录成功（未登录 → 已登录）后自动刷新连接器列表：登录完就能看到数据。
       // was 为 null（首次拉取）时不算「登录成功」，避免和挂载时的 load 重复请求。
-      if (next?.configured === true && was && was.configured !== true) {
+      // 「stale → 重新登录成功」也走这里：was.stale 为真说明凭证失效过，必须重拉。
+      if (next?.configured === true && next?.stale !== true && was
+        && (was.configured !== true || was.stale === true)) {
         void load(1, true)
         hub.boundConnectors().then(r => setBound(r.map(x => x.name))).catch(() => {})
       }
     })
   }, [load])
   const loggedIn = auth?.configured === true
+  // 已登录但凭证已失效（stale）→ 连接器页视同未登录：显示登录卡而不是一堆静默失败
+  const authStaleNow = loggedIn && auth?.stale === true
   const isBound = useCallback(entry => bound.includes(entry.name), [bound])
 
   // 懒加载：接近底部继续取下一页
@@ -385,12 +389,16 @@ export default function Catalogue({
     setBusyLocal(key); setNotice('')
     // 动作级 JIT 登录：连接/绑定/启用都走官方 OAuth，未登录时先就地拉起登录卡，
     // 登录成功后**自动继续**刚才被拦下的动作（requireAuth 的 resolve 语义）。
-    if (authState()?.configured !== true) {
+    // 「已登录但 stale」同样要拦：凭证已彻底失效，继续下去只会静默失败。
+    const staleNow = authStale(authState())
+    if (authState()?.configured !== true || staleNow) {
       setBusyLocal('')
-      setNotice(`连接「${entry.displayName}」需要 WorkBuddy 账号，请扫码登录`)
+      setNotice(staleNow
+        ? `登录已失效，请重新扫码后再连接「${entry.displayName}」`
+        : `连接「${entry.displayName}」需要 WorkBuddy 账号，请扫码登录`)
       try {
         await requireAuth({
-          reason: `连接「${entry.displayName}」需要 WorkBuddy 账号`,
+          reason: staleNow ? STALE_LOGIN_REASON : `连接「${entry.displayName}」需要 WorkBuddy 账号`,
           // 由发起动作的那个界面显示登录卡：page=市场页，picker=输入框「＋」
           surface: variant === 'picker' ? 'picker' : 'page',
         })
@@ -447,6 +455,9 @@ export default function Catalogue({
     } catch (error) {
       try { authWindow?.close() } catch { /* 忽略 */ }
       setNotice(`操作失败：${String(error?.message || error)}`)
+      // 失败原因可能是凭证失效（官方 12153）：顺手重拉一次登录态，
+      // 宿主一旦判 stale，本页立刻切成登录卡，而不是让用户继续撞同一堵墙。
+      void refreshAuth()
     } finally { setBusyLocal('') }
   }, [isBound, onRefresh, installed])
 
@@ -497,16 +508,17 @@ export default function Catalogue({
 
   const busyAll = busyLocal || busy
 
-  // 连接器页未登录：不显示「暂无连接器」空白、也不显示镜像目录，直接就地嵌登录卡（无遮罩、不可关闭）
+  // 连接器页未登录（或已登录但凭证失效）：不显示「暂无连接器」空白、也不显示镜像
+  // 目录，直接就地嵌登录卡（无遮罩、不可关闭），并在卡上说明原因。
   const connectorLoginGate = (variant === 'page' && kind === 'connector')
     ? (auth === null
       ? <div className="wbh-state"><p>正在读取登录状态…</p></div>
-      : (loggedIn
+      : (loggedIn && !authStaleNow
         ? null
         : (
           <div className="wbh-loginGate">
             <WbAuthCard variant="inline" title="登录 WorkBuddy 账号"
-              reason="连接器目录、账号绑定与授权需要 WorkBuddy 账号" />
+              reason={authStaleNow ? STALE_LOGIN_REASON : '连接器目录、账号绑定与授权需要 WorkBuddy 账号'} />
           </div>
         )))
     : null
