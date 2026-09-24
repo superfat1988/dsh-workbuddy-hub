@@ -300,17 +300,21 @@ export function landEntry(paths, kind, entryName, files) {
   return { dest, report }
 }
 
-/** Symlink ~/.dsh/skills/<prefix><name> → storeRoot/skills/<name>. */
-export function linkSkill(paths, prefix, entryName) {
-  const linkPath = join(homedir(), '.dsh', 'skills', `${prefix}${entryName}`)
+/** DSH skills 挂载目录（默认 ~/.dsh/skills；参数化是为了让测试不碰用户真实目录）。 */
+export function skillsMountRoot() { return join(homedir(), '.dsh', 'skills') }
+
+/** Symlink <skillsRoot>/<prefix><name> → storeRoot/skills/<name>. */
+export function linkSkill(paths, prefix, entryName, skillsRoot = skillsMountRoot()) {
+  const linkPath = join(skillsRoot, `${prefix}${entryName}`)
   const target = join(paths.skills, entryName)
+  mkdirSync(skillsRoot, { recursive: true })
   try { lstatSync(linkPath); unlinkSync(linkPath) } catch { /* absent */ }
   symlinkSync(target, linkPath)
   return linkPath
 }
 
-export function unlinkSkill(prefix, entryName) {
-  const linkPath = join(homedir(), '.dsh', 'skills', `${prefix}${entryName}`)
+export function unlinkSkill(prefix, entryName, skillsRoot = skillsMountRoot()) {
+  const linkPath = join(skillsRoot, `${prefix}${entryName}`)
   try { lstatSync(linkPath); unlinkSync(linkPath) } catch { /* absent */ }
   return linkPath
 }
