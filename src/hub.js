@@ -141,6 +141,101 @@ const _changeListeners = new Set()
 export const onCatalogChange = fn => { _changeListeners.add(fn); return () => { _changeListeners.delete(fn) } }
 const _emitChange = () => { for (const fn of _changeListeners) { try { fn() } catch {} } }
 
+/* ------------------------------------------------------------------ *
+ * 登录态 store（市场页 / 连接器页 / picker / 设置区共用）
+ * ------------------------------------------------------------------ */
+
+/** 缓存的登录态 { configured, nickname, uid, expiresAt }；未拉取过时为 null。 */
+let _authCache = null
+const _authListeners = new Set()
+
+/** 读取缓存的登录态（同步；null = 还没拉过）。 */
+export function authState() { return _authCache }
+/** 订阅登录态变化；返回取消函数。 */
+export function onAuthChange(fn) { _authListeners.add(fn); return () => { _authListeners.delete(fn) } }
+const _emitAuth = () => { for (const fn of _authListeners) { try { fn(_authCache) } catch {} } }
+
+/** 重新拉取 GET /wb-auth 并通知订阅者（登录成功、注销后都要调）。并发调用会合并成一次请求。 */
+let _authInflight = null
+export async function refreshAuth() {
+  if (_authInflight) return _authInflight
+  _authInflight = (async () => {
+    try { _authCache = await hub.auth() } catch { _authCache = { configured: false } }
+    _emitAuth()
+    return _authCache
+  })()
+  try { return await _authInflight } finally { _authInflight = null }
+}
+
+/* ------------------------------------------------------------------ *
+ * 动作级 JIT 登录门（requireAuth）
+ *
+ * 未登录时 requireAuth() 不直接失败：它广播一个「需要登录」事件，由界面
+ * （市场页 / picker）订阅后弹出登录卡；登录成功 settleAuthGate(true) → resolve，
+ * 界面据此自动继续刚才被拦下的动作；用户取消 settleAuthGate(false) → reject。
+ * ------------------------------------------------------------------ */
+
+let _authGate = null           // { reason, surface, at, claimed, resolve, reject }
+const _authRequiredListeners = new Set()
+
+/** 订阅「需要登录」事件；返回取消函数。 */
+export function onAuthRequired(fn) { _authRequiredListeners.add(fn); return () => { _authRequiredListeners.delete(fn) } }
+
+/**
+ * 认领当前登录门（多个界面同时订阅时，只有第一个认领者负责显示登录卡）。
+ * @param {string} [surface] 认领者所属界面（'page' 市场页 / 'picker' 输入框＋）；
+ *   发起动作的界面会带上同名 surface，只有匹配的界面才认领 —— 避免
+ *   「在 picker 里点连接，登录卡却弹在市场页」。
+ */
+export function claimAuthGate(surface) {
+  const gate = _authGate
+  if (!gate || gate.claimed) return null
+  if (surface && gate.surface && surface !== gate.surface) return null
+  gate.claimed = true
+  return { reason: gate.reason, surface: gate.surface }
+}
+
+/** 当前是否有未决的登录门（供排障/测试观察）。 */
+export function authGatePending() { return _authGate ? { reason: _authGate.reason, surface: _authGate.surface, claimed: _authGate.claimed } : null }
+
+/**
+ * 登录成功（ok=true）或用户取消（ok=false）时由显示登录卡的界面回传。
+ * @returns {boolean} 是否结算了一个未决的登录门
+ */
+export function settleAuthGate(ok) {
+  const gate = _authGate
+  if (!gate) return false
+  _authGate = null
+  if (ok) gate.resolve(_authCache ?? { configured: true })
+  else gate.reject(new Error('用户取消了登录'))
+  return true
+}
+
+/**
+ * 动作级 JIT 登录：已登录直接 resolve；否则打开登录卡并等待结果。
+ * 成功 → resolve(登录态)；取消 → reject；没有任何界面能显示登录卡 → reject（不挂起）。
+ * @param {{ reason?: string, surface?: string }} options
+ *   reason 会显示在登录卡上（说明为什么要登录）；surface 指定由哪个界面显示登录卡。
+ */
+export function requireAuth({ reason = '', surface = '' } = {}) {
+  if (_authCache?.configured === true) return Promise.resolve(_authCache)
+  // 单槽位：新动作取代旧的未决请求，避免多个动作同时等同一张卡
+  if (_authGate) {
+    const stale = _authGate
+    _authGate = null
+    stale.reject(new Error('登录请求已被新的操作取代'))
+  }
+  return new Promise((resolve, reject) => {
+    _authGate = { reason, surface, at: Date.now(), claimed: false, resolve, reject }
+    for (const fn of _authRequiredListeners) { try { fn({ reason, surface }) } catch { /* 忽略单个订阅者 */ } }
+    // 订阅者是同步回调：这里就能知道有没有界面认领。没人认领就别挂起调用方。
+    if (!_authGate?.claimed) {
+      _authGate = null
+      reject(new Error('当前界面无法显示登录入口（请打开市场页或输入框「＋」后再试）'))
+    }
+  })
+}
+
 const API_TIMEOUT_MS = 30000
 async function api(path, options) {
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
@@ -203,7 +298,9 @@ export const hub = {
     const c = encodeURIComponent(category || '')
     if (kind === 'connector') {
       const r = await api(`/market-list?kind=connector&pageSize=${pageSize}&q=${q}`)
-      const rows = (r.rows ?? []).map(x => ({ ...toEntry(x, 'connector'), isConnected: x.isConnected, mcp: x.mcp, authType: x.authType }))
+      // 宿主在「已登录但官方接口失败」时用镜像目录兜底；镜像行不是官方条目，
+      // 必须如实标注（否则安装时会按官方来源去下载）。
+      const rows = (r.rows ?? []).map(x => ({ ...toEntry(x, 'connector'), official: r.source !== 'mirror', isConnected: x.isConnected, mcp: x.mcp, authType: x.authType }))
       return { rows, total: r.total ?? rows.length, hasMore: false, source: r.source }
     }
     // 专家以官方注册表为准：只有注册表条目带人设文件、可安装可召唤；

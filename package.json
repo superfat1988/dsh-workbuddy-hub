@@ -44,7 +44,7 @@
   ],
   "scripts": {
     "build:client": "node scripts/build.mjs",
-    "test": "node --check index.js && node --check client.js && node --check mcp-manager.js && node --check expert-persona.js && node test-mcp-manager.mjs && node test-expert-persona.mjs && node test-connector-cli.mjs && node test-summon.mjs && node test-client.mjs && node test-render.mjs && node test-session-contract.mjs && node test-pending-expert.mjs",
+    "test": "node --check index.js && node --check client.js && node --check mcp-manager.js && node --check expert-persona.js && node test-mcp-manager.mjs && node test-expert-persona.mjs && node test-connector-cli.mjs && node test-summon.mjs && node test-client.mjs && node test-render.mjs && node test-session-contract.mjs && node test-pending-expert.mjs && node test-auth-store.mjs",
     "pack:check": "npm pack --dry-run"
   },
   "license": "MIT",

@@ -1035,12 +1035,34 @@ export function apply(ctx, config = {}) {
     if (route === 'GET /market-list') {
       const kindQ = url.searchParams.get('kind') || 'expert'
       if (kindQ === 'connector') {
-        try {
-          const rows = await connectorRegistry(P.state)
-          json(res, 200, { ok: true, source: rows.length ? 'official' : 'mirror', total: rows.length, rows })
-        } catch (error) {
-          json(res, 200, { ok: true, source: 'mirror', total: 0, rows: [], error: error.message })
+        // 官方连接器注册表需要登录。未登录时前端显示就地登录卡（不显示镜像目录），
+        // 这里只在「已登录但官方接口失败/返回空」时用镜像 catalog 的 connectors 兜底，
+        // 并如实标注 source=mirror，避免页面空白。
+        const configured = Boolean(loadAuth(P.state)?.access_token)
+        let rows = []
+        let officialError = ''
+        try { rows = await connectorRegistry(P.state) } catch (error) { officialError = String(error?.message || error) }
+        if (rows.length > 0) {
+          json(res, 200, { ok: true, source: 'official', total: rows.length, rows })
+          return true
         }
+        let mirrorRows = []
+        if (configured) {
+          const cache = loadIndex()
+          const q2 = (url.searchParams.get('q') || '').trim().toLowerCase()
+          mirrorRows = cache
+            ? Object.values(cache.index?.connectors ?? {})
+                .filter(e => !q2 || `${e.name} ${e.displayName || ''} ${e.description || ''}`.toLowerCase().includes(q2))
+            : []
+        }
+        json(res, 200, {
+          ok: true,
+          // 官方失败时即使镜像为空也标 mirror：如实告诉前端「这不是官方数据」
+          source: (mirrorRows.length || officialError) ? 'mirror' : 'official',
+          total: mirrorRows.length,
+          rows: mirrorRows,
+          error: officialError || undefined,
+        })
         return true
       }
       const kind = kindQ === 'skill' ? 'skill' : 'expert'

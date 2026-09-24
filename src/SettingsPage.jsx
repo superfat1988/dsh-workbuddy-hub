@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react'
-import { hub } from './hub.js'
+import { hub, refreshAuth, onAuthChange } from './hub.js'
 import { WbIcon } from './icons.js'
 import WbAuthCard from './WbAuthCard.jsx'
 
@@ -10,10 +10,12 @@ export default function SettingsPage() {
   const [showAuth, setShowAuth] = useState(false)
 
   const refresh = useCallback(async () => {
-    try { setAuth(await hub.auth()) } catch { setAuth({ configured: false }) }
+    try { setAuth(await refreshAuth()) } catch { setAuth({ configured: false }) }
     try { setInstalled(await hub.installed()) } catch { /* ignore */ }
   }, [])
   useEffect(() => { void refresh() }, [refresh])
+  // 登录态 store：在别的界面（市场页/picker/连接器页）登录或注销后，设置区同步反映
+  useEffect(() => onAuthChange(setAuth), [])
 
   const loggedIn = auth?.configured === true
   const entries = Object.values(installed)

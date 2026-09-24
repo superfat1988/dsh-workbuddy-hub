@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { hub, onCatalogChange, addSelection, openMarket, onMarketRequest, consumePendingMarket, recentExpertNames } from './hub.js'
+import { hub, onCatalogChange, addSelection, openMarket, onMarketRequest, consumePendingMarket, recentExpertNames, authState, onAuthChange, refreshAuth, requireAuth } from './hub.js'
 import { insertPromptIntoComposer } from './insert-prompt.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
+import WbAuthCard from './WbAuthCard.jsx'
 import './official-skill.css'
 import './official-connector.css'
 import './official-skeleton.css'
@@ -187,7 +188,8 @@ function ConnectorCard({ entry, busy, onDetail, onAction, onConnectorAction, bou
 
 export default function Catalogue({
   sessionId, kind, onKind, query, onQuery, onDetail, onAction,
-  installed = {}, mounted = new Set(), busy = '', variant = 'page', onRefresh,
+  installed = {}, mounted = new Set(), busy = '', variant = 'page', onRefresh, footerExtra = null,
+  topbarRight = null,
 }) {
   const [rows, setRows] = useState([])
   const [hasMore, setHasMore] = useState(false)
@@ -195,6 +197,7 @@ export default function Catalogue({
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [failed, setFailed] = useState('')
+  const [source, setSource] = useState('')      // 列表来源：official | mirror（如实标注给用户看）
   const [categories, setCategories] = useState([])
   const [category, setCategory] = useState('')
   const [sort, setSort] = useState('reco')
@@ -246,6 +249,7 @@ export default function Catalogue({
     try {
       const r = await hub.list(kind, { query, category, page: targetPage, pageSize: PAGE_SIZE })
       if (replace && kind === 'skill') setFeatured([...r.rows].sort(() => Math.random() - 0.5).slice(0, 5))
+      if (replace) setSource(r.source || '')
       setRows(prev => {
         if (replace) return r.rows
         const seen = new Set(prev.map(p => `${p.kind}/${p.name}`))
@@ -253,7 +257,7 @@ export default function Catalogue({
       })
       setHasMore(Boolean(r.hasMore))
     } catch (e) {
-      if (replace) { setFailed(e.message); setRows([]) }
+      if (replace) { setFailed(e.message); setRows([]); setSource('') }
       setHasMore(false)
     } finally { setLoading(false); setLoadingMore(false) }
   }, [kind, query, category])
@@ -276,6 +280,25 @@ export default function Catalogue({
     void load(1, true)
     hub.boundConnectors().then(r => setBound(r.map(x => x.name))).catch(() => {})
   }), [load])
+
+  // 登录态：市场页 / picker / 连接器页共用同一个 store（见 hub.js 的 authState/onAuthChange）
+  const [auth, setAuth] = useState(() => authState())
+  const authRef = useRef(authState())
+  useEffect(() => {
+    if (authState() === null) void refreshAuth()
+    return onAuthChange(next => {
+      const was = authRef.current
+      authRef.current = next
+      setAuth(next)
+      // 登录成功（未登录 → 已登录）后自动刷新连接器列表：登录完就能看到数据。
+      // was 为 null（首次拉取）时不算「登录成功」，避免和挂载时的 load 重复请求。
+      if (next?.configured === true && was && was.configured !== true) {
+        void load(1, true)
+        hub.boundConnectors().then(r => setBound(r.map(x => x.name))).catch(() => {})
+      }
+    })
+  }, [load])
+  const loggedIn = auth?.configured === true
   const isBound = useCallback(entry => bound.includes(entry.name), [bound])
 
   // 懒加载：接近底部继续取下一页
@@ -360,6 +383,24 @@ export default function Catalogue({
   const connectorAction = useCallback(async entry => {
     const key = `${entry.kind}/${entry.name}`
     setBusyLocal(key); setNotice('')
+    // 动作级 JIT 登录：连接/绑定/启用都走官方 OAuth，未登录时先就地拉起登录卡，
+    // 登录成功后**自动继续**刚才被拦下的动作（requireAuth 的 resolve 语义）。
+    if (authState()?.configured !== true) {
+      setBusyLocal('')
+      setNotice(`连接「${entry.displayName}」需要 WorkBuddy 账号，请扫码登录`)
+      try {
+        await requireAuth({
+          reason: `连接「${entry.displayName}」需要 WorkBuddy 账号`,
+          // 由发起动作的那个界面显示登录卡：page=市场页，picker=输入框「＋」
+          surface: variant === 'picker' ? 'picker' : 'page',
+        })
+      } catch (error) {
+        setNotice(String(error?.message || error) === '用户取消了登录' ? '已取消登录' : `无法登录：${String(error?.message || error)}`)
+        return
+      }
+      setBusyLocal(key)
+      setNotice('登录成功，正在继续…')
+    }
     // 浏览器只允许在「用户手势」的同步阶段开窗；await 之后再 window.open 会被拦截。
     // 因此这里先同步开一个空窗，拿到授权链接后再把地址写进去。
     let authWindow = null
@@ -455,6 +496,25 @@ export default function Catalogue({
   const kindMeta = KINDS.find(k => k.id === kind) || KINDS[0]
 
   const busyAll = busyLocal || busy
+
+  // 连接器页未登录：不显示「暂无连接器」空白、也不显示镜像目录，直接就地嵌登录卡（无遮罩、不可关闭）
+  const connectorLoginGate = (variant === 'page' && kind === 'connector')
+    ? (auth === null
+      ? <div className="wbh-state"><p>正在读取登录状态…</p></div>
+      : (loggedIn
+        ? null
+        : (
+          <div className="wbh-loginGate">
+            <WbAuthCard variant="inline" title="登录 WorkBuddy 账号"
+              reason="连接器目录、账号绑定与授权需要 WorkBuddy 账号" />
+          </div>
+        )))
+    : null
+
+  // 已登录但官方接口失败 → 宿主用镜像目录兜底；来源必须如实标注给用户
+  const sourceNote = kind === 'connector' && loggedIn && source === 'mirror'
+    ? <div className="wbh-sourceNote">官方连接器接口暂不可用，当前显示镜像目录（source: mirror）</div>
+    : null
 
   const skeletonCards = (
     <>{Array.from({ length: 6 }).map((_, i) => (
@@ -926,7 +986,7 @@ export default function Catalogue({
         </div>
         {kind === 'skill' ? <div className="wbh-flyoutBody">{listNode}</div> : listNode}
         <div className="wbh-flyoutDivider" />
-        <div className="wbh-flyoutFooter">{footerNode}</div>
+        <div className="wbh-flyoutFooter">{footerNode}{footerExtra}</div>
       </div>
     )
   }
@@ -942,6 +1002,7 @@ export default function Catalogue({
         </div>
         <div className="ec-topbar__right">
           {searchBox}
+          {topbarRight}
           {skillTopRight}
         </div>
       </header>
@@ -970,8 +1031,9 @@ export default function Catalogue({
           )}
           <div className="ec-main-scroll" ref={scrollRef} onScroll={onScroll}>
             {view === 'installed' ? installedGrid : view === 'local' ? localGrid : (
-              skillDetailView || (
+              connectorLoginGate || skillDetailView || (
                 <>
+                  {sourceNote}
                   {kind === 'skill' && !query && segment === 0 && featured.length > 0 && featuredSection}
                   {kind === 'skill' && segmentBar}
                   {cardGrid}

@@ -200,3 +200,31 @@
 .connector-detail-modal .connector-detail-flow{gap:12px}
 /* 技能二级页面的 subpage 顶栏与主顶栏同高（官方实测 56） */
 .skills-view .ec-topbar--subpage{height:56px;min-height:56px}
+
+/* --- 未登录态体验（登录卡两种形态 / 账号胶囊 / picker 登录行）--- */
+/* 登录卡：inline 形态就地嵌在页面里（无遮罩、不可关闭、无弹窗阴影） */
+.wbh-authCard--inline{position:static;width:100%;max-width:420px;margin:0 auto;padding:20px;border:1px solid var(--wb-border-default);border-radius:16px;background:var(--wb-bg-primary);box-shadow:none;animation:none}
+.wbh-authReason{margin:6px 0 0;font-size:12.5px;line-height:1.6;color:var(--wb-color-text-primary)}
+.wbh-authExpired{margin:0 0 14px;font-size:13px;color:#b26a00}
+.wbh-authLink--block{display:block;width:100%;margin:0 auto 8px;text-align:center}
+.wbh-loginGate{display:flex;justify-content:center;padding:28px var(--ec-page-gutter,24px)}
+/* 已登录但官方接口失败 → 镜像兜底时的来源标注 */
+.wbh-sourceNote{margin:0 0 10px;padding:6px 10px;border-radius:8px;background:var(--wb-bg-tertiary,#f4f4f4);font-size:12px;line-height:18px;color:var(--wb-color-text-secondary)}
+
+/* 顶栏账号胶囊（紧邻搜索框） */
+.wbh-accountWrap{position:relative;display:inline-flex}
+.wbh-accountChip{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border:1px solid var(--wb-border-default,#e5e5e5);border-radius:999px;background:var(--wb-bg-secondary,#f7f7f7);color:var(--wb-color-text-primary);font:inherit;font-size:12px;line-height:1;cursor:pointer;white-space:nowrap;transition:background-color .12s ease}
+.wbh-accountChip:hover{background:var(--wb-bg-hover,#f0f0f0)}
+.wbh-accountChip.is-on{background:var(--wb-bg-primary,#fff)}
+.wbh-accountChip.is-loading{cursor:default;color:var(--wb-color-text-tertiary)}
+.wbh-accountChip .wbh-dot{flex:none}
+.wbh-accountPop{position:absolute;top:calc(100% + 6px);right:0;z-index:6250;min-width:220px;padding:8px;border:1px solid var(--wb-border-default,#e5e5e5);border-radius:12px;background:var(--wb-bg-primary,#fff);box-shadow:0 10px 30px rgba(0,0,0,.12);animation:wbhPopIn .15s ease}
+.wbh-accountRow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:5px 8px;font-size:12px;color:var(--wb-color-text-primary)}
+.wbh-accountLogout{display:block;width:100%;margin-top:6px;padding:7px 10px;border:1px solid var(--wb-border-default,#e5e5e5);border-radius:8px;background:transparent;color:var(--wb-color-text-primary);font:inherit;font-size:12px;cursor:pointer}
+.wbh-accountLogout:hover{background:var(--wb-bg-hover,#f0f0f0)}
+
+/* picker 二级面板底部的登录入口（三个面板共用 footer；文案较长允许换行，其余沿用官方行规格） */
+.wbh-flyoutLogin{height:auto;min-height:32px;padding:5px 8px}
+.wbh-flyoutLogin .wbh-flyoutFooterLabel{white-space:normal;overflow:visible;text-overflow:clip;font-size:12px;line-height:16px}
+.wbh-flyoutLogin .wbh-flyoutFooterLabel,
+.wbh-flyoutLogin .wbh-flyoutFooterIcon{color:var(--wb-palette-blue-1,#2f6bff)}

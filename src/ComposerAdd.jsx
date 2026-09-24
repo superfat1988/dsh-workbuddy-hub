@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react'
-import { hub, addSelection, peekPendingExpert, clearPendingExpert, onCatalogChange, onMarketRequest, setComposerSession } from './hub.js'
+import { hub, addSelection, peekPendingExpert, clearPendingExpert, onCatalogChange, onMarketRequest, setComposerSession, authState, onAuthChange, refreshAuth, onAuthRequired, claimAuthGate, settleAuthGate } from './hub.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
 import Catalogue from './Catalogue.jsx'
 import SummonModal from './SummonModal.jsx'
 import ConnectorAuthModal from './ConnectorAuthModal.jsx'
+import WbAuthCard from './WbAuthCard.jsx'
 import AttachedRail from './AttachedRail.jsx'
 import { insertPromptIntoComposer } from './insert-prompt.js'
 import './official-picker.css'
@@ -36,6 +37,8 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
   const [summoning, setSummoning] = useState(null)
   const [authorising, setAuthorising] = useState(null)
   const [recent, setRecent] = useState([])
+  const [auth, setAuth] = useState(() => authState())
+  const [showAuth, setShowAuth] = useState(false)
   // 二级面板几何：官方做法是把面板「夹」进视口（8px 边距）——高度上限 vh−16、
   // 宽度 min(自然宽, vw−8−面板左缘)，先按悬停行对齐，放不下就整体上移，永不翻转。
   const [geom, setGeom] = useState({ top: 8, maxH: 0, maxW: 0, shift: 0 })
@@ -70,6 +73,13 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
   }, [sessionId, sessionBlank])
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => onCatalogChange(refresh), [refresh])
+  // 登录态 store：picker footer 的登录行、以及登录成功后的目录刷新都订阅它
+  useEffect(() => {
+    if (authState() === null) void refreshAuth()
+    return onAuthChange(setAuth)
+  }, [])
+  // 动作级 JIT 登录门：composer 侧（picker 里的连接器等）被拦下时由这里弹登录卡
+  useEffect(() => onAuthRequired(() => { if (claimAuthGate('picker')) setShowAuth(true) }), [])
 
   // close on outside click
   useEffect(() => {
@@ -225,6 +235,18 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
     return pool
   }, [installed, mounted])
 
+  // 二级面板底部：未登录时加一行登录入口（三个面板都能看到，因为放在 footer 里）。
+  // 登录方式只有二维码一种，点开的是 variant="modal" 的同一个登录卡组件。
+  // auth 还没拉到时先不显示（避免「已登录」被闪成未登录）。
+  const authFooter = (auth == null || auth.configured === true) ? null : (
+    <div className="wbh-flyoutFooterItem wbh-flyoutLogin" role="menuitem" tabIndex={0}
+      onClick={e => { e.stopPropagation(); setShowAuth(true) }}
+      onKeyDown={e => { if (e.key === 'Enter') setShowAuth(true) }}>
+      <span className="wbh-flyoutFooterIcon"><PickIcon name="tabExpert" size={16} /></span>
+      <span className="wbh-flyoutFooterLabel">未登录 · 登录后可加载官方目录</span>
+    </div>
+  )
+
   return (
     <div className="wbh-anchor" ref={anchor}>
       <button type="button" className="wbh-plus" aria-label="专家·技能·连接器"
@@ -269,6 +291,7 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
                   variant="picker" sessionId={sessionId} kind={kind} onKind={setKind}
                   query={query} onQuery={setQuery} onDetail={onDetail} onAction={onAction}
                   installed={installed} mounted={mounted} busy={busy}
+                  footerExtra={authFooter}
                 />
               </div>
             )}
@@ -297,6 +320,11 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
           onClose={() => setAuthorising(null)}
           onRetry={async () => { await attach(authorising.entry); setAuthorising(null) }}
         />
+      )}
+      {showAuth && (
+        <WbAuthCard variant="modal"
+          onClose={() => { setShowAuth(false); settleAuthGate(false); void refreshAuth() }}
+          onDone={() => { void refresh() }} />
       )}
     </div>
   )

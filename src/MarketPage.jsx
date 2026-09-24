@@ -1,12 +1,55 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { hub, addSelection, summonExpertInNewSession } from './hub.js'
+import { hub, addSelection, summonExpertInNewSession, authState, onAuthChange, refreshAuth, onAuthRequired, claimAuthGate, settleAuthGate } from './hub.js'
 import { insertPromptIntoComposer } from './insert-prompt.js'
 import { WbIcon } from './icons.js'
 import Catalogue from './Catalogue.jsx'
 import SummonModal from './SummonModal.jsx'
 import ConnectorAuthModal from './ConnectorAuthModal.jsx'
+import WbAuthCard from './WbAuthCard.jsx'
 import './official.css'
 import './app.css'
+
+/**
+ * 顶栏右侧账号胶囊（紧邻搜索框）：
+ *  · 未登录 → 可点胶囊「未登录 · 登录」，点开 modal 登录卡
+ *  · 已登录 → 显示昵称（无昵称退化为 uid /「已登录」），点开小下拉：账号信息 + 注销
+ */
+function AccountCapsule({ auth, onLogin }) {
+  const [open, setOpen] = useState(false)
+  const loggedIn = auth?.configured === true
+  const label = loggedIn ? (auth?.nickname || auth?.uid || '已登录') : '未登录 · 登录'
+  // 登录态还没拉到时先不猜：显示占位胶囊，避免「已登录」被闪成「未登录」
+  if (auth == null) return <span className="wbh-accountChip is-loading" aria-hidden="true">…</span>
+  if (!loggedIn) {
+    return (
+      <button type="button" className="wbh-accountChip" aria-label="登录 WorkBuddy 账号" onClick={onLogin}>
+        <i className="wbh-dot off" />{label}
+      </button>
+    )
+  }
+  return (
+    <div className="wbh-accountWrap">
+      <button type="button" className="wbh-accountChip is-on" aria-haspopup="menu" aria-expanded={open}
+        onClick={() => setOpen(v => !v)}>
+        <i className="wbh-dot" />{label}
+      </button>
+      {open && (
+        <>
+          <div className="wbh-addScrim" onClick={() => setOpen(false)} />
+          <div className="wbh-accountPop" role="menu">
+            <div className="wbh-accountRow"><span className="wbh-muted">昵称</span><span>{auth?.nickname || '—'}</span></div>
+            <div className="wbh-accountRow"><span className="wbh-muted">uid</span><span>{auth?.uid || '—'}</span></div>
+            {auth?.expiresAt
+              ? <div className="wbh-accountRow"><span className="wbh-muted">授权到期</span><span>{new Date(auth.expiresAt).toLocaleString('zh-CN')}</span></div>
+              : null}
+            <button type="button" className="wbh-accountLogout"
+              onClick={async () => { setOpen(false); await hub.authLogout(); await refreshAuth() }}>注销</button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
 
 /** Main panel: the official marketplace page plus the account bar. */
 export default function MarketPage({ sessionId, workspaceId, runCommand }) {
@@ -18,16 +61,21 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
   const [notice, setNotice] = useState('')
   const [summoning, setSummoning] = useState(null)
   const [authorising, setAuthorising] = useState(null)
-  const [auth, setAuth] = useState(null)
+  const [auth, setAuth] = useState(() => authState())
   const [showAuth, setShowAuth] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
-      const [inst, mnt, a] = await Promise.all([hub.installed(), hub.mounted(sessionId), hub.auth()])
-      setInstalled(inst); setMounted(new Set(mnt)); setAuth(a)
+      const [inst, mnt] = await Promise.all([hub.installed(), hub.mounted(sessionId)])
+      setInstalled(inst); setMounted(new Set(mnt))
     } catch { /* keep previous */ }
+    await refreshAuth()
   }, [sessionId])
   useEffect(() => { void refresh() }, [refresh])
+  // 登录态 store：登录成功/注销都会通知（设置区或 picker 里登录也同步反映到这里）
+  useEffect(() => onAuthChange(setAuth), [])
+  // 动作级 JIT 登录门：被拦下的动作（连接器等）需要登录时，由本页负责弹登录卡
+  useEffect(() => onAuthRequired(() => { if (claimAuthGate('page')) setShowAuth(true) }), [])
 
   // task 由召唤模态框传入；阶段 1 只做挂载，任务文本暂不消费（保留签名兼容调用方）。
   const attach = useCallback(async (entry, task = '') => {
@@ -97,6 +145,7 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
         sessionId={sessionId} kind={kind} onKind={setKind} query={query} onQuery={setQuery}
         onDetail={onDetail} onAction={onAction} installed={installed} mounted={mounted} busy={busy}
         onRefresh={refresh}
+        topbarRight={<AccountCapsule auth={auth} onLogin={() => setShowAuth(true)} />}
       />
       {notice && <p className="wbh-notice">{notice}</p>}
       {summoning && (
@@ -118,10 +167,11 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
           onClose={() => setAuthorising(null)}
           onRetry={async () => { await attach(authorising.entry); setAuthorising(null) }} />
       )}
-      {showAuth && <WbAuthCardLazy onClose={() => { setShowAuth(false); void refresh() }} />}
+      {showAuth && (
+        <WbAuthCard variant="modal"
+          onClose={() => { setShowAuth(false); settleAuthGate(false); void refresh() }}
+          onDone={() => { void refresh() }} />
+      )}
     </div>
   )
 }
-
-// lazy-ish import kept simple (single bundle)
-import WbAuthCardLazy from './WbAuthCard.jsx'
