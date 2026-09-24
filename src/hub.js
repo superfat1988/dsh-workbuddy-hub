@@ -41,13 +41,26 @@ export function startNewSession() {
 // 在指定工作区建/复用空白会话，并在主视图切换前用 beforeOpen(sessionId) 拿到会话 id。
 // 这是 DSH 官方「新建会话」路径（走客户端 sessions.create，客户端会话列表即时更新），
 // 与宿主的 sessionController.create 不同（后者客户端不会同步收到会话）。
-let _openWorkspace = null
-export function setOpenWorkspace(fn) { _openWorkspace = fn }
-export function openWorkspaceIn(workspaceId, beforeOpen) {
-  if (typeof _openWorkspace !== 'function' || !workspaceId) return false
-  try { _openWorkspace(workspaceId, beforeOpen); return true } catch (error) {
-    console.warn('[wbh] openWorkspace failed:', String(error?.message || error)); return false
-  }
+/**
+ * 「待生效专家」：召唤后先记下来，等新会话的 composer 挂载（拿到那个会话的
+ * props.sessionId）时再挂上去 + 显示 chip。
+ *
+ * 这样专家跟「会话」走，而不是跟「插件猜的工作区」走 —— 用户在转跳后的界面上
+ * 选任意工作区，新会话一挂载就自动带上该专家（不依赖工作区解析，也不改官方框架）。
+ */
+let _pendingExpert = null
+const PENDING_TTL_MS = 5 * 60 * 1000
+export function setPendingExpert(entry) {
+  _pendingExpert = entry ? { ...entry, at: Date.now() } : null
+  console.info('[wbh] pending expert set:', entry?.name)
+}
+export function clearPendingExpert() { _pendingExpert = null }
+export function takePendingExpert() {
+  const p = _pendingExpert
+  _pendingExpert = null
+  if (!p) return null
+  if (Date.now() - (p.at || 0) > PENDING_TTL_MS) return null
+  return p
 }
 
 // 当前会话 id：composer 槽由框架注入 props.sessionId，是权威来源
@@ -241,7 +254,7 @@ export const hub = {
  * 完全不动：不挂载、不注入、不 chip。
  * @returns {Promise<{ok:true, presetId, sessionId} | {ok:false, error}>}
  */
-export async function summonExpertInNewSession(entry, nearSessionId) {
+export async function summonExpertInNewSession(entry) {
   try {
     // 1) 确保已安装（人设文件是注入的前置）
     const key = `expert/${entry.name}`
@@ -255,38 +268,30 @@ export async function summonExpertInNewSession(entry, nearSessionId) {
         if (!fresh[key]) return { ok: false, error: `安装专家失败：${String(error?.message || error)}` }
       }
     }
-    // 2) 解析「当前会话所属工作区」（宿主侧解析，不建会话）
-    let workspaceId = ''
-    if (nearSessionId) {
-      try {
-        const r = await api(`/expert-resolve-workspace?nearSessionId=${encodeURIComponent(nearSessionId)}`)
-        workspaceId = r?.workspaceId || ''
-      } catch (error) {
-        console.warn('[wbh] resolve workspace failed:', String(error?.message || error))
-      }
+    // 2) 记为「待生效专家」—— 任意工作区的新会话挂载时都会带上它
+    setPendingExpert(entry)
+    // 3) 走 DSH 官方新建会话流程（工作区由 DSH 自己决定；定位不到就停在选择工作区界面）
+    const started = startNewSession()
+    if (!started) {
+      clearPendingExpert()
+      return { ok: false, error: '无法进入新建会话流程（uiWorkspace 不可用）' }
     }
-    if (!workspaceId) {
-      return { ok: false, error: `无法确定新会话的工作区（当前会话 ${nearSessionId || '未知'}）。请先在工作区里打开一个会话再召唤。` }
-    }
-    // 3) 用 DSH 官方 openWorkspace 建会话 —— 走客户端 sessions.create，客户端会话列表
-    //    即时含新会话（宿主 sessionController.create 不会同步给客户端，会导致跳转落空）。
-    //    beforeOpen 在主视图切换前同步回调，拿到 sessionId 后立刻挂专家 + 显示 chip。
-    const sessionId = await new Promise(resolve => {
-      let settled = false
-      const done = sid => { if (!settled) { settled = true; resolve(sid || '') } }
-      const started = openWorkspaceIn(workspaceId, sid => {
-        addSelection(entry, sid)
-        void hub.mount(sid, 'expert', entry.name)
-        console.info('[wbh] summonExpert: session', sid, 'expert', entry.name)
-        done(sid)
-      })
-      if (!started) done('')
-      // 兜底：openWorkspace 若因导航被取代而未回调，8s 后返回失败而不是永久挂起
-      try { setTimeout(() => done(''), 8000) } catch { /* 无定时器环境 */ }
-    })
-    if (!sessionId) return { ok: false, error: '新会话未创建成功（openWorkspace 未回调）' }
-    return { ok: true, sessionId }
+    // 4) 兜底：若新会话复用了当前空白会话（composer 的 sessionId 没变，effect 不会触发），
+    //    延迟补挂一次。正常情况下 composer 的 effect 已消费掉 pending，这里为空操作。
+    try {
+      setTimeout(() => {
+        const sid = composerSession()
+        if (!sid) return
+        const pending = takePendingExpert()
+        if (!pending) return
+        console.info('[wbh] pending expert (fallback) ->', pending.name, sid)
+        addSelection(pending, sid)
+        void hub.mount(sid, 'expert', pending.name)
+      }, 1500)
+    } catch { /* 无定时器环境 */ }
+    return { ok: true, pending: true }
   } catch (error) {
+    clearPendingExpert()
     return { ok: false, error: String(error?.message || error) }
   }
 }

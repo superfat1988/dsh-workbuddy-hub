@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react'
-import { hub, addSelection, summonExpertInNewSession, onCatalogChange, onMarketRequest, setComposerSession } from './hub.js'
+import { hub, addSelection, summonExpertInNewSession, takePendingExpert, onCatalogChange, onMarketRequest, setComposerSession } from './hub.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
 import Catalogue from './Catalogue.jsx'
@@ -53,6 +53,16 @@ export default function ComposerAdd({ sessionId, runCommand }) {
   }, [sessionId])
 
   useEffect(() => { setComposerSession(sessionId) }, [sessionId])
+  // 「待生效专家」落位：召唤后新会话的 composer 一挂载（拿到它的 sessionId），
+  // 就把专家挂到这个会话上 + 显示 chip —— 与用户选哪个工作区无关，专家跟会话走。
+  useEffect(() => {
+    if (!sessionId) return
+    const pending = takePendingExpert()
+    if (!pending) return
+    console.info('[wbh] pending expert applied:', pending.name, '-> session', sessionId)
+    addSelection(pending, sessionId)
+    void hub.mount(sessionId, 'expert', pending.name)
+  }, [sessionId])
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => onCatalogChange(refresh), [refresh])
 
@@ -168,8 +178,8 @@ export default function ComposerAdd({ sessionId, runCommand }) {
       } else if (entry.kind === 'expert') {
         // 官方语义：新建会话 + 该专家加载进去；picker 没有 useWorkspaces，
         // 由宿主从当前会话的 header.cwd 解析工作区。
-        const r = await summonExpertInNewSession(entry, sessionId)
-        setNotice(r.ok ? `已在新会话中加载「${entry.displayName}」` : `失败：${r.error}`)
+        const r = await summonExpertInNewSession(entry)
+        setNotice(r.ok ? `已选择「${entry.displayName}」：新会话里会自动加载` : `失败：${r.error}`)
       } else {
         await hub.mount(sessionId, entry.kind, entry.name)
         addSelection(entry, sessionId)

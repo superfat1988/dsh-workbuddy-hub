@@ -2181,19 +2181,21 @@ function startNewSession() {
     return false;
   }
 }
-var _openWorkspace = null;
-function setOpenWorkspace(fn) {
-  _openWorkspace = fn;
+var _pendingExpert = null;
+var PENDING_TTL_MS = 5 * 60 * 1e3;
+function setPendingExpert(entry) {
+  _pendingExpert = entry ? { ...entry, at: Date.now() } : null;
+  console.info("[wbh] pending expert set:", entry?.name);
 }
-function openWorkspaceIn(workspaceId, beforeOpen) {
-  if (typeof _openWorkspace !== "function" || !workspaceId) return false;
-  try {
-    _openWorkspace(workspaceId, beforeOpen);
-    return true;
-  } catch (error) {
-    console.warn("[wbh] openWorkspace failed:", String(error?.message || error));
-    return false;
-  }
+function clearPendingExpert() {
+  _pendingExpert = null;
+}
+function takePendingExpert() {
+  const p = _pendingExpert;
+  _pendingExpert = null;
+  if (!p) return null;
+  if (Date.now() - (p.at || 0) > PENDING_TTL_MS) return null;
+  return p;
 }
 var _composerSession = "";
 function setComposerSession(id) {
@@ -2435,7 +2437,7 @@ var hub = {
   authPoll: () => post("/wb-auth/poll", {}),
   authLogout: () => post("/wb-auth/logout", {})
 };
-async function summonExpertInNewSession(entry, nearSessionId) {
+async function summonExpertInNewSession(entry) {
   try {
     const key = `expert/${entry.name}`;
     let already = false;
@@ -2451,41 +2453,27 @@ async function summonExpertInNewSession(entry, nearSessionId) {
         if (!fresh[key]) return { ok: false, error: `\u5B89\u88C5\u4E13\u5BB6\u5931\u8D25\uFF1A${String(error?.message || error)}` };
       }
     }
-    let workspaceId = "";
-    if (nearSessionId) {
-      try {
-        const r = await api(`/expert-resolve-workspace?nearSessionId=${encodeURIComponent(nearSessionId)}`);
-        workspaceId = r?.workspaceId || "";
-      } catch (error) {
-        console.warn("[wbh] resolve workspace failed:", String(error?.message || error));
-      }
+    setPendingExpert(entry);
+    const started = startNewSession();
+    if (!started) {
+      clearPendingExpert();
+      return { ok: false, error: "\u65E0\u6CD5\u8FDB\u5165\u65B0\u5EFA\u4F1A\u8BDD\u6D41\u7A0B\uFF08uiWorkspace \u4E0D\u53EF\u7528\uFF09" };
     }
-    if (!workspaceId) {
-      return { ok: false, error: `\u65E0\u6CD5\u786E\u5B9A\u65B0\u4F1A\u8BDD\u7684\u5DE5\u4F5C\u533A\uFF08\u5F53\u524D\u4F1A\u8BDD ${nearSessionId || "\u672A\u77E5"}\uFF09\u3002\u8BF7\u5148\u5728\u5DE5\u4F5C\u533A\u91CC\u6253\u5F00\u4E00\u4E2A\u4F1A\u8BDD\u518D\u53EC\u5524\u3002` };
+    try {
+      setTimeout(() => {
+        const sid = composerSession();
+        if (!sid) return;
+        const pending = takePendingExpert();
+        if (!pending) return;
+        console.info("[wbh] pending expert (fallback) ->", pending.name, sid);
+        addSelection(pending, sid);
+        void hub.mount(sid, "expert", pending.name);
+      }, 1500);
+    } catch {
     }
-    const sessionId = await new Promise((resolve) => {
-      let settled = false;
-      const done = (sid) => {
-        if (!settled) {
-          settled = true;
-          resolve(sid || "");
-        }
-      };
-      const started = openWorkspaceIn(workspaceId, (sid) => {
-        addSelection(entry, sid);
-        void hub.mount(sid, "expert", entry.name);
-        console.info("[wbh] summonExpert: session", sid, "expert", entry.name);
-        done(sid);
-      });
-      if (!started) done("");
-      try {
-        setTimeout(() => done(""), 8e3);
-      } catch {
-      }
-    });
-    if (!sessionId) return { ok: false, error: "\u65B0\u4F1A\u8BDD\u672A\u521B\u5EFA\u6210\u529F\uFF08openWorkspace \u672A\u56DE\u8C03\uFF09" };
-    return { ok: true, sessionId };
+    return { ok: true, pending: true };
   } catch (error) {
+    clearPendingExpert();
     return { ok: false, error: String(error?.message || error) };
   }
 }
@@ -3555,8 +3543,8 @@ function MarketPage({ sessionId, workspaceId, runCommand: runCommand2 }) {
           setNotice(`\u5DF2\u8FDE\u63A5\u300C${entry.displayName}\u300D\uFF08\u5DE5\u5177\u547D\u540D\u7A7A\u95F4 ${r.serverName}\uFF09\uFF0C\u4E0B\u4E00\u6B21\u6A21\u578B\u6B65\u9AA4\u8D77\u53EF\u7528\u3002`);
         }
       } else if (entry.kind === "expert") {
-        const r = await summonExpertInNewSession(entry, sessionId);
-        setNotice(r.ok ? `\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u52A0\u8F7D\u300C${entry.displayName}\u300D\uFF0C\u4E0B\u4E00\u6B65\u8D77\u4EE5\u8BE5\u4E13\u5BB6\u8EAB\u4EFD\u56DE\u7B54` : `\u5931\u8D25\uFF1A${r.error}`);
+        const r = await summonExpertInNewSession(entry);
+        setNotice(r.ok ? `\u5DF2\u9009\u62E9\u300C${entry.displayName}\u300D\uFF1A\u65B0\u4F1A\u8BDD\u91CC\u4F1A\u81EA\u52A8\u52A0\u8F7D\u8BE5\u4E13\u5BB6\uFF08\u53EF\u81EA\u884C\u9009\u62E9\u5DE5\u4F5C\u533A\uFF09` : `\u5931\u8D25\uFF1A${r.error}`);
       } else {
         await hub.mount(sessionId, entry.kind, entry.name);
         addSelection(entry, sessionId);
@@ -3579,8 +3567,8 @@ function MarketPage({ sessionId, workspaceId, runCommand: runCommand2 }) {
     if (entry.kind === "expert") {
       setBusy(`${entry.kind}/${entry.name}`);
       setNotice("");
-      void summonExpertInNewSession(entry, sessionId).then((r) => {
-        setNotice(r.ok ? `\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u52A0\u8F7D\u300C${entry.displayName}\u300D\uFF0C\u4E0B\u4E00\u6B65\u8D77\u4EE5\u8BE5\u4E13\u5BB6\u8EAB\u4EFD\u56DE\u7B54` : `\u5931\u8D25\uFF1A${r.error}`);
+      void summonExpertInNewSession(entry).then((r) => {
+        setNotice(r.ok ? `\u5DF2\u9009\u62E9\u300C${entry.displayName}\u300D\uFF1A\u65B0\u4F1A\u8BDD\u91CC\u4F1A\u81EA\u52A8\u52A0\u8F7D\u8BE5\u4E13\u5BB6\uFF08\u53EF\u81EA\u884C\u9009\u62E9\u5DE5\u4F5C\u533A\uFF09` : `\u5931\u8D25\uFF1A${r.error}`);
       }).catch((error) => {
         setNotice(`\u5931\u8D25\uFF1A${String(error?.message || error)}`);
       }).finally(() => setBusy(""));
@@ -3616,8 +3604,8 @@ function MarketPage({ sessionId, workspaceId, runCommand: runCommand2 }) {
       onQuickPrompt: (text) => {
         const picked = summoning;
         setSummoning(null);
-        void summonExpertInNewSession(picked, sessionId).then((r) => {
-          setNotice(r.ok ? `\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u52A0\u8F7D\u300C${picked.displayName}\u300D` : `\u5931\u8D25\uFF1A${r.error}`);
+        void summonExpertInNewSession(picked).then((r) => {
+          setNotice(r.ok ? `\u5DF2\u9009\u62E9\u300C${picked.displayName}\u300D\uFF1A\u65B0\u4F1A\u8BDD\u91CC\u4F1A\u81EA\u52A8\u52A0\u8F7D` : `\u5931\u8D25\uFF1A${r.error}`);
           if (r.ok) setTimeout(() => {
             try {
               insertPromptIntoComposer(text);
@@ -3720,6 +3708,14 @@ function ComposerAdd({ sessionId, runCommand: runCommand2 }) {
   }, [sessionId]);
   (0, import_react9.useEffect)(() => {
     setComposerSession(sessionId);
+  }, [sessionId]);
+  (0, import_react9.useEffect)(() => {
+    if (!sessionId) return;
+    const pending = takePendingExpert();
+    if (!pending) return;
+    console.info("[wbh] pending expert applied:", pending.name, "-> session", sessionId);
+    addSelection(pending, sessionId);
+    void hub.mount(sessionId, "expert", pending.name);
   }, [sessionId]);
   (0, import_react9.useEffect)(() => {
     void refresh();
@@ -3825,8 +3821,8 @@ function ComposerAdd({ sessionId, runCommand: runCommand2 }) {
           setNotice(`\u5DF2\u8FDE\u63A5\u300C${entry.displayName}\u300D\uFF08\u5DE5\u5177\u547D\u540D\u7A7A\u95F4 ${r.serverName}\uFF09\uFF0C\u4E0B\u4E00\u6B21\u6A21\u578B\u6B65\u9AA4\u8D77\u53EF\u7528\u3002`);
         }
       } else if (entry.kind === "expert") {
-        const r = await summonExpertInNewSession(entry, sessionId);
-        setNotice(r.ok ? `\u5DF2\u5728\u65B0\u4F1A\u8BDD\u4E2D\u52A0\u8F7D\u300C${entry.displayName}\u300D` : `\u5931\u8D25\uFF1A${r.error}`);
+        const r = await summonExpertInNewSession(entry);
+        setNotice(r.ok ? `\u5DF2\u9009\u62E9\u300C${entry.displayName}\u300D\uFF1A\u65B0\u4F1A\u8BDD\u91CC\u4F1A\u81EA\u52A8\u52A0\u8F7D` : `\u5931\u8D25\uFF1A${r.error}`);
       } else {
         await hub.mount(sessionId, entry.kind, entry.name);
         addSelection(entry, sessionId);
@@ -4167,24 +4163,6 @@ var plugin = {
         return { ok: false, error: "agentPresets remote \u4E0D\u53EF\u7528" };
       }
       return remote.agentPresets.select(sessionId, presetId);
-    });
-    setOpenWorkspace((workspaceId, beforeOpen) => {
-      let workspace = null;
-      try {
-        workspace = ctx.get?.("uiWorkspace") ?? null;
-      } catch {
-        workspace = null;
-      }
-      const ok = typeof workspace?.openWorkspace === "function";
-      console.info("[wbh] openWorkspace ->", workspaceId, "openWorkspace:", ok);
-      if (!ok) return false;
-      try {
-        void workspace.openWorkspace(workspaceId, beforeOpen);
-        return true;
-      } catch (error) {
-        console.warn("[wbh] openWorkspace failed:", String(error?.message || error));
-        return false;
-      }
     });
     setSessionStarter(() => {
       let workspace = null;

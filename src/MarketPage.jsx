@@ -51,8 +51,12 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
       } else if (entry.kind === 'expert') {
         // 官方语义：召唤 = 新建一个会话 + 该专家加载进去（方案 C 的注入+接管，不写 preset）。
         // 新会话落在**当前会话所属工作区**（workspaceId 由 main 槽解析），避免落错工作区。
-        const r = await summonExpertInNewSession(entry, sessionId)
-        setNotice(r.ok ? `已在新会话中加载「${entry.displayName}」，下一步起以该专家身份回答` : `失败：${r.error}`)
+        // 方案：召唤 = 记下「待生效专家」+ 进入新建会话；用户选任意工作区，
+        // 新会话一挂载就自动带上该专家（不依赖工作区解析，不改官方框架）
+        const r = await summonExpertInNewSession(entry)
+        setNotice(r.ok
+          ? `已选择「${entry.displayName}」：新会话里会自动加载该专家（可自行选择工作区）`
+          : `失败：${r.error}`)
       } else {
         await hub.mount(sessionId, entry.kind, entry.name)
         addSelection(entry, sessionId)
@@ -74,8 +78,10 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
   const onAction = useCallback(entry => {
     if (entry.kind === 'expert') {
       setBusy(`${entry.kind}/${entry.name}`); setNotice('')
-      void summonExpertInNewSession(entry, sessionId).then(r => {
-        setNotice(r.ok ? `已在新会话中加载「${entry.displayName}」，下一步起以该专家身份回答` : `失败：${r.error}`)
+      void summonExpertInNewSession(entry).then(r => {
+        setNotice(r.ok
+          ? `已选择「${entry.displayName}」：新会话里会自动加载该专家（可自行选择工作区）`
+          : `失败：${r.error}`)
       }).catch(error => { setNotice(`失败：${String(error?.message || error)}`) })
         .finally(() => setBusy(''))
     } else void attach(entry)
@@ -97,8 +103,8 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
           onQuickPrompt={text => {
             const picked = summoning
             setSummoning(null)
-            void summonExpertInNewSession(picked, sessionId).then(r => {
-              setNotice(r.ok ? `已在新会话中加载「${picked.displayName}」` : `失败：${r.error}`)
+            void summonExpertInNewSession(picked).then(r => {
+              setNotice(r.ok ? `已选择「${picked.displayName}」：新会话里会自动加载` : `失败：${r.error}`)
               if (r.ok) setTimeout(() => { try { insertPromptIntoComposer(text) } catch { /* 忽略 */ } }, 900)
             }).catch(error => { setNotice(`失败：${String(error?.message || error)}`) })
           }} />
