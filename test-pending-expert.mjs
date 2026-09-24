@@ -37,13 +37,28 @@ try {
   globalThis.fetch = async url => ({
     ok: true,
     json: async () => (String(url).includes('/installed')
-      ? { installed: { 'expert/demo': { kind: 'expert', name: 'demo' } } }
+      ? {
+        installed: {
+          'expert/demo': { kind: 'expert', name: 'demo' },
+          'expert/demo2': { kind: 'expert', name: 'demo2' },
+        },
+      }
       : {}),
   })
   const r = await summonExpertInNewSession({ kind: 'expert', name: 'demo', displayName: '演示专家' })
   assert.equal(r.ok, true, '召唤应成功进入新建会话流程')
   assert.equal(r.pending, true)
+  assert.equal(r.replaced, '', '首次召唤没有被替换的专家')
   assert.equal(takePendingExpert()?.name, 'demo', '召唤必须把该专家记为待生效')
+
+  // 5) 重复召唤（不开始新对话）：单个槽位，后者替换前者，并回传 replaced 供界面提示
+  const a = await summonExpertInNewSession({ kind: 'expert', name: 'demo', displayName: '演示专家' })
+  assert.equal(a.replaced, '', '槽位为空时 replaced 应为空')
+  const b = await summonExpertInNewSession({ kind: 'expert', name: 'demo2', displayName: '第二位专家' })
+  assert.equal(b.ok, true)
+  assert.equal(b.replaced, 'demo', '再次召唤必须回传被替换的专家名（界面据此提示用户）')
+  assert.equal(takePendingExpert()?.name, 'demo2', '单槽位：只保留最后一次召唤的专家')
+  assert.equal(takePendingExpert(), null, '取用后必须为空（不会重复挂到多个会话）')
 } finally {
   globalThis.fetch = realFetch
   setSessionStarter(null)

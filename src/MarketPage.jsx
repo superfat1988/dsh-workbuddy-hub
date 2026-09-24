@@ -54,9 +54,7 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
         // 方案：召唤 = 记下「待生效专家」+ 进入新建会话；用户选任意工作区，
         // 新会话一挂载就自动带上该专家（不依赖工作区解析，不改官方框架）
         const r = await summonExpertInNewSession(entry)
-        setNotice(r.ok
-          ? `已选择「${entry.displayName}」：新会话里会自动加载该专家（可自行选择工作区）`
-          : `失败：${r.error}`)
+        setNotice(summonNotice(r, entry.displayName))
       } else {
         await hub.mount(sessionId, entry.kind, entry.name)
         addSelection(entry, sessionId)
@@ -79,13 +77,18 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
     if (entry.kind === 'expert') {
       setBusy(`${entry.kind}/${entry.name}`); setNotice('')
       void summonExpertInNewSession(entry).then(r => {
-        setNotice(r.ok
-          ? `已选择「${entry.displayName}」：新会话里会自动加载该专家（可自行选择工作区）`
-          : `失败：${r.error}`)
+        setNotice(summonNotice(r, entry.displayName))
       }).catch(error => { setNotice(`失败：${String(error?.message || error)}`) })
         .finally(() => setBusy(''))
     } else void attach(entry)
   }, [attach, workspaceId])
+
+  // 召唤提示文案：单槽位方案下，重复召唤会替换上一次选择的专家，明确告诉用户
+  const summonNotice = (r, displayName) => (r?.ok
+    ? (r.replaced
+      ? `已改为选择「${displayName}」（替换了上一次选择的专家）：新会话里会自动加载`
+      : `已选择「${displayName}」：新会话里会自动加载该专家（可自行选择工作区）`)
+    : `失败：${r?.error || '未知错误'}`)
 
   const loggedIn = auth?.configured === true
   return (
@@ -104,7 +107,7 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
             const picked = summoning
             setSummoning(null)
             void summonExpertInNewSession(picked).then(r => {
-              setNotice(r.ok ? `已选择「${picked.displayName}」：新会话里会自动加载` : `失败：${r.error}`)
+              setNotice(summonNotice(r, picked.displayName))
               if (r.ok) setTimeout(() => { try { insertPromptIntoComposer(text) } catch { /* 忽略 */ } }, 900)
             }).catch(error => { setNotice(`失败：${String(error?.message || error)}`) })
           }} />

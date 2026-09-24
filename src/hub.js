@@ -55,6 +55,13 @@ export function setPendingExpert(entry) {
   console.info('[wbh] pending expert set:', entry?.name)
 }
 export function clearPendingExpert() { _pendingExpert = null }
+/** 只看不取（用于告知用户「上一次选的专家被替换了」）。 */
+export function peekPendingExpert() {
+  const p = _pendingExpert
+  if (!p) return null
+  if (Date.now() - (p.at || 0) > PENDING_TTL_MS) return null
+  return p
+}
 export function takePendingExpert() {
   const p = _pendingExpert
   _pendingExpert = null
@@ -268,7 +275,9 @@ export async function summonExpertInNewSession(entry) {
         if (!fresh[key]) return { ok: false, error: `安装专家失败：${String(error?.message || error)}` }
       }
     }
-    // 2) 记为「待生效专家」—— 任意工作区的新会话挂载时都会带上它
+    // 2) 记为「待生效专家」—— 任意工作区的新会话挂载时都会带上它。
+    //    单个槽位：重复召唤会替换上一次（一个会话只挂一个专家），这里把被替换的告诉调用方。
+    const replaced = peekPendingExpert()?.name || ''
     setPendingExpert(entry)
     // 3) 走 DSH 官方新建会话流程（工作区由 DSH 自己决定；定位不到就停在选择工作区界面）
     const started = startNewSession()
@@ -276,20 +285,11 @@ export async function summonExpertInNewSession(entry) {
       clearPendingExpert()
       return { ok: false, error: '无法进入新建会话流程（uiWorkspace 不可用）' }
     }
-    // 4) 兜底：若新会话复用了当前空白会话（composer 的 sessionId 没变，effect 不会触发），
-    //    延迟补挂一次。正常情况下 composer 的 effect 已消费掉 pending，这里为空操作。
-    try {
-      setTimeout(() => {
-        const sid = composerSession()
-        if (!sid) return
-        const pending = takePendingExpert()
-        if (!pending) return
-        console.info('[wbh] pending expert (fallback) ->', pending.name, sid)
-        addSelection(pending, sid)
-        void hub.mount(sid, 'expert', pending.name)
-      }, 1500)
-    } catch { /* 无定时器环境 */ }
-    return { ok: true, pending: true }
+    // 说明：不再做「延迟兜底」。曾经加过 1500ms 后读 composerSession() 补挂的兜底，
+    // 但用户停在市场页时 composer 是卸载的、该值仍是上一个对话的会话 id —— 兜底会把
+    // 专家挂到旧会话并把待生效消费掉，导致真正的新会话反而没有专家。主链路
+    // （新会话的 composer 一挂载就 takePendingExpert）已覆盖所有正常场景。
+    return { ok: true, pending: true, replaced }
   } catch (error) {
     clearPendingExpert()
     return { ok: false, error: String(error?.message || error) }

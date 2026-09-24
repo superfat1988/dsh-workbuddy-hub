@@ -2190,6 +2190,12 @@ function setPendingExpert(entry) {
 function clearPendingExpert() {
   _pendingExpert = null;
 }
+function peekPendingExpert() {
+  const p = _pendingExpert;
+  if (!p) return null;
+  if (Date.now() - (p.at || 0) > PENDING_TTL_MS) return null;
+  return p;
+}
 function takePendingExpert() {
   const p = _pendingExpert;
   _pendingExpert = null;
@@ -2453,25 +2459,14 @@ async function summonExpertInNewSession(entry) {
         if (!fresh[key]) return { ok: false, error: `\u5B89\u88C5\u4E13\u5BB6\u5931\u8D25\uFF1A${String(error?.message || error)}` };
       }
     }
+    const replaced = peekPendingExpert()?.name || "";
     setPendingExpert(entry);
     const started = startNewSession();
     if (!started) {
       clearPendingExpert();
       return { ok: false, error: "\u65E0\u6CD5\u8FDB\u5165\u65B0\u5EFA\u4F1A\u8BDD\u6D41\u7A0B\uFF08uiWorkspace \u4E0D\u53EF\u7528\uFF09" };
     }
-    try {
-      setTimeout(() => {
-        const sid = composerSession();
-        if (!sid) return;
-        const pending = takePendingExpert();
-        if (!pending) return;
-        console.info("[wbh] pending expert (fallback) ->", pending.name, sid);
-        addSelection(pending, sid);
-        void hub.mount(sid, "expert", pending.name);
-      }, 1500);
-    } catch {
-    }
-    return { ok: true, pending: true };
+    return { ok: true, pending: true, replaced };
   } catch (error) {
     clearPendingExpert();
     return { ok: false, error: String(error?.message || error) };
@@ -3544,7 +3539,7 @@ function MarketPage({ sessionId, workspaceId, runCommand: runCommand2 }) {
         }
       } else if (entry.kind === "expert") {
         const r = await summonExpertInNewSession(entry);
-        setNotice(r.ok ? `\u5DF2\u9009\u62E9\u300C${entry.displayName}\u300D\uFF1A\u65B0\u4F1A\u8BDD\u91CC\u4F1A\u81EA\u52A8\u52A0\u8F7D\u8BE5\u4E13\u5BB6\uFF08\u53EF\u81EA\u884C\u9009\u62E9\u5DE5\u4F5C\u533A\uFF09` : `\u5931\u8D25\uFF1A${r.error}`);
+        setNotice(summonNotice(r, entry.displayName));
       } else {
         await hub.mount(sessionId, entry.kind, entry.name);
         addSelection(entry, sessionId);
@@ -3568,12 +3563,13 @@ function MarketPage({ sessionId, workspaceId, runCommand: runCommand2 }) {
       setBusy(`${entry.kind}/${entry.name}`);
       setNotice("");
       void summonExpertInNewSession(entry).then((r) => {
-        setNotice(r.ok ? `\u5DF2\u9009\u62E9\u300C${entry.displayName}\u300D\uFF1A\u65B0\u4F1A\u8BDD\u91CC\u4F1A\u81EA\u52A8\u52A0\u8F7D\u8BE5\u4E13\u5BB6\uFF08\u53EF\u81EA\u884C\u9009\u62E9\u5DE5\u4F5C\u533A\uFF09` : `\u5931\u8D25\uFF1A${r.error}`);
+        setNotice(summonNotice(r, entry.displayName));
       }).catch((error) => {
         setNotice(`\u5931\u8D25\uFF1A${String(error?.message || error)}`);
       }).finally(() => setBusy(""));
     } else void attach(entry);
   }, [attach, workspaceId]);
+  const summonNotice = (r, displayName) => r?.ok ? r.replaced ? `\u5DF2\u6539\u4E3A\u9009\u62E9\u300C${displayName}\u300D\uFF08\u66FF\u6362\u4E86\u4E0A\u4E00\u6B21\u9009\u62E9\u7684\u4E13\u5BB6\uFF09\uFF1A\u65B0\u4F1A\u8BDD\u91CC\u4F1A\u81EA\u52A8\u52A0\u8F7D` : `\u5DF2\u9009\u62E9\u300C${displayName}\u300D\uFF1A\u65B0\u4F1A\u8BDD\u91CC\u4F1A\u81EA\u52A8\u52A0\u8F7D\u8BE5\u4E13\u5BB6\uFF08\u53EF\u81EA\u884C\u9009\u62E9\u5DE5\u4F5C\u533A\uFF09` : `\u5931\u8D25\uFF1A${r?.error || "\u672A\u77E5\u9519\u8BEF"}`;
   const loggedIn = auth?.configured === true;
   return /* @__PURE__ */ import_react7.default.createElement("div", { className: "expert-center-page wbh-page", "data-wbh-session": sessionId || "" }, /* @__PURE__ */ import_react7.default.createElement(
     Catalogue,
@@ -3605,7 +3601,7 @@ function MarketPage({ sessionId, workspaceId, runCommand: runCommand2 }) {
         const picked = summoning;
         setSummoning(null);
         void summonExpertInNewSession(picked).then((r) => {
-          setNotice(r.ok ? `\u5DF2\u9009\u62E9\u300C${picked.displayName}\u300D\uFF1A\u65B0\u4F1A\u8BDD\u91CC\u4F1A\u81EA\u52A8\u52A0\u8F7D` : `\u5931\u8D25\uFF1A${r.error}`);
+          setNotice(summonNotice(r, picked.displayName));
           if (r.ok) setTimeout(() => {
             try {
               insertPromptIntoComposer(text);
@@ -3822,7 +3818,7 @@ function ComposerAdd({ sessionId, runCommand: runCommand2 }) {
         }
       } else if (entry.kind === "expert") {
         const r = await summonExpertInNewSession(entry);
-        setNotice(r.ok ? `\u5DF2\u9009\u62E9\u300C${entry.displayName}\u300D\uFF1A\u65B0\u4F1A\u8BDD\u91CC\u4F1A\u81EA\u52A8\u52A0\u8F7D` : `\u5931\u8D25\uFF1A${r.error}`);
+        setNotice(r?.ok ? r.replaced ? `\u5DF2\u6539\u4E3A\u9009\u62E9\u300C${entry.displayName}\u300D\uFF08\u66FF\u6362\u4E86\u4E0A\u4E00\u6B21\u9009\u62E9\u7684\u4E13\u5BB6\uFF09\uFF1A\u65B0\u4F1A\u8BDD\u91CC\u4F1A\u81EA\u52A8\u52A0\u8F7D` : `\u5DF2\u9009\u62E9\u300C${entry.displayName}\u300D\uFF1A\u65B0\u4F1A\u8BDD\u91CC\u4F1A\u81EA\u52A8\u52A0\u8F7D\u8BE5\u4E13\u5BB6\uFF08\u53EF\u81EA\u884C\u9009\u62E9\u5DE5\u4F5C\u533A\uFF09` : `\u5931\u8D25\uFF1A${r?.error || "\u672A\u77E5\u9519\u8BEF"}`);
       } else {
         await hub.mount(sessionId, entry.kind, entry.name);
         addSelection(entry, sessionId);
