@@ -12,6 +12,8 @@ import { tmpdir } from 'node:os'
 import { buildIndex, landEntry, loadJson, saveJson, linkSkill, unlinkSkill, skillsMountRoot } from './index.js'
 
 const root = mkdtempSync(join(tmpdir(), 'wbhub-install-'))
+// 断言中途失败也要清掉临时目录（否则 /tmp 会留垃圾）
+process.on('exit', () => { try { rmSync(root, { recursive: true, force: true }) } catch { /* 忽略 */ } })
 // 软链根单独给定：绝不写用户真实的 ~/.dsh/skills
 const skillsMount = join(root, 'dsh-skills')
 const paths = {
