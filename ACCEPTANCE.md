@@ -134,6 +134,14 @@ PY
      Internal Testing Notice 弹窗（`[class*="_mask_"]`）会全屏遮挡，必须先关掉再操作。
 - 另外 `127.0.0.1:16002` 上有一个本机 CDP 网关（回 `local CDP requires the loopback endpoint`），未进一步接入。
 
+### 0.6 收尾纪律：验收 agent 起的浏览器必须杀干净
+
+用 CDP/Playwright 起 headless Chromium 时，请在结束时杀掉**整个进程组**（先 `pkill -P <pid>`，再 `kill <pid>`）——
+只删 `user-data-dir` 不会结束进程。本会话泄漏过两个（`--remote-debugging-port=16011/16012`）跑了 8 小时才发现。
+
+收尾自查：`ss -ltn | grep -E ':(1601[0-9]|92[0-9][0-9])'` 应为空。
+（本机常驻的 `:16000` = XkasmVNC 远程桌面、`:16002` = 用户 `fygo-browser` 的沙箱服务，**都不是我们的，别动**。）
+
 ---
 
 ## A. 自动化与产物（必须先过，否则后面无意义）
