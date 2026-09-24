@@ -98,36 +98,32 @@ PY
 #   POST /workbuddy-hub/mount  {sessionId,kind,name}               挂载
 ```
 
-### 0.5 浏览器验收：用**已在 Docker 跑的 scrapling**，不要本地再装一套
+### 0.5 浏览器相关验收：分两类，别混用
 
-Scrapling 本体的正确位置是容器（不是本机 pip/venv）：
+**A. 抓取 / 截图（读页面、看渲染结果）→ 用已注册的 scrapling MCP**
 
-```bash
-sudo docker ps --filter name=scrapling      # pyd4vinci/scrapling:latest，Up，127.0.0.1:8002->8000
-# 启动参数实测为：mcp --http --host 0.0.0.0 --port 8000 --no-auth（无需 token）
-```
+- 本体在 Docker：容器 `scrapling`（`pyd4vinci/scrapling:latest`），宿主 `127.0.0.1:8002` → 容器 `8000`，
+  启动参数实测为 `mcp --http --host 0.0.0.0 --port 8000 --no-auth`（loopback 绑定，无需 token）。
+- **DSH 侧已注册**（2026-09-25）：`~/.dsh/profiles/web/cordis.patch.yml` 末尾一行
+  `@deepseek-ai/dsh-mcp-client`（`transport: streamable-http` / `serverName: scrapling` /
+  `url: http://127.0.0.1:8002/mcp`）→ 工具以 `mcp__scrapling__<tool>` 暴露，共 13 个：
+  `fetch / bulk_fetch / stealthy_fetch / bulk_stealthy_fetch / session_fetch / session_make_request /
+  open_session / open_request_session / close_session / list_sessions / make_request / bulk_get / screenshot`。
+  （DSH 会**热加载**这个 patch，改完不需要重启；实测 web 侧进程立刻与 8002 建立了连接。）
+- 脚本里直接调 MCP 的协议要点：先 `initialize` 并从**响应头**取 `mcp-session-id`，后续请求带该头；
+  响应是 SSE，取 `data: ` 那一行再 `JSON.parse`。
+- **寻址**：容器内的 `127.0.0.1` 不是宿主 → 让它抓宿主服务要用 **LAN IP**（`http://192.168.2.185:<port>/`，
+  实测通；`127.0.0.1:<port>` 会 `ERR_CONNECTION_REFUSED`；`host.docker.internal` 未配置）。
+  验收隔离实例时，实例要绑 `0.0.0.0`，并在 profile 的 `trustedHosts` 里加上对应 authority。
+- **不要在本机 `pip install scrapling`**：那是往技能目录塞一份 469MB 的重复本体（本项目犯过一次，已删）。
 
-它是 **MCP over HTTP**，13 个工具（`fetch` / `bulk_fetch` / `stealthy_fetch` / `bulk_stealthy_fetch` /
-`session_fetch` / `open_session` / `close_session` / `list_sessions` / `make_request` /
-`open_request_session` / `bulk_get` / `screenshot` …）。协议要点（实测）：
+**B. 交互（点击 / 输入 / 多步流程）→ 上面的 MCP 做不到**
 
-```bash
-# 1) 先 initialize，并从**响应头**取 mcp-session-id
-curl -sS -D- -X POST http://127.0.0.1:8002/mcp \
-  -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}'
-# 2) 后续请求带上 mcp-session-id 头；响应是 SSE（取 `data: ` 那一行再 JSON.parse）
-# 3) 调用工具：{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fetch","arguments":{"url":"…"}}}
-```
-
-**寻址注意（实测）**：容器内的 `127.0.0.1` **不是宿主**。
-· 抓宿主上的服务要用宿主 LAN IP（如 `http://192.168.2.185:3080/`）——`127.0.0.1:3080` 会 `ERR_CONNECTION_REFUSED`；
-· `host.docker.internal` 未配置（`ERR_EMPTY_RESPONSE`）；
-· 所以拿它验收**隔离实例**时，实例必须绑 `0.0.0.0`（只绑 127.0.0.1 容器抓不到），并在 profile 的
-  `trustedHosts` 里加上对应 authority。
-
-> 不要在本机 `pip install "scrapling[all]"`：那是往 skill 目录里塞一份 469MB 的重复本体（本会话犯过，
-> 已删）。scrapling-official 那份 SKILL.md 里的 pip 安装步骤不适用于本机部署，以本节为准。
+- 那 13 个工具里**没有** `click` / `type` / `fill`；容器内也**没有 playwright**（只有 scrapling 本体），
+  所以 `docker exec` 跑交互脚本同样不可行。上一轮那次交互验收能跑通，用的是本机临时装的 Playwright venv（已删）。
+- 交互验收仍用：`/tmp/wbh-cdp.mjs` + `/tmp/lib.mjs`（CDP 直连本机 Chromium），
+  或先连上 `dsh-browser` 的浏览器扩展以启用 `browser_*` 工具（当前扩展未连接）。
+- 已知坑：DSH 新实例首次出现的 Internal Testing Notice 弹窗（`[class*="_mask_"]`）会全屏遮挡，必须先关掉再操作。
 
 CDP 辅助仍在（`/tmp/wbh-cdp.mjs`、`/tmp/lib.mjs`），但仅在无法起浏览器时作为退路。
 
