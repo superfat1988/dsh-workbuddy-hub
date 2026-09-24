@@ -2181,6 +2181,27 @@ function startNewSession() {
     return false;
   }
 }
+var RECENT_EXPERTS_KEY = "wbh-recent-experts";
+var RECENT_EXPERTS_MAX = 8;
+function recentExpertNames() {
+  try {
+    const raw = localStorage.getItem(RECENT_EXPERTS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.filter((x) => typeof x === "string" && x) : [];
+  } catch {
+    return [];
+  }
+}
+function markExpertRecent(entry) {
+  const name = entry?.name;
+  if (typeof name !== "string" || !name) return;
+  try {
+    const list = recentExpertNames().filter((n) => n !== name);
+    list.unshift(name);
+    localStorage.setItem(RECENT_EXPERTS_KEY, JSON.stringify(list.slice(0, RECENT_EXPERTS_MAX)));
+  } catch {
+  }
+}
 var _pendingExpert = null;
 var PENDING_TTL_MS = 5 * 60 * 1e3;
 function setPendingExpert(entry) {
@@ -2454,6 +2475,7 @@ async function summonExpertInNewSession(entry) {
     }
     const replaced = peekPendingExpert()?.name || "";
     setPendingExpert(entry);
+    markExpertRecent(entry);
     const started = startNewSession();
     if (!started) {
       clearPendingExpert();
@@ -3294,7 +3316,17 @@ function Catalogue({
       if (pinned.has(`${x.kind}/${x.name}`)) return 1;
       return 2;
     };
-    const visibleRows = [...merged].sort((a, b) => rowRank(a) - rowRank(b));
+    const recentExperts = kind === "expert" ? recentExpertNames() : [];
+    const recencyRank = (name) => {
+      const i = recentExperts.indexOf(name);
+      return i < 0 ? Number.MAX_SAFE_INTEGER : i;
+    };
+    const visibleRows = [...merged].sort((a, b) => {
+      const byRank = rowRank(a) - rowRank(b);
+      if (byRank !== 0) return byRank;
+      if (kind !== "expert") return 0;
+      return recencyRank(a.name) - recencyRank(b.name);
+    });
     const rowNode = (entry) => {
       const key = `${entry.kind}/${entry.name}`;
       const connected = entry.kind === "connector" ? isBound(entry) : Boolean(entry._enabled || entry.isConnected);

@@ -42,6 +42,29 @@ export function startNewSession() {
 // 这是 DSH 官方「新建会话」路径（走客户端 sessions.create，客户端会话列表即时更新），
 // 与宿主的 sessionController.create 不同（后者客户端不会同步收到会话）。
 /**
+ * 最近加载过的专家（跨会话保留，localStorage）：picker 的专家面板据此把常用专家排在前面。
+ * 没有记录时调用方回落到原有排序（不影响置顶）。
+ */
+const RECENT_EXPERTS_KEY = 'wbh-recent-experts'
+const RECENT_EXPERTS_MAX = 8
+export function recentExpertNames() {
+  try {
+    const raw = localStorage.getItem(RECENT_EXPERTS_KEY)
+    const arr = raw ? JSON.parse(raw) : []
+    return Array.isArray(arr) ? arr.filter(x => typeof x === 'string' && x) : []
+  } catch { return [] }
+}
+export function markExpertRecent(entry) {
+  const name = entry?.name
+  if (typeof name !== 'string' || !name) return
+  try {
+    const list = recentExpertNames().filter(n => n !== name)
+    list.unshift(name)
+    localStorage.setItem(RECENT_EXPERTS_KEY, JSON.stringify(list.slice(0, RECENT_EXPERTS_MAX)))
+  } catch { /* 无 localStorage 时忽略 */ }
+}
+
+/**
  * 「待生效专家」：召唤后先记下来，等新会话的 composer 挂载（拿到那个会话的
  * props.sessionId）时再挂上去 + 显示 chip。
  *
@@ -279,6 +302,7 @@ export async function summonExpertInNewSession(entry) {
     //    单个槽位：重复召唤会替换上一次（一个会话只挂一个专家），这里把被替换的告诉调用方。
     const replaced = peekPendingExpert()?.name || ''
     setPendingExpert(entry)
+    markExpertRecent(entry)   // 记录「最近加载过的专家」，供 picker 排序
     // 3) 走 DSH 官方新建会话流程（工作区由 DSH 自己决定；定位不到就停在选择工作区界面）
     const started = startNewSession()
     if (!started) {

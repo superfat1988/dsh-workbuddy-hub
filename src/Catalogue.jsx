@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { hub, onCatalogChange, addSelection, openMarket, onMarketRequest, consumePendingMarket } from './hub.js'
+import { hub, onCatalogChange, addSelection, openMarket, onMarketRequest, consumePendingMarket, recentExpertNames } from './hub.js'
 import { insertPromptIntoComposer } from './insert-prompt.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
@@ -826,13 +826,25 @@ export default function Catalogue({
         : visible
     const pinnedOfKind = pinnedEntries.filter(x => x.kind === kind)
     const merged = [...pinnedOfKind, ...baseRows.filter(b => !pinnedOfKind.some(p => p.name === b.name && p.kind === b.kind))]
-    // 官方实测排序：已连接的连接器置顶（带开关）→ 图钉置顶项 → 其余保持原序。
+    // 官方实测排序：已连接的连接器置顶（带开关）→ 图钉置顶项 → 其余。
     const rowRank = x => {
       if (x.kind === 'connector' && bound.includes(x.name)) return 0
       if (pinned.has(`${x.kind}/${x.name}`)) return 1
       return 2
     }
-    const visibleRows = [...merged].sort((a, b) => rowRank(a) - rowRank(b))
+    // 专家面板：同档内按「最近加载过的专家」优先（越近越靠前）；没有记录时返回同值，
+    // 排序保持稳定 = 回落到原有顺序（置顶逻辑不受影响）。
+    const recentExperts = kind === 'expert' ? recentExpertNames() : []
+    const recencyRank = name => {
+      const i = recentExperts.indexOf(name)
+      return i < 0 ? Number.MAX_SAFE_INTEGER : i
+    }
+    const visibleRows = [...merged].sort((a, b) => {
+      const byRank = rowRank(a) - rowRank(b)
+      if (byRank !== 0) return byRank
+      if (kind !== 'expert') return 0
+      return recencyRank(a.name) - recencyRank(b.name)
+    })
 
     const rowNode = entry => {
       const key = `${entry.kind}/${entry.name}`

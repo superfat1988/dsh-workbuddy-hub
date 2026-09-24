@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 import {
   setPendingExpert, takePendingExpert, peekPendingExpert, clearPendingExpert,
   setSessionStarter, summonExpertInNewSession,
+  markExpertRecent, recentExpertNames,
 } from './src/hub.js'
 
 // 1) 设置 → 取用一次 → 再取为空（一次性消费，避免误挂到别的会话）
@@ -69,4 +70,26 @@ try {
   setSessionStarter(null)
 }
 
+// 7) 「最近加载过的专家」：最近优先、去重、上限 8；无记录时为空（picker 回落到原排序）
+const mem = new Map()
+globalThis.localStorage = {
+  getItem: k => (mem.has(k) ? mem.get(k) : null),
+  setItem: (k, v) => mem.set(k, String(v)),
+  removeItem: k => mem.delete(k),
+}
+try {
+  assert.deepEqual(recentExpertNames(), [], '没有记录时必须为空，picker 才能回落到原排序')
+  markExpertRecent({ name: 'e1' })
+  markExpertRecent({ name: 'e2' })
+  assert.deepEqual(recentExpertNames(), ['e2', 'e1'], '最新加载的排最前')
+  markExpertRecent({ name: 'e1' })
+  assert.deepEqual(recentExpertNames(), ['e1', 'e2'], '重复加载要提到最前且不重复出现')
+  for (let i = 0; i < 10; i += 1) markExpertRecent({ name: 'x' + i })
+  assert.equal(recentExpertNames().length, 8, '最多保留 8 个')
+  assert.equal(recentExpertNames()[0], 'x9', '最新的仍在最前')
+} finally {
+  delete globalThis.localStorage
+}
+
 console.log('pending expert (summon -> composer mount) semantics: OK')
+console.log('recent experts (picker ordering input) semantics: OK')
