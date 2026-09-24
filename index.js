@@ -1541,6 +1541,20 @@ export function apply(ctx, config = {}) {
         const sc = ctx.get?.('sessionController') ?? ctx.sessionController
         if (!sc || typeof sc.create !== 'function') { json(res, 503, { ok: false, error: 'sessionController unavailable' }); return true }
         let workspaceId = body.workspaceId ? String(body.workspaceId) : undefined
+        // 0) 基准事实：工作区列表里找「包含 nearSessionId」的工作区（sessionIds 成员关系）。
+        //    不依赖会话头的 cwd 字段 —— 632f6d4 之后由 create({agentPreset, workspaceId})
+        //    创建的会话，header.cwd 可能不写，但一定挂在工作区的 sessionIds 里。
+        if (!workspaceId && body.nearSessionId) {
+          try {
+            const reg0 = ctx.get?.('workspaceRegistry') ?? ctx.workspaceRegistry
+            for (const ws0 of (typeof reg0?.list === 'function' ? reg0.list() : [])) {
+              if (Array.isArray(ws0.sessionIds) && ws0.sessionIds.some(i => String(i) === String(body.nearSessionId))) {
+                workspaceId = ws0.workspaceId
+                break
+              }
+            }
+          } catch { /* ignore */ }
+        }
         let cwd
         // 没给 workspaceId 时，用 nearSessionId 所属会话的 cwd 精确匹配工作区（最稳：
         // cwd 就是会话落的工作区路径）。这样新会话一定和当前会话在同一工作区，不会落错。
