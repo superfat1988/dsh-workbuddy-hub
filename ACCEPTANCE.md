@@ -98,7 +98,21 @@ PY
 #   POST /workbuddy-hub/mount  {sessionId,kind,name}               挂载
 ```
 
-CDP 辅助（已存在）：`/tmp/wbh-cdp.mjs`（`listTabs/connect/newTab/closeTab`）、`/tmp/lib.mjs`（`clickAt/hoverAt`）。
+### 0.5 浏览器验收：**优先用 Scrapling，不要手写 CDP**
+
+本会话实测：手写 CDP 脚本反复卡在「首次弹窗遮罩 / 时序 / 连接超时」，同一批断言用 Scrapling
+一次通过。所以真 UI 验收请优先走它（已装好，无需再装）：
+
+```bash
+/home/kaitzh/.dsh/skills/scrapling-official/.venv/bin/python your_script.py
+# 脚本里：DynamicFetcher.fetch(url, headless=True, network_idle=True, wait=3000,
+#                              executable_path='/usr/bin/chromium', page_action=act)
+#   · executable_path 指向系统 chromium，可免去 playwright 的浏览器下载；
+#   · page_action(page) 里用 Playwright API 驱动交互（hover/click/wait_for_timeout），
+#     处理首次运行弹窗（[class*="_mask_"] 遮挡）后即可正常操作。
+```
+
+CDP 辅助仍在（`/tmp/wbh-cdp.mjs`、`/tmp/lib.mjs`），但仅在无法起浏览器时作为退路。
 
 ---
 
