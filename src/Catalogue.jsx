@@ -189,7 +189,7 @@ function ConnectorCard({ entry, busy, onDetail, onAction, onConnectorAction, bou
 export default function Catalogue({
   sessionId, kind, onKind, query, onQuery, onDetail, onAction,
   installed = {}, mounted = new Set(), busy = '', variant = 'page', onRefresh, footerExtra = null,
-  topbarRight = null,
+  topbarRight = null, onSettled = null,
 }) {
   const [rows, setRows] = useState([])
   const [hasMore, setHasMore] = useState(false)
@@ -243,6 +243,14 @@ export default function Catalogue({
     hub.boundConnectors().then(r => { if (live) setBound(r.map(x => x.name)) }).catch(() => {})
     return () => { live = false }
   }, [kind])
+
+  // 「最近专家」顺序快照（见下方 picker 排序处的说明）
+  const [recentSnapshot, setRecentSnapshot] = useState(() => recentExpertNames())
+  useEffect(() => { setRecentSnapshot(recentExpertNames()) }, [kind, query])
+
+  // 行加载完成后通知父组件（picker 用它把面板位置定下来再显示，避免异步加载导致面板
+  // 在鼠标底下跳位）。loading 由 true 变 false 那一刻即「就绪」。
+  useEffect(() => { if (!loading) onSettled?.() }, [loading, kind, query, onSettled])
 
   const load = useCallback(async (targetPage, replace) => {
     if (replace) { setLoading(true); setFailed('') } else setLoadingMore(true)
@@ -910,7 +918,11 @@ export default function Catalogue({
     }
     // 专家面板：同档内按「最近加载过的专家」优先（越近越靠前）；没有记录时返回同值，
     // 排序保持稳定 = 回落到原有顺序（置顶逻辑不受影响）。
-    const recentExperts = kind === 'expert' ? recentExpertNames() : []
+    //
+    // 顺序用**快照**（kind/query 变化时才重取），不在每次渲染时现读：否则「点选 → 记为最近
+    // → 立即重排」，用户鼠标底下的行会换位并点到隔壁行（验收缺陷 2 的成因之一）。重开面板或
+    // 换搜索词才会刷新顺序。
+    const recentExperts = kind === 'expert' ? recentSnapshot : []
     const recencyRank = name => {
       const i = recentExperts.indexOf(name)
       return i < 0 ? Number.MAX_SAFE_INTEGER : i
@@ -975,7 +987,9 @@ export default function Catalogue({
       <div className="wbh-flyoutList" ref={scrollRef} onScroll={onScroll}>
         {loading && <div className="wbh-flyoutState">正在读取…</div>}
         {!loading && !failed && visibleRows.length === 0 && (
-          <div className="wbh-flyoutState">暂无可用{kindMeta.label}</div>
+          <div className="wbh-flyoutState">{String(query).trim()
+            ? `没有找到与「${String(query).trim()}」匹配的${kindMeta.label}`
+            : `暂无可用${kindMeta.label}`}</div>
         )}
         {visibleRows.map(rowNode)}
         {loadingMore && <div className="wbh-flyoutState">加载中…</div>}

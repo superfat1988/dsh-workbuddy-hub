@@ -50,7 +50,13 @@ cat > /tmp/acc-nologin-patch.yml <<'EOF'
   config:
     storeRoot: '/tmp/acc-nologin'
 EOF
-# 启动命令在上面的基础上加：--patch /tmp/acc-nologin-patch.yml，端口换 3998
+# 启动命令在上面的基础上加 --patch，端口换 3998。
+# ⚠️ --patch 的位置有讲究：必须写成 `web --patch <file> --host … --port …`
+# （紧跟 web 之后、--host 之前）。写到命令末尾会报 unknown option（实测）。
+cd /home/kaitzh/deepseek-harness
+DSH_HOME=/tmp/acc nohup node --max-http-header-size=131072 apps/cli/lib/bin.js \
+  web --patch /tmp/acc-nologin-patch.yml --host 127.0.0.1 --port 3998 --no-open \
+  > /tmp/acc-nologin.log 2>&1 &
 ```
 
 ### 0.3 凭证失效（stale）实例（用于 K 组）
@@ -146,7 +152,7 @@ CDP 辅助（已存在）：`/tmp/wbh-cdp.mjs`（`listTabs/connect/newTab/closeT
 | **M3** | 清空搜索 | 恢复完整列表 | 卡片数 |
 | **M4** | 点某位专家的「召唤」 | 跳转新会话 + chip 到位；日志含 `pending expert set` / `applied` | 日志 + chip |
 | **M5** | 召唤后**切换工作区**（再选另一个工作区的新会话） | 新会话**同样**出现该专家 chip（专家跟会话走，不依赖工作区解析） | 第二个会话的 chip |
-| **M6** | 召唤后立刻再召唤**另一位**专家（不开始对话） | 提示「已改为选择…（替换了上一次选择的专家）」；最终只生效最后一位 | 提示 + 最终 chip |
+| **M6** | 召唤后立刻再召唤**另一位**专家（不开始对话） | 最终只生效最后一位（召唤会立刻新建会话并消费待生效专家，本来就没有可替换的对象，**不要求任何提示**） | 最终 chip |
 
 ## E. 专家注入真相（最硬的证据）
 

@@ -18,6 +18,10 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 同步：GitHub Actions 每日 05:17（北京）从 `main` 触发，把上游 `main` 快照推到 `mirror`。
 `schedule` 只从默认分支读取 workflow，因此 workflow 必须留在 `main`。
 
+**镜像来源只有 `mirrorRepo`**（默认 `superfat1988/workbuddyskills`）：内容、图标、包下载全部从它取。
+`cordis.patch.yml` 里声明的 `upstreamRepo` 目前**没有任何代码读取**，不参与「在线检查 changelog、
+失败回退镜像」之类的逻辑 —— 那套机制并不存在，不要据此预期任何上游在线检查行为。
+
 ## HTTP 路由（Host 侧 `/workbuddy-hub`，全部先过 `ctx.connection.requestRejection`）
 
 | 方法 | 路径 | 说明 |
@@ -27,9 +31,9 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 | GET | `/search?q=&kind=experts\|skills\|connectors&limit=` | 检索，返回中文名/简介/能力标记 |
 | GET | `/installed` | 已装清单（连接器附带实时 `enabled`/`status`/`credentialRefs`） |
 | POST | `/install {kind,name}` | 按需下载落地（二进制安全） |
-| POST | `/uninstall {kind,name}` | 先拆传输层与技能链接，再删文件 |
-| GET | `/mounted?sessionId=` | 本会话已挂载条目 |
-| POST | `/mount` \| `/unmount {sessionId,kind,name}` | 会话级挂载（安装 ≠ 挂载） |
+| POST | `/uninstall {kind,name}` | 先拆传输层与技能链接，再删文件，并摘掉各会话里的挂载 |
+| GET | `/mounted?sessionId=` | 本会话已挂载条目（只读，缺 sessionId 时按最近会话兜底并标 `sessionSource`） |
+| POST | `/mount` \| `/unmount {sessionId,kind,name}` | 会话级挂载（安装 ≠ 挂载）；**写操作必须显式传 `sessionId`，缺失返回 409**，绝不兜底猜会话 |
 | POST | `/connectors/enable` \| `/connectors/disable {name}` | 动态挂载/拆卸 MCP 传输 |
 | GET | `/icon?kind=&name=` | 图标代理（按需从镜像取，磁盘缓存） |
 
@@ -58,7 +62,9 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 ## 开发
 
 ```bash
-npm test        # 六套：mcp 校验 / 契约 · 专家人设解析 · CLI 连接器 · 召唤命令 · 凭证轮换 · 浏览器槽位
+npm test        # 15 个套件：mcp 校验 / 专家人设 / CLI 连接器 / 召唤 / 凭证轮换 /
+                #   浏览器槽位 / client bundle / render smoke / session 契约 / pending expert /
+                #   recent experts / auth store / keepalive / install 离线链 / package 完整性
 npm run pack:check
 ```
 
@@ -128,12 +134,19 @@ UI 层：左栏入口存在 → 市场页标题 `专家 · 技能 · 连接器`�
 
 | 数据 | 来源 | 说明 |
 |---|---|---|
-| 专家目录（428，中英名/职称/简介/Tag/快捷提示词） | 官方 COS 注册表 `expert_center.json`（MIT，无需登录） | `hub.marketList('expert')` |
+| 专家目录（约 430，随官方注册表变动；中英名/职称/简介/Tag/快捷提示词） | 官方 COS 注册表 `expert_center.json`（MIT，无需登录） | `hub.marketList('expert')` |
 | 专家头像 PNG / 人设 Markdown | 同一 COS 源直链 | 召唤用的人设与官方同源 |
 | 技能 / 连接器目录 | GitHub 镜像 `superfat1988/workbuddyskills` | 亦是包下载源 |
-| 官方登录（技能页数据、用量） | OAuth 设备授权：`POST /wb-auth/start` 给出官方 authUrl → 浏览器登录 → `POST /wb-auth/poll` 轮换取 `{access_token, refresh_token, expires_in, uid}`，存 `~/.workbuddyskills/.meta/state/` | 协议与 [workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) 一致（`copilot.tencent.com/v2/...`，Bearer + X-User-Id + CLI UA）；凭证不出本机 |
+| 官方登录（技能页数据、用量） | OAuth 设备授权：`POST /wb-auth/start` 给出官方 authUrl → 浏览器登录 → `POST /wb-auth/poll` 轮换取 `{access_token, refresh_token, expires_in, uid}`，存 `~/workbuddyskills/.meta/state/` | 协议与上游 workbuddy2api 的两个实现一致（[linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel) · [ardeyouxipianyi/workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub)；`copilot.tencent.com/v2/...`，Bearer + X-User-Id + CLI UA）；凭证不出本机 |
 
 插件不依赖 DeepSeek 浏览器 cookie；官方会话由设备授权获得、可刷新、可 `/wb-auth/logout` 注销。
+
+## 登录与账号保活
+
+- **扫码登录**：设置区/市场页点「扫码登录」→ `POST /wb-auth/start` 返回官方 authUrl（OAuth 设备授权）→ 浏览器扫码确认 → 客户端 `POST /wb-auth/poll` 轮询取回 `{access_token, refresh_token, expires_in, uid}`；`POST /wb-auth/logout` 注销并清掉凭证与健康档。
+- **主动刷新**：后台每 **30 分钟**巡检一次，`access_token` 剩余寿命**不足 2 小时**就调用 refresh_token 刷新（阈值 7200s，规则来自上游 workbuddy2api 的 `wb_scheduler.py`）。配置 `keepalive: false` 可整体关闭巡检。
+- **失效判定**：刷新失败 / 官方错误码 12153（session dead）**连续 3 次**才判「登录已失效」（前两次只记 `lastError`，防误判；中途成功一次即清零计数）。判失效后界面显示「登录已失效，请重新扫码」，并停止使用该凭证。
+- **凭证落盘**：`~/workbuddyskills/.meta/state/workbuddy-auth.json` 与健康档 `workbuddy-auth-health.json` 均以 **0600** 写入（另有 `chmod` 兜底）；凭据值不回传浏览器、不进日志。
 
 ## 已知限制
 

@@ -1,14 +1,16 @@
 // 会话解析契约 + 运行时 MCP 工具注册表视图（宿主半）。
 //
-// 1) sessionId 必须「客户端显式值优先」，只有缺失时才退化为最近会话，且退化必须
-//    由 sessionSource 如实标出（recent-fallback），绝不静默挂到错误的会话上。
-// 2) /connectors/live-tools 必须读 DSH 活注册表（tools 服务每次现算），返回
+// 1) sessionId 必须「客户端显式值优先」；**只读**路由在缺失时才退化为最近会话，且退化
+//    必须由 sessionSource 如实标出（recent-fallback），绝不静默挂到错误的会话上。
+//    写路由（POST /mount、/unmount）更进一步：缺失 sessionId 一律 409，不兜底。
+// 2) 卸载必须连带摘掉挂载（pruneMounts）：全量清理各会话里的该 key，不动别的 key。
+// 3) /connectors/live-tools 必须读 DSH 活注册表（tools 服务每次现算），返回
 //    mcp__<serverName>__* 的真实工具名 —— 这是「连接器工具真的进了本进程」的证据。
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { apply, replacePersonaPrefix, mountEntry, unmountEntry } from './index.js'
+import { apply, replacePersonaPrefix, mountEntry, unmountEntry, pruneMounts } from './index.js'
 
 const root = '/tmp/wbh-session-contract'
 rmSync(root, { recursive: true, force: true })
@@ -124,6 +126,43 @@ assert.deepEqual(unmountRes.json.keys, [])
 const mountsRaw = JSON.parse((await import('node:fs')).readFileSync(join(root, '.meta', 'mounts.json'), 'utf8'))
 assert.ok(Object.prototype.hasOwnProperty.call(mountsRaw.sessions, 'session-from-client'), 'mount must be keyed by the client session')
 assert.ok(!Object.prototype.hasOwnProperty.call(mountsRaw.sessions, 'session-new'), 'mount must not silently land on the fallback session')
+
+// ---- 1-写路由. 写路由必须显式传 sessionId（缺失 → 409，绝不兜底最近会话）----
+// 只读路由保留 recent-fallback（上面 /active-session 的断言），写路由一律拒绝：
+// 兜底取「最近会话」会把条目挂进用户没在看的会话，是静默的错误挂载。
+const mountNoSession = await call('POST', '/mount', { kind: 'expert', name: 'demo-expert' })
+assert.equal(mountNoSession.status, 409, 'POST /mount without sessionId must be rejected, never fall back to the newest session')
+assert.equal(mountNoSession.json.error, 'sessionId is required for mount/unmount')
+
+const unmountNoSession = await call('POST', '/unmount', { kind: 'expert', name: 'demo-expert' })
+assert.equal(unmountNoSession.status, 409, 'POST /unmount without sessionId must be rejected too')
+assert.equal(unmountNoSession.json.error, 'sessionId is required for mount/unmount')
+
+// 空白串与缺失等价（客户端可能传 '' / '   '）
+const mountBlank = await call('POST', '/mount', { kind: 'skill', name: 'demo-skill', sessionId: '   ' })
+assert.equal(mountBlank.status, 409, 'a whitespace-only sessionId must count as missing')
+
+// 非法 kind / name 仍是 400（既有行为，这里固化住）
+const badKind = await call('POST', '/mount', { kind: 'nope', name: 'demo-skill', sessionId: 'session-from-client' })
+assert.equal(badKind.status, 400)
+assert.equal(badKind.json.error, 'invalid kind or name')
+const badEntryName = await call('POST', '/mount', { kind: 'skill', name: '../etc/passwd', sessionId: 'session-from-client' })
+assert.equal(badEntryName.status, 400)
+const badUnmountKind = await call('POST', '/unmount', { kind: 'nope', name: 'demo-skill', sessionId: 'session-from-client' })
+assert.equal(badUnmountKind.status, 400)
+
+// 被拒的写请求不得写脏数据（尤其不得落到兜底会话上）
+const afterRejected = JSON.parse(readFileSync(join(root, '.meta', 'mounts.json'), 'utf8')).sessions
+assert.ok(!Object.prototype.hasOwnProperty.call(afterRejected, 'session-new'),
+  'a rejected write must never leave a mount on the fallback session')
+
+// 合法 sessionId → 200，且如实标注来源 client
+const mountOk = await call('POST', '/mount', { kind: 'expert', name: 'demo-expert', sessionId: 'session-from-client' })
+assert.equal(mountOk.status, 200)
+assert.equal(mountOk.json.sessionId, 'session-from-client')
+assert.equal(mountOk.json.sessionSource, 'client')
+assert.deepEqual(mountOk.json.keys, ['expert/demo-expert'])
+await call('POST', '/unmount', { kind: 'expert', name: 'demo-expert', sessionId: 'session-from-client' })
 
 // ---- 1a. 召唤用的工作区解析：nearSessionId 的 sessionIds 成员关系优先 ----
 const wsHit = await call('GET', '/expert-resolve-workspace?nearSessionId=session-from-client')
@@ -382,11 +421,41 @@ assert.equal(presetCalls.copied.length, 1)
 // 它会自动把 sessionId 解析成 agent、且只对空白会话生效（会话开始后被锁拒绝），
 // 不再走宿主路由，所以这里不测宿主 select。
 
-// 卸载专家后 best-effort 删掉它的 preset
+// 卸载专家：必须连带摘掉所有会话里的挂载（chip 还在 / 人设文件已删 = 静默坏状态）
+const presetMounts = join(presetRoot, '.meta', 'mounts.json')
+{
+  const mpaths = { mounts: presetMounts }
+  rmSync(presetMounts, { force: true })
+  mountEntry(mpaths, 's-a', 'expert/demo-expert')
+  mountEntry(mpaths, 's-b', 'skill/keep-me')
+  mountEntry(mpaths, 's-b', 'expert/demo-expert')
+  mountEntry(mpaths, 's-c', 'expert/other')
+}
+
 const uninstalled = await callOn('POST', '/uninstall', { kind: 'expert', name: 'demo-expert' })
 assert.equal(uninstalled.status, 200)
+assert.equal(uninstalled.json.removed, 'expert/demo-expert')
+assert.equal(uninstalled.json.prunedSessions, 2, 'uninstall must report how many sessions it unmounted')
 assert.deepEqual(presetCalls.removed, ['workbuddy-demo-expert'], 'uninstall must drop the expert preset')
 assert.equal(presetDirs.has('workbuddy-demo-expert'), false)
+
+{
+  const sessions = JSON.parse(readFileSync(presetMounts, 'utf8')).sessions
+  assert.deepEqual(sessions['s-a'], [], 'the emptied session keeps an empty list (same shape as unmountEntry)')
+  assert.deepEqual(sessions['s-b'], ['skill/keep-me'], 'other keys in the same session must survive')
+  assert.deepEqual(sessions['s-c'], ['expert/other'], 'sessions that mounted another key must be untouched')
+  assert.ok(!JSON.stringify(sessions).includes('expert/demo-expert'), 'no session may still mount the removed expert')
+}
+
+// 读路由也必须立刻反映（修复前这里会返回 chip 还在、注入为空的假挂载）
+const mountedAfterUninstall = await callOn('GET', '/mounted?sessionId=s-a')
+assert.equal(mountedAfterUninstall.status, 200)
+assert.deepEqual(mountedAfterUninstall.json.keys, [], 'the pruned session must read back as empty')
+
+// 未安装的条目：404 + 明确原因（界面「移除」失败时必须显示这个原因）
+const missingEntry = await callOn('POST', '/uninstall', { kind: 'expert', name: 'ghost-expert' })
+assert.equal(missingEntry.status, 404)
+assert.equal(missingEntry.json.error, 'not installed')
 
 // 真实 standard preset 的 YAML 也要能被原地改写（260 行、含 !!js 与注释）
 const REAL_STANDARD = '/home/kaitzh/deepseek-harness/packages/preset/agent-presets/presets/standard/agent.cordis.yml'
@@ -433,6 +502,21 @@ if (existsSync(REAL_STANDARD)) {
   assert.deepEqual(read().s1.filter(k => k.startsWith('expert/')), [], '卸载后槽位空出')
   mountEntry(mpaths, 's1', 'expert/alpha')
   assert.deepEqual(read().s1.filter(k => k.startsWith('expert/')), ['expert/alpha'], '槽位空出后可以再挂')
+
+  // --- pruneMounts：卸载时全量摘挂载（多会话 / 不动别的 key / 空列表语义）---
+  mountEntry(mpaths, 's1', 'skill/keep')
+  mountEntry(mpaths, 's2', 'expert/alpha')
+  mountEntry(mpaths, 's3', 'expert/beta')
+  const s1Others = read().s1.filter(k => k !== 'expert/alpha')   // 目标 key 之外的原样快照
+  const s3Before = read().s3
+  assert.equal(pruneMounts(mpaths, 'expert/alpha'), 2, 'must clean every session that mounted that key')
+  assert.deepEqual(read().s1, s1Others, '同一会话里别的 key 必须原样保留（只摘掉目标 key）')
+  assert.deepEqual(read().s2, [], '摘空后保留为空数组（与 unmountEntry 落盘形状一致）')
+  assert.deepEqual(read().s3, s3Before, '没挂该 key 的会话一个字都不能动')
+  assert.equal(pruneMounts(mpaths, 'expert/alpha'), 0, '对没挂过的 key 是 no-op')
+  assert.equal(pruneMounts(mpaths, ''), 0, '空 key 绝不能匹配到所有会话')
+  assert.deepEqual(read().s1, s1Others, 'no-op 不得改动任何会话')
+  assert.deepEqual(read().s3, s3Before, 'no-op 不得改动任何会话')
 }
 
 console.log('session resolution + live MCP tool registry: OK')

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react'
-import { hub, addSelection, peekPendingExpert, clearPendingExpert, onCatalogChange, onMarketRequest, setComposerSession, authState, onAuthChange, refreshAuth, onAuthRequired, claimAuthGate, settleAuthGate, STALE_LOGIN_REASON } from './hub.js'
+import { hub, addSelection, markExpertRecent, peekPendingExpert, clearPendingExpert, onCatalogChange, onMarketRequest, setComposerSession, authState, onAuthChange, refreshAuth, onAuthRequired, claimAuthGate, settleAuthGate, STALE_LOGIN_REASON } from './hub.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
 import Catalogue from './Catalogue.jsx'
@@ -42,6 +42,12 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
   // 二级面板几何：官方做法是把面板「夹」进视口（8px 边距）——高度上限 vh−16、
   // 宽度 min(自然宽, vw−8−面板左缘)，先按悬停行对齐，放不下就整体上移，永不翻转。
   const [geom, setGeom] = useState({ top: 8, maxH: 0, maxW: 0, shift: 0 })
+  // 面板内容（行）是**异步加载**的；位置又是按面板「实际高度」夹取视口的，所以行一到齐
+  // 面板就会重新定位 —— 如果用户此刻正把鼠标移向某一行，面板会在鼠标底下跳位，点到隔壁
+  // 行甚至穿透到底部按钮（验收缺陷 2）。做法：打开面板/切换 tab 时先以 visibility:hidden
+  // 占位（仍参与布局，量得到尺寸），等行加载完成（Catalogue 的 onSettled）再显示。
+  const [settled, setSettled] = useState(false)
+  useEffect(() => { if (pickerOpen) setSettled(false) }, [pickerOpen, kind])
   const anchor = useRef(null)
   const itemRefs = useRef({})
   const wrapRef = useRef(null)
@@ -155,13 +161,16 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
       if (observer) observer.disconnect()
       window.removeEventListener('resize', compute)
     }
-  }, [pickerOpen, kind, geom.maxH, geom.shift])
+  }, [pickerOpen, kind, geom.maxH, geom.shift, settled])
 
   const attach = useCallback(async (entry, task = '') => {
     const key = `${entry.kind}/${entry.name}`
     setBusy(key); setNotice('')
     // 官方逻辑：选中即刻在聊天框出现该项的 chip（按会话隔离）。
-    addSelection(entry, sessionId)
+    // 专家是**单槽位**，「替换旧专家」就发生在这唯一一次调用里 —— 必须在这里接住被替换的
+    // 条目；此前是在下面分支里再调一次 addSelection 取值，那时旧专家已经被挤掉，替换提示
+    // 永远是「已选中」（验收缺陷 1：提示成了死代码）。
+    const replacedOnAdd = addSelection(entry, sessionId)
     try {
       let already = Boolean(installed[key])
       if (!already) {
@@ -186,22 +195,21 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
           setNotice(`已断开「${entry.displayName}」`)
         } else {
           const r = await hub.enableConnector(entry.name)
-          await hub.mount(sessionId, entry.kind, entry.name)
-          addSelection(entry, sessionId)
+          if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
           setNotice(`已连接「${entry.displayName}」（工具命名空间 ${r.serverName}），下一次模型步骤起可用。`)
         }
       } else if (entry.kind === 'expert') {
         // picker 在 composer 里 → 用户已在一个会话中：选中即加载到**当前会话**
         // （不新建会话）。「新建会话 + 该专家」的场景走市场页的「召唤」。
-        // 专家是**单槽位**：宿主 mountEntry 会摘掉旧专家，这里 chip 同步替换并提示。
-        await hub.mount(sessionId, entry.kind, entry.name)
-        const replacedExperts = addSelection(entry, sessionId)
-        setNotice(replacedExperts.length
-          ? `已替换「${replacedExperts[0].displayName}」→「${entry.displayName}」，下一步起以该专家身份回答`
+        // 专家是**单槽位**：宿主 mountEntry 会摘掉旧专家，chip 已在上面同步替换。
+        if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
+        // picker 里选中也算「加载过」→ 记入最近专家（用户确认的语义，P6）
+        markExpertRecent(entry)
+        setNotice(replacedOnAdd.length
+          ? `已替换「${replacedOnAdd[0].displayName}」→「${entry.displayName}」，下一步起以该专家身份回答`
           : `已选中「${entry.displayName}」，下一步起以该专家身份回答`)
       } else {
-        await hub.mount(sessionId, entry.kind, entry.name)
-        addSelection(entry, sessionId)
+        if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
         setNotice(`已挂载「${entry.displayName}」`)
       }
       setRecent(prev => [entry, ...prev.filter(e => e.key !== key)].slice(0, 5))
@@ -290,12 +298,16 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
                   top: `${geom.top}px`,
                   '--wbh-maxh': geom.maxH ? `${geom.maxH}px` : 'none',
                   '--wbh-maxw': geom.maxW ? `${geom.maxW}px` : 'none',
+                  // 行加载完（settled）之前先隐形占位：仍参与布局所以量得到尺寸，几何一次算准，
+                  // 面板不会在用户点行的时候跳位。
+                  visibility: settled ? undefined : 'hidden',
                 }}>
                 <Catalogue
                   variant="picker" sessionId={sessionId} kind={kind} onKind={setKind}
                   query={query} onQuery={setQuery} onDetail={onDetail} onAction={onAction}
                   installed={installed} mounted={mounted} busy={busy}
                   footerExtra={authFooter}
+                  onSettled={() => setSettled(true)}
                 />
               </div>
             )}

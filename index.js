@@ -424,6 +424,33 @@ export function unmountEntry(paths, sessionId, key) {
   return list
 }
 
+/**
+ * 从**所有**会话里摘掉某个 key（卸载时必须连带摘挂载），返回被清理的会话数。
+ *
+ * 为什么必须做：POST /uninstall 只删文件与注册表记录，会话里的挂载会留下一位
+ * 「人设文件已被删掉」的专家 —— 界面 chip 还在，注入却失败或静默为空。
+ *
+ * 空列表语义与 unmountEntry 保持一致：列表被摘空时保留为空数组（不删会话键），
+ * 这样「某会话曾挂过什么」的痕迹不会被悄悄抹掉，两个函数的落盘形状也一致。
+ * 只要有会话被清理就写盘并作废人设缓存（否则下一步 assembly 还会读到旧人设）。
+ */
+export function pruneMounts(paths, key) {
+  const target = String(key || '')
+  if (target === '') return 0
+  const store = readMounts(paths)
+  let pruned = 0
+  for (const [sessionId, list] of Object.entries(store.sessions)) {
+    if (!Array.isArray(list) || !list.includes(target)) continue
+    store.sessions[sessionId] = list.filter(k => k !== target)
+    pruned += 1
+  }
+  if (pruned > 0) saveJson(paths.mounts, store)
+  // 卸载后即使本次没摘到挂载（例如 mounts.json 损坏读不出来），也要让缓存作废：
+  // 磁盘上的人设文件已经被删了，缓存里的旧正文绝不能再被注入。
+  invalidateExpertCache()
+  return pruned
+}
+
 /* ------------------------------------------------------------------ *
  * 专家人设注入 — 阶段 1 / 方案 A
  *
@@ -706,6 +733,10 @@ export function apply(ctx, config = {}) {
    * props，已实测拿到真实会话 id），因此**客户端显式传值优先**。宿主没有「用户
    * 正看哪个会话」的概念，只有客户端未上报时才退化为「最近创建的会话」兜底，并
    * 用 sessionSource 把这次退化如实标出来（避免静默挂错会话）。
+   *
+   * ⚠️ 这个兜底**只服务于只读路由**（/mounted、/active-session、/expert-injection 等）。
+   * 写路由（POST /mount、POST /unmount）必须显式传入 sessionId：缺失时直接 409，
+   * 绝不退化为「最近会话」—— 否则会把专家静默挂进用户根本没在看的那个会话。
    * ---------------------------------------------------------------- */
   const resolveSessionId = explicit => {
     const given = String(explicit || '').trim()
@@ -1771,19 +1802,21 @@ export function apply(ctx, config = {}) {
       const body = JSON.parse((await readBody(req)) || '{}')
       const kind = String(body.kind || '')
       const entryName = String(body.name || '')
-      const sessionId = String(body.sessionId || '')
+      const sessionId = String(body.sessionId || '').trim()
       if (!['expert', 'skill', 'connector'].includes(kind) || !/^[\w.-]+$/.test(entryName)) {
         json(res, 400, { error: 'invalid kind or name' }); return true
       }
-      // 客户端 props.sessionId 优先；宿主只在缺失时兜底取最近会话（并标注来源）。
-      const resolvedSession = resolveSessionId(sessionId)
-      const resolved = resolvedSession.id
-      if (!resolved) { json(res, 409, { error: 'no active session' }); return true }
+      // 写操作必须显式指定会话：这里**不**走 resolveSessionId 的 recent-fallback。
+      // 兜底取「最近会话」会把条目挂进用户没在看的会话（界面无 chip、却在别的
+      // 会话里生效），是静默的错误。缺 sessionId 一律 409，让客户端补齐后重试。
+      if (sessionId === '') {
+        json(res, 409, { error: 'sessionId is required for mount/unmount' }); return true
+      }
       const key = `${kind}/${entryName}`
       const list = route === 'POST /mount'
-        ? mountEntry(P, resolved, key)
-        : unmountEntry(P, resolved, key)
-      json(res, 200, { ok: true, sessionId: resolved, sessionSource: resolvedSession.source, keys: list })
+        ? mountEntry(P, sessionId, key)
+        : unmountEntry(P, sessionId, key)
+      json(res, 200, { ok: true, sessionId, sessionSource: 'client', keys: list })
       return true
     }
 
@@ -1989,12 +2022,16 @@ export function apply(ctx, config = {}) {
       rmSync(record.dest, { recursive: true, force: true })
       delete registry.installed[key]
       saveJson(P.registry, registry)
+      // 卸载必须连带摘掉挂载：只删文件与注册表，会留下一位「人设文件已被删掉」的
+      // 专家 —— 界面 chip 还在、注入却失败或静默为空。全量清理所有会话里等于该 key
+      // 的条目（pruneMounts 内部会 invalidateExpertCache，保证下一步 assembly 不用旧人设）。
+      const prunedSessions = pruneMounts(P, key)
       // 专家卸载后 best-effort 删掉它对应的 agent preset（按 `workbuddy-<name>`
       // 现算，不改安装记录结构）；删不掉（没建过 / 已不存在 / 被占用）不影响卸载。
       if (kind === 'expert') {
         try { await ctx.agentPresets?.remove?.(expertPresetId(entryName)) } catch { /* best effort */ }
       }
-      json(res, 200, { ok: true, removed: key })
+      json(res, 200, { ok: true, removed: key, prunedSessions })
       return true
     }
 

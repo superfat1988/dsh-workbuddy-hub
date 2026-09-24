@@ -6,8 +6,6 @@
         # 内容主仓（镜像 fork 的 raw 源；上游删库后仍可用）
         mirrorRepo: 'superfat1988/workbuddyskills'
         mirrorBranch: 'mirror'
-        # 上游（默认优先在线检查 changelog，失败回退镜像）
-        upstreamRepo: 'infometa/workbuddyskills'
         # 本地内容仓（git 仓库，插件初始化并管理）
         storeRoot: '~/workbuddyskills'
         # DSH skills 挂载前缀：~/.dsh/skills/workbuddy-<name> → storeRoot/skills/<name>

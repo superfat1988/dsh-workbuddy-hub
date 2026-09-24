@@ -46,6 +46,19 @@
 .wbh-settings{padding:4px 2px}
 .wbh-secTitle{margin:0 0 10px;font-size:13px;font-weight:600;color:var(--wb-color-text-primary)}
 .wbh-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--wb-border-default);font-size:12px;color:var(--wb-color-text-secondary)}
+
+/* 已安装列表的逐项移除：次要按钮 + 行内二次确认（不用 window.confirm） */
+.wbh-installedRow{align-items:center}
+.wbh-installedName{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--wb-color-text-primary)}
+.wbh-installedActions{display:inline-flex;align-items:center;gap:10px;flex:none}
+.wbh-removeBtn{height:26px;padding:0 10px;font-size:12px}
+.wbh-confirmRow{display:inline-flex;align-items:center;gap:6px}
+.wbh-confirmText{font-size:12px;color:var(--wb-color-text-secondary);white-space:nowrap}
+.wbh-btnDanger{display:inline-flex;align-items:center;height:26px;padding:0 12px;border:1px solid #ffccc7;border-radius:8px;background:#fff1f0;color:#d4380d;font:inherit;font-size:12px;font-weight:500;cursor:pointer;transition:background .15s ease}
+.wbh-btnDanger:hover:not(:disabled){background:#ffe0dc}
+.wbh-btnDanger:disabled{cursor:default;opacity:.6}
+.wbh-removeNotice{margin:0 0 8px;padding:7px 10px;border:1px solid #b7eb8f;border-radius:8px;background:#f6ffed;color:#237804;font-size:12px}
+.wbh-removeNotice.is-error{border-color:#ffccc7;background:#fff2f0;color:#cf1322}
 .wbh-modalInput{box-sizing:border-box;width:100%;padding:8px 10px;border:1px solid var(--wb-border-default);border-radius:8px;background:var(--wb-bg-secondary);color:var(--wb-color-text-primary);font:inherit;font-size:12px;resize:vertical;outline:none}
 .wbh-modalInput:focus{border-color:var(--wb-border-hover)}
 
