@@ -21,6 +21,7 @@ import { loginStart, loginPoll, loadAuth, saveAuth, bearer, marketList, marketCa
 import { listExperts, categories as officialCategories, installExpert } from './wb-experts.js'
 import { skillDetails } from './wb-market.js'
 import { unzip } from './wb-unzip.js'
+import { execSync } from 'node:child_process'
 import {
   existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
   symlinkSync, unlinkSync, lstatSync, statSync,
@@ -431,6 +432,27 @@ let personaSectionRegistered = false
 /** 清空人设缓存（挂载/卸载成功后调用）。 */
 function invalidateExpertCache() {
   expertCache = new Map()
+}
+
+/** 从磁盘会话日志头部读 cwd（内存里没有该会话时的兜底，zstd 解第一行）。 */
+function readSessionCwdFromDisk(sessionId) {
+  try {
+    if (!/^[-\w]+$/.test(String(sessionId))) return ''
+    const root = '/home/kaitzh/.dsh/sessions'
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      const dir = join(root, entry.name, sessionId)
+      if (!existsSync(dir)) continue
+      const log = join(dir, 'session.v3.jsonl.zstd')
+      if (!existsSync(log)) continue
+      const head = execSync(`zstd -dc '${log}' 2>/dev/null | head -c 2048`,
+        { encoding: 'utf8', timeout: 5000, maxBuffer: 4096 })
+      const first = (head.split('\n').find(l => l.includes('"type":"session"')) || '')
+      const cwd = /"cwd":"([^"]+)"/.exec(first)?.[1]
+      if (cwd) return cwd
+    }
+  } catch { /* 读不到返回空 */ }
+  return ''
 }
 
 /** 从 mounts.json 取该会话挂载的第一个专家目录名；轻量、容错，读不到就返回 ''。 */
@@ -1524,8 +1546,13 @@ export function apply(ctx, config = {}) {
         // cwd 就是会话落的工作区路径）。这样新会话一定和当前会话在同一工作区，不会落错。
         if (!workspaceId && body.nearSessionId) {
           try {
-            const near = ctx.sessions?.get?.(String(body.nearSessionId))
-            const nearCwd = near?.header?.cwd
+            const nearId = String(body.nearSessionId)
+            // 优先内存里的 live session；磁盘上有但未加载的会话 get 不到，
+            // 这时从会话日志第一行（type:session）直接读 cwd —— 会话头一定写了 cwd。
+            let nearCwd = ctx.sessions?.get?.(nearId)?.header?.cwd
+            if (typeof nearCwd !== 'string' || nearCwd === '') {
+              nearCwd = readSessionCwdFromDisk(nearId)
+            }
             if (typeof nearCwd === 'string' && nearCwd !== '') {
               cwd = nearCwd
               const reg = ctx.get?.('workspaceRegistry') ?? ctx.workspaceRegistry
@@ -1539,7 +1566,23 @@ export function apply(ctx, config = {}) {
           ...(workspaceId ? { workspaceId } : {}),
           ...(!workspaceId && cwd ? { cwd } : {}),
         })
-        json(res, 200, { ok: true, sessionId: created.sessionId, agentPreset: created.agentPreset })
+        // 关键：会话挂入工作区列表（sessionIds）。create({cwd}) 只定磁盘目录、
+        // 不调 attachSession —— 会话在侧边栏是隐形的，用户必须切工作区才能看到
+        // （这正是「召唤后要来回切工作区找专家」的根因）。这里显式补挂。
+        let attached = Boolean(workspaceId)
+        if (!attached && cwd) {
+          try {
+            const reg = ctx.get?.('workspaceRegistry') ?? ctx.workspaceRegistry
+            const ws = typeof reg?.resolveByPath === 'function' ? await reg.resolveByPath(cwd) : null
+            if (ws && typeof ws.attachSession === 'function') {
+              await ws.attachSession(created.sessionId)
+              attached = true
+            }
+          } catch (error) {
+            console.warn('[wbh] attachSession failed:', String(error?.message || error))
+          }
+        }
+        json(res, 200, { ok: true, sessionId: created.sessionId, agentPreset: created.agentPreset, attached })
       } catch (error) {
         json(res, 500, { ok: false, error: String(error?.message || error) })
       }
