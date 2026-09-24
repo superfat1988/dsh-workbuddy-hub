@@ -98,19 +98,36 @@ PY
 #   POST /workbuddy-hub/mount  {sessionId,kind,name}               挂载
 ```
 
-### 0.5 浏览器验收：**优先用 Scrapling，不要手写 CDP**
+### 0.5 浏览器验收：用**已在 Docker 跑的 scrapling**，不要本地再装一套
 
-本会话实测：手写 CDP 脚本反复卡在「首次弹窗遮罩 / 时序 / 连接超时」，同一批断言用 Scrapling
-一次通过。所以真 UI 验收请优先走它（已装好，无需再装）：
+Scrapling 本体的正确位置是容器（不是本机 pip/venv）：
 
 ```bash
-/home/kaitzh/.dsh/skills/scrapling-official/.venv/bin/python your_script.py
-# 脚本里：DynamicFetcher.fetch(url, headless=True, network_idle=True, wait=3000,
-#                              executable_path='/usr/bin/chromium', page_action=act)
-#   · executable_path 指向系统 chromium，可免去 playwright 的浏览器下载；
-#   · page_action(page) 里用 Playwright API 驱动交互（hover/click/wait_for_timeout），
-#     处理首次运行弹窗（[class*="_mask_"] 遮挡）后即可正常操作。
+sudo docker ps --filter name=scrapling      # pyd4vinci/scrapling:latest，Up，127.0.0.1:8002->8000
+# 启动参数实测为：mcp --http --host 0.0.0.0 --port 8000 --no-auth（无需 token）
 ```
+
+它是 **MCP over HTTP**，13 个工具（`fetch` / `bulk_fetch` / `stealthy_fetch` / `bulk_stealthy_fetch` /
+`session_fetch` / `open_session` / `close_session` / `list_sessions` / `make_request` /
+`open_request_session` / `bulk_get` / `screenshot` …）。协议要点（实测）：
+
+```bash
+# 1) 先 initialize，并从**响应头**取 mcp-session-id
+curl -sS -D- -X POST http://127.0.0.1:8002/mcp \
+  -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"1"}}}'
+# 2) 后续请求带上 mcp-session-id 头；响应是 SSE（取 `data: ` 那一行再 JSON.parse）
+# 3) 调用工具：{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fetch","arguments":{"url":"…"}}}
+```
+
+**寻址注意（实测）**：容器内的 `127.0.0.1` **不是宿主**。
+· 抓宿主上的服务要用宿主 LAN IP（如 `http://192.168.2.185:3080/`）——`127.0.0.1:3080` 会 `ERR_CONNECTION_REFUSED`；
+· `host.docker.internal` 未配置（`ERR_EMPTY_RESPONSE`）；
+· 所以拿它验收**隔离实例**时，实例必须绑 `0.0.0.0`（只绑 127.0.0.1 容器抓不到），并在 profile 的
+  `trustedHosts` 里加上对应 authority。
+
+> 不要在本机 `pip install "scrapling[all]"`：那是往 skill 目录里塞一份 469MB 的重复本体（本会话犯过，
+> 已删）。scrapling-official 那份 SKILL.md 里的 pip 安装步骤不适用于本机部署，以本节为准。
 
 CDP 辅助仍在（`/tmp/wbh-cdp.mjs`、`/tmp/lib.mjs`），但仅在无法起浏览器时作为退路。
 
