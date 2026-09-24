@@ -2280,9 +2280,12 @@ function addSelection(entry, sessionId) {
   const key = sessionId || "_unbound";
   const list = _selectedBySession.get(key) || [];
   const itemKey = `${entry.kind}/${entry.name}`;
-  if (list.some((x) => x.key === itemKey)) return;
-  _selectedBySession.set(key, [...list, { key: itemKey, kind: entry.kind, name: entry.name, displayName: entry.displayName || entry.name, icon: entry.icon || "" }]);
+  if (list.some((x) => x.key === itemKey)) return [];
+  const replaced = entry.kind === "expert" ? list.filter((x) => x.kind === "expert") : [];
+  const kept = replaced.length ? list.filter((x) => x.kind !== "expert") : list;
+  _selectedBySession.set(key, [...kept, { key: itemKey, kind: entry.kind, name: entry.name, displayName: entry.displayName || entry.name, icon: entry.icon || "" }]);
   _emitSelection();
+  return replaced;
 }
 function removeSelection(sessionId, kind, name) {
   const key = sessionId || "_unbound";
@@ -4154,8 +4157,8 @@ function ComposerAdd({ sessionId, runCommand: runCommand2, sessionBlank }) {
         }
       } else if (entry.kind === "expert") {
         await hub.mount(sessionId, entry.kind, entry.name);
-        addSelection(entry, sessionId);
-        setNotice(`\u5DF2\u9009\u4E2D\u300C${entry.displayName}\u300D\uFF0C\u4E0B\u4E00\u6B65\u8D77\u4EE5\u8BE5\u4E13\u5BB6\u8EAB\u4EFD\u56DE\u7B54`);
+        const replacedExperts = addSelection(entry, sessionId);
+        setNotice(replacedExperts.length ? `\u5DF2\u66FF\u6362\u300C${replacedExperts[0].displayName}\u300D\u2192\u300C${entry.displayName}\u300D\uFF0C\u4E0B\u4E00\u6B65\u8D77\u4EE5\u8BE5\u4E13\u5BB6\u8EAB\u4EFD\u56DE\u7B54` : `\u5DF2\u9009\u4E2D\u300C${entry.displayName}\u300D\uFF0C\u4E0B\u4E00\u6B65\u8D77\u4EE5\u8BE5\u4E13\u5BB6\u8EAB\u4EFD\u56DE\u7B54`);
       } else {
         await hub.mount(sessionId, entry.kind, entry.name);
         addSelection(entry, sessionId);

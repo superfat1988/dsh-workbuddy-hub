@@ -121,13 +121,28 @@ export function selectedItems(sessionId) {
 }
 export function onSelectionChange(fn) { _selListeners.add(fn); return () => { _selListeners.delete(fn) } }
 const _emitSelection = () => { for (const fn of _selListeners) { try { fn() } catch {} } }
+/**
+ * 把一个条目加入某会话的 chip 列表。
+ * **专家是单槽位**：加新专家会替换掉该会话原有的专家（返回被替换掉的条目数组，
+ * 供调用方提示/清理）—— 与宿主侧 mountEntry「一个会话只挂一位专家」保持一致。
+ * 技能/连接器仍是多选。
+ */
 export function addSelection(entry, sessionId) {
   const key = sessionId || '_unbound'
   const list = _selectedBySession.get(key) || []
   const itemKey = `${entry.kind}/${entry.name}`
-  if (list.some(x => x.key === itemKey)) return
-  _selectedBySession.set(key, [...list, { key: itemKey, kind: entry.kind, name: entry.name, displayName: entry.displayName || entry.name, icon: entry.icon || '' }])
+  if (list.some(x => x.key === itemKey)) return []
+  const replaced = entry.kind === 'expert' ? list.filter(x => x.kind === 'expert') : []
+  const kept = replaced.length ? list.filter(x => x.kind !== 'expert') : list
+  _selectedBySession.set(key, [...kept, { key: itemKey, kind: entry.kind, name: entry.name, displayName: entry.displayName || entry.name, icon: entry.icon || '' }])
   _emitSelection()
+  return replaced
+}
+
+/** 某会话当前已选的专家（单槽位；没有则 null）。 */
+export function selectedExpert(sessionId) {
+  const list = _selectedBySession.get(sessionId || '_unbound') || []
+  return list.find(x => x.kind === 'expert') || null
 }
 export function removeSelection(sessionId, kind, name) {
   const key = sessionId || '_unbound'

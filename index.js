@@ -403,7 +403,11 @@ export function readMounts(paths) {
 
 export function mountEntry(paths, sessionId, key) {
   const store = readMounts(paths)
-  const list = Array.isArray(store.sessions[sessionId]) ? store.sessions[sessionId] : []
+  let list = Array.isArray(store.sessions[sessionId]) ? store.sessions[sessionId] : []
+  // 一个会话只允许一位专家（产品语义）：挂新专家时把旧的摘掉。
+  // 必须在这一层兜住 —— firstMountedExpert 只取挂载列表里的**第一个**专家，
+  // 若留着旧专家，新专家的 chip 就成了「假的」：界面显示已选、实际注入的却是旧专家。
+  if (/^expert\//.test(String(key))) list = list.filter(k => !/^expert\//.test(String(k)))
   if (!list.includes(key)) list.push(key)
   store.sessions[sessionId] = list
   saveJson(paths.mounts, store)

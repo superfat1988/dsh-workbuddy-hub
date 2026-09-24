@@ -193,9 +193,12 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
       } else if (entry.kind === 'expert') {
         // picker 在 composer 里 → 用户已在一个会话中：选中即加载到**当前会话**
         // （不新建会话）。「新建会话 + 该专家」的场景走市场页的「召唤」。
+        // 专家是**单槽位**：宿主 mountEntry 会摘掉旧专家，这里 chip 同步替换并提示。
         await hub.mount(sessionId, entry.kind, entry.name)
-        addSelection(entry, sessionId)
-        setNotice(`已选中「${entry.displayName}」，下一步起以该专家身份回答`)
+        const replacedExperts = addSelection(entry, sessionId)
+        setNotice(replacedExperts.length
+          ? `已替换「${replacedExperts[0].displayName}」→「${entry.displayName}」，下一步起以该专家身份回答`
+          : `已选中「${entry.displayName}」，下一步起以该专家身份回答`)
       } else {
         await hub.mount(sessionId, entry.kind, entry.name)
         addSelection(entry, sessionId)

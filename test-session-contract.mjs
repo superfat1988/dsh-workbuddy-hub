@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { apply, replacePersonaPrefix } from './index.js'
+import { apply, replacePersonaPrefix, mountEntry, unmountEntry } from './index.js'
 
 const root = '/tmp/wbh-session-contract'
 rmSync(root, { recursive: true, force: true })
@@ -401,6 +401,38 @@ if (existsSync(REAL_STANDARD)) {
   assert.ok(patched.includes('      第二行：正文换行必须保留。'))
   assert.ok(!patched.includes('>-'), 'the folded prefix scalar must be gone')
   assert.ok(patched.includes('!!js'), 'the rest of the real composition must be untouched')
+}
+
+// --- 一个会话只挂一位专家（mountEntry 单槽位）--------------------------------
+// 为什么必须在写入层兜住：firstMountedExpert 只取挂载列表里的**第一个**专家，
+// 若允许挂多个，后挂的那位 chip 就是「假的」——界面显示已选，实际注入的仍是旧专家。
+{
+  const mpaths = { mounts: join(root, '.meta', 'mounts.json') }
+  rmSync(mpaths.mounts, { force: true })
+  const read = () => JSON.parse(readFileSync(mpaths.mounts, 'utf8')).sessions
+
+  mountEntry(mpaths, 's1', 'expert/alpha')
+  assert.deepEqual(read().s1, ['expert/alpha'])
+
+  mountEntry(mpaths, 's1', 'skill/foo')
+  mountEntry(mpaths, 's1', 'connector/bar')
+  mountEntry(mpaths, 's1', 'expert/beta')          // 换专家
+  let list = read().s1
+  assert.deepEqual(list.filter(k => k.startsWith('expert/')), ['expert/beta'], '一个会话只能挂一位专家')
+  assert.ok(!list.includes('expert/alpha'), '旧专家必须被摘掉')
+  assert.ok(list.includes('skill/foo') && list.includes('connector/bar'), '技能/连接器不受影响')
+
+  mountEntry(mpaths, 's1', 'expert/beta')          // 重复挂同一位：幂等
+  assert.deepEqual(read().s1.filter(k => k.startsWith('expert/')), ['expert/beta'])
+
+  mountEntry(mpaths, 's2', 'expert/gamma')         // 会话之间互不影响
+  assert.deepEqual(read().s2, ['expert/gamma'])
+  assert.deepEqual(read().s1.filter(k => k.startsWith('expert/')), ['expert/beta'])
+
+  unmountEntry(mpaths, 's1', 'expert/beta')
+  assert.deepEqual(read().s1.filter(k => k.startsWith('expert/')), [], '卸载后槽位空出')
+  mountEntry(mpaths, 's1', 'expert/alpha')
+  assert.deepEqual(read().s1.filter(k => k.startsWith('expert/')), ['expert/alpha'], '槽位空出后可以再挂')
 }
 
 console.log('session resolution + live MCP tool registry: OK')

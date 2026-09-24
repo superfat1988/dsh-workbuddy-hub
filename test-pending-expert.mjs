@@ -10,6 +10,7 @@ import {
   setPendingExpert, takePendingExpert, peekPendingExpert, clearPendingExpert,
   setSessionStarter, summonExpertInNewSession,
   markExpertRecent, recentExpertNames,
+  addSelection, removeSelection, selectedItems, selectedExpert,
 } from './src/hub.js'
 
 // 1) 设置 → 取用一次 → 再取为空（一次性消费，避免误挂到别的会话）
@@ -90,6 +91,30 @@ try {
 } finally {
   delete globalThis.localStorage
 }
+
+// 8) 专家是单槽位：picker 里加第二位专家必须**替换**第一位（与宿主 mountEntry 一致），
+//    技能/连接器仍是多选，否则界面会出现「两个专家 chip 但只注入第一个」的假象。
+const sid = 'session-single-expert'
+const A = { kind: 'expert', name: 'exp-a', displayName: '专家A' }
+const B = { kind: 'expert', name: 'exp-b', displayName: '专家B' }
+assert.deepEqual(addSelection(A, sid), [], '首位专家没有可替换的')
+assert.equal(selectedExpert(sid)?.name, 'exp-a')
+const replaced = addSelection(B, sid)
+assert.equal(replaced.length, 1, '加第二位专家必须回传被替换者')
+assert.equal(replaced[0].name, 'exp-a', '被替换的是第一位专家')
+assert.equal(selectedItems(sid).filter(x => x.kind === 'expert').length, 1, '任何时刻只能有一位专家 chip')
+assert.equal(selectedExpert(sid)?.name, 'exp-b', '最终保留的是新专家')
+assert.deepEqual(addSelection(B, sid), [], '重复选同一位专家是空操作（不重复也不替换）')
+assert.equal(selectedItems(sid).filter(x => x.kind === 'expert').length, 1)
+// 技能/连接器不受影响，仍是多选
+addSelection({ kind: 'skill', name: 'sk-1' }, sid)
+addSelection({ kind: 'skill', name: 'sk-2' }, sid)
+addSelection({ kind: 'connector', name: 'co-1' }, sid)
+assert.equal(selectedItems(sid).length, 4, '专家 1 + 技能 2 + 连接器 1')
+// 移除专家后槽位空出来，下一位专家不会误报「替换」
+removeSelection(sid, 'expert', 'exp-b')
+assert.equal(selectedExpert(sid), null)
+assert.deepEqual(addSelection({ kind: 'expert', name: 'exp-c', displayName: '专家C' }, sid), [])
 
 console.log('pending expert (summon -> composer mount) semantics: OK')
 console.log('recent experts (picker ordering input) semantics: OK')
