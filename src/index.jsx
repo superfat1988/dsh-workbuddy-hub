@@ -146,8 +146,20 @@ function PanelIcon() {
   )
 }
 
+// 「待生效专家」需要知道当前会话是不是空会话（新会话）：用官方全局标准 prop
+// useSessions 读 session summary 的 blank。hook 不能条件调用 —— 沿用 HubPage 的做法：
+// 只有框架确实下发了 useSessions 时才渲染订阅子树。
+function ComposerSlotWithSessions({ useSessions, sessionId }) {
+  const blank = useSessions(state => state?.byId?.[sessionId]?.blank)
+  return <ComposerAdd sessionId={sessionId} runCommand={runCommand} sessionBlank={blank} />
+}
+
 function ComposerSlot(props) {
-  return <ComposerAdd sessionId={props?.sessionId} runCommand={runCommand} />
+  const useSessions = props?.useSessions
+  if (typeof useSessions !== 'function') {
+    return <ComposerAdd sessionId={props?.sessionId} runCommand={runCommand} />
+  }
+  return <ComposerSlotWithSessions useSessions={useSessions} sessionId={props?.sessionId} />
 }
 
 function RailSlot(props) {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react'
-import { hub, addSelection, summonExpertInNewSession, takePendingExpert, onCatalogChange, onMarketRequest, setComposerSession } from './hub.js'
+import { hub, addSelection, summonExpertInNewSession, peekPendingExpert, clearPendingExpert, onCatalogChange, onMarketRequest, setComposerSession } from './hub.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
 import Catalogue from './Catalogue.jsx'
@@ -24,7 +24,7 @@ const KINDS = [
  * stage 1 is a compact row-menu (avatar 16px + name 14px rows, divider,
  * 召唤更多专家 footer); stage 2 is the searchable picker.
  */
-export default function ComposerAdd({ sessionId, runCommand }) {
+export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [kind, setKind] = useState('expert')
@@ -53,16 +53,21 @@ export default function ComposerAdd({ sessionId, runCommand }) {
   }, [sessionId])
 
   useEffect(() => { setComposerSession(sessionId) }, [sessionId])
-  // 「待生效专家」落位：召唤后新会话的 composer 一挂载（拿到它的 sessionId），
-  // 就把专家挂到这个会话上 + 显示 chip —— 与用户选哪个工作区无关，专家跟会话走。
+  // 「待生效专家」落位：召唤后，**每个新会话**的 composer 一挂载/切换就渲染 chip 并把
+  // 专家挂到那个会话 —— 所以换任意工作区都生效（不依赖工作区解析）。两种结束条件：
+  //   ① 该会话开聊了（不再是空会话）→ 待生效使命完成，清掉，避免继续跟着跑到别的新会话；
+  //   ② 用户在 chip 上点 X 移除（AttachedRail 里同步清待生效）；或超过 5 分钟 TTL。
+  // 旧对话（非空会话）不落位，避免污染用户点开的历史会话。
   useEffect(() => {
     if (!sessionId) return
-    const pending = takePendingExpert()
+    const pending = peekPendingExpert()   // 只看不取：换工作区/换新会话要能反复生效
     if (!pending) return
-    console.info('[wbh] pending expert applied:', pending.name, '-> session', sessionId)
+    if (sessionBlank === false) { clearPendingExpert(); return }
     addSelection(pending, sessionId)
     void hub.mount(sessionId, 'expert', pending.name)
-  }, [sessionId])
+      .then(() => console.info('[wbh] pending expert applied:', pending.name, '-> session', sessionId))
+      .catch(error => console.warn('[wbh] pending expert mount failed:', String(error?.message || error)))
+  }, [sessionId, sessionBlank])
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => onCatalogChange(refresh), [refresh])
 

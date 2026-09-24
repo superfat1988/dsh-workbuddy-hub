@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict'
 import {
-  setPendingExpert, takePendingExpert, clearPendingExpert,
+  setPendingExpert, takePendingExpert, peekPendingExpert, clearPendingExpert,
   setSessionStarter, summonExpertInNewSession,
 } from './src/hub.js'
 
@@ -57,8 +57,13 @@ try {
   const b = await summonExpertInNewSession({ kind: 'expert', name: 'demo2', displayName: '第二位专家' })
   assert.equal(b.ok, true)
   assert.equal(b.replaced, 'demo', '再次召唤必须回传被替换的专家名（界面据此提示用户）')
-  assert.equal(takePendingExpert()?.name, 'demo2', '单槽位：只保留最后一次召唤的专家')
-  assert.equal(takePendingExpert(), null, '取用后必须为空（不会重复挂到多个会话）')
+  assert.equal(peekPendingExpert()?.name, 'demo2', '单槽位：只保留最后一次召唤的专家')
+
+  // 6) peek 不消费 → 换工作区/换新会话可以反复落位；take 才消费（显式取消用）
+  assert.equal(peekPendingExpert()?.name, 'demo2', 'peek 必须可重复调用（每次新会话都要能渲染 chip）')
+  assert.equal(peekPendingExpert()?.name, 'demo2')
+  clearPendingExpert()
+  assert.equal(peekPendingExpert(), null, 'clear 之后 peek 也必须为空')
 } finally {
   globalThis.fetch = realFetch
   setSessionStarter(null)

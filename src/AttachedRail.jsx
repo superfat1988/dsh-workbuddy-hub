@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react'
-import { hub, onSelectionChange, selectedItems, removeSelection, onCatalogChange } from './hub.js'
+import { hub, onSelectionChange, selectedItems, removeSelection, onCatalogChange, clearPendingExpert } from './hub.js'
 import { WbIcon } from './icons.js'
 
 /**
@@ -18,6 +18,9 @@ export default function AttachedRail({ sessionId }) {
   const detach = async item => {
     setBusy(item.key)
     removeSelection(sessionId, item.kind, item.name)
+    // 移除专家 chip = 用户不想要这个专家了：同步清掉「待生效专家」，
+    // 否则它还会继续跟着跑进后面的新会话
+    if (item.kind === 'expert') clearPendingExpert()
     try {
       if (item.kind === 'connector') await hub.disableConnector(item.name)
       if (sessionId) await hub.unmount(sessionId, item.kind, item.name)

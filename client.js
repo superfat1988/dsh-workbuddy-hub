@@ -2196,13 +2196,6 @@ function peekPendingExpert() {
   if (Date.now() - (p.at || 0) > PENDING_TTL_MS) return null;
   return p;
 }
-function takePendingExpert() {
-  const p = _pendingExpert;
-  _pendingExpert = null;
-  if (!p) return null;
-  if (Date.now() - (p.at || 0) > PENDING_TTL_MS) return null;
-  return p;
-}
 var _composerSession = "";
 function setComposerSession(id) {
   _composerSession = id || "";
@@ -3646,6 +3639,7 @@ function AttachedRail({ sessionId }) {
   const detach = async (item) => {
     setBusy(item.key);
     removeSelection(sessionId, item.kind, item.name);
+    if (item.kind === "expert") clearPendingExpert();
     try {
       if (item.kind === "connector") await hub.disableConnector(item.name);
       if (sessionId) await hub.unmount(sessionId, item.kind, item.name);
@@ -3677,7 +3671,7 @@ var KINDS2 = [
   { id: "skill", label: "\u6280\u80FD", icon: "menuSkill" },
   { id: "connector", label: "\u8FDE\u63A5\u5668", icon: "menuConnector" }
 ];
-function ComposerAdd({ sessionId, runCommand: runCommand2 }) {
+function ComposerAdd({ sessionId, runCommand: runCommand2, sessionBlank }) {
   const [menuOpen, setMenuOpen] = (0, import_react9.useState)(false);
   const [pickerOpen, setPickerOpen] = (0, import_react9.useState)(false);
   const [kind, setKind] = (0, import_react9.useState)("expert");
@@ -3707,12 +3701,15 @@ function ComposerAdd({ sessionId, runCommand: runCommand2 }) {
   }, [sessionId]);
   (0, import_react9.useEffect)(() => {
     if (!sessionId) return;
-    const pending = takePendingExpert();
+    const pending = peekPendingExpert();
     if (!pending) return;
-    console.info("[wbh] pending expert applied:", pending.name, "-> session", sessionId);
+    if (sessionBlank === false) {
+      clearPendingExpert();
+      return;
+    }
     addSelection(pending, sessionId);
-    void hub.mount(sessionId, "expert", pending.name);
-  }, [sessionId]);
+    void hub.mount(sessionId, "expert", pending.name).then(() => console.info("[wbh] pending expert applied:", pending.name, "-> session", sessionId)).catch((error) => console.warn("[wbh] pending expert mount failed:", String(error?.message || error)));
+  }, [sessionId, sessionBlank]);
   (0, import_react9.useEffect)(() => {
     void refresh();
   }, [refresh]);
@@ -4112,8 +4109,16 @@ function PanelIcon() {
     /* @__PURE__ */ import_react11.default.createElement("span", { className: "wbh-sideEntryLabel" }, item.label)
   )))));
 }
+function ComposerSlotWithSessions({ useSessions, sessionId }) {
+  const blank = useSessions((state) => state?.byId?.[sessionId]?.blank);
+  return /* @__PURE__ */ import_react11.default.createElement(ComposerAdd, { sessionId, runCommand, sessionBlank: blank });
+}
 function ComposerSlot(props) {
-  return /* @__PURE__ */ import_react11.default.createElement(ComposerAdd, { sessionId: props?.sessionId, runCommand });
+  const useSessions = props?.useSessions;
+  if (typeof useSessions !== "function") {
+    return /* @__PURE__ */ import_react11.default.createElement(ComposerAdd, { sessionId: props?.sessionId, runCommand });
+  }
+  return /* @__PURE__ */ import_react11.default.createElement(ComposerSlotWithSessions, { useSessions, sessionId: props?.sessionId });
 }
 var plugin = {
   apply(ctx) {
