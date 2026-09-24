@@ -19,7 +19,8 @@ import { homedir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
 import { loginStart, loginPoll, loadAuth, saveAuth, bearer, marketList, marketCategories, connectorRegistry, connectorBound, connectorAuthStart, connectorRevoke, connectorOauthStatus, refreshIfNeeded, loadAuthHealth, saveAuthHealth, clearAuthHealth, onAuthEvent } from './wb-market.js'
 import { KEEPALIVE_THRESHOLD_MS, reduceHealth, touchCheck, isStale } from './src/keepalive.js'
-import { listExperts, categories as officialCategories, installExpert } from './wb-experts.js'
+import { listExperts, categories as officialCategories, installExpert, registry as officialRegistry } from './wb-experts.js'
+import { gitBlobSha, compareOfficial, compareMirror, summarizeUpdates } from './src/updates.js'
 import { skillDetails } from './wb-market.js'
 import { unzip } from './wb-unzip.js'
 import { execSync } from 'node:child_process'
@@ -967,6 +968,67 @@ export function apply(ctx, config = {}) {
   }
 
   /* ---------------------------------------------------------------- *
+   * 「检查更新」辅助（GET /updates 用）
+   *
+   *  · 镜像 tree 只取一次全量，成功才写 10 分钟缓存（失败不缓存，下次重试）；
+   *  · 检查结果整体再缓存 60 秒（?refresh=1 强制重算），让重复调用便宜；
+   *  · 两个缓存都只在内存里，**不写盘、不碰注册表**（路由是只读的）。
+   * ---------------------------------------------------------------- */
+  const UPDATES_TREE_TTL_MS = 10 * 60 * 1000
+  const UPDATES_RESULT_TTL_MS = 60 * 1000
+  let updatesTreeCache = { at: 0, blobs: null }
+  let updatesResultCache = null
+
+  /** 与 downloadEntry 的**确切**跳过规则一致（基于相对条目目录的 rel）：
+   *  · 嵌套的 avatars/ 图片（rel 里含 `/avatars/`）默认不下载；
+   *  · 嵌套的 icons/ 图片（rel 里含 `/icons/`）一律不下载。
+   *  注意顶层 `avatars/x.png`（rel 不含前导段）是**会**被下载的，必须参与比对 ——
+   *  实测用户仓里就有这种条目，一刀切按 `/avatars/` 过滤会把本地已有的头像算成
+   *  「本地多出 N 个文件」，凭空报「有更新」。两侧用同一规则过滤，才不会互相冤枉。 */
+  const skippedFromMirrorInstall = rel => {
+    const base = rel.split('/').pop() || rel
+    if (rel.includes('/avatars/') && IMAGE_EXT.test(base)) return true
+    if (rel.includes('/icons/') && IMAGE_EXT.test(base)) return true
+    return false
+  }
+
+  /**
+   * 只读遍历某个已装条目的目录：限定在 storeRoot 内、不跟随符号链接、
+   * 逐个文件算 git blob sha1（与镜像 tree 的 blob sha 同口径）。
+   * 目录不存在 / 越界 / 读不到 → ok:false（调用方一律按 unknown 处理，不猜）。
+   */
+  const listLocalFiles = (storeRoot, dest) => {
+    const rootAbs = resolve(storeRoot)
+    const destRaw = typeof dest === 'string' ? dest : ''
+    if (!destRaw) return { ok: false, reason: '注册表记录里没有 dest，无法比对本地文件' }
+    const destAbs = resolve(destRaw)
+    if (destAbs !== rootAbs && !destAbs.startsWith(rootAbs + '/')) {
+      return { ok: false, reason: `dest 不在 storeRoot 内（拒绝比对）：${destAbs}` }
+    }
+    if (!existsSync(destAbs)) return { ok: false, reason: `本地目录不存在：${destAbs}` }
+    const files = []
+    const walk = (dir, relBase) => {
+      let dirents
+      try { dirents = readdirSync(dir, { withFileTypes: true }) } catch { return }
+      for (const dirent of dirents) {
+        const abs = join(dir, dirent.name)
+        const rel = relBase ? `${relBase}/${dirent.name}` : dirent.name
+        if (dirent.isSymbolicLink()) continue           // 不跟随：软链可能指向 storeRoot 之外
+        if (dirent.isDirectory()) { walk(abs, rel); continue }
+        if (!dirent.isFile()) continue
+        // 安装时本来就不会下载的图标：远端已被过滤，本地也必须忽略，否则报假更新
+        if (skippedFromMirrorInstall(rel)) continue
+        try {
+          const buf = readFileSync(abs)
+          files.push({ rel, sha: gitBlobSha(buf), size: buf.byteLength })
+        } catch { /* 读不到 → 远端有、本地无 = 有更新；绝不静默当成最新 */ }
+      }
+    }
+    walk(destAbs, '')
+    return { ok: true, files }
+  }
+
+  /* ---------------------------------------------------------------- *
    * 账号保活（keepalive）+「已登录但凭证失效」判定
    *
    * 背景：refresh_token 本身也会过期 —— 长期不打开 DSH / 不访问市场时，只有
@@ -1319,6 +1381,126 @@ export function apply(ctx, config = {}) {
         try { saveJson(P.registry, registry) } catch { /* 只读场景也能返回 */ }
       }
       json(res, 200, registry)
+      return true
+    }
+
+    // ---- 检查更新（只读；不写注册表、不动文件）----
+    // 判定依据：
+    //  · source==='official' 的专家 → 官方注册表原始条目的 updatedAt vs 本地 installedAt；
+    //  · 其余（镜像来源的技能/连接器，以及 source 非 official 的条目）→ 内容比对：
+    //    镜像 tree 的 blob sha 就是 git blob sha1，本地同法算一遍即可精确比对。
+    // 纪律：远端取不到（限流/断网）一律 unknown + 原因，**绝不**判 current。
+    if (route === 'GET /updates') {
+      const force = url.searchParams.get('refresh') === '1'
+      const now = Date.now()
+      if (!force && updatesResultCache && now - updatesResultCache.at < UPDATES_RESULT_TTL_MS) {
+        json(res, 200, { ...updatesResultCache.body, cached: true })
+        return true
+      }
+
+      const registry = loadJson(P.registry, { version: 1, installed: {} })
+      const records = Object.entries(registry.installed ?? {})
+      const isOfficialExpert = record => record?.kind === 'expert' && record?.source === 'official'
+      const needsOfficial = records.some(([, record]) => isOfficialExpert(record))
+      const needsMirror = records.some(([, record]) => !isOfficialExpert(record))
+
+      // 官方注册表：成功时 wb-experts.registry() 自带永久缓存，失败只影响本次判定。
+      const official = { ok: !needsOfficial, at: now, reason: '', skipped: !needsOfficial, find: () => null }
+      if (needsOfficial) {
+        try {
+          const data = await officialRegistry()
+          const byName = new Map()
+          // 匹配优先级 agentName > plugin > id（后写覆盖前写）
+          for (const raw of data?.experts ?? []) {
+            if (raw?.id) byName.set(String(raw.id), raw)
+            if (raw?.plugin) byName.set(String(raw.plugin), raw)
+            if (raw?.agentName) byName.set(String(raw.agentName), raw)
+          }
+          official.ok = true
+          official.find = entryName => byName.get(String(entryName)) ?? null
+        } catch (error) {
+          official.reason = String(error?.message || error)
+        }
+      }
+
+      // 镜像 tree：一次全量（缓存 10 分钟，成功才写）。
+      const mirror = { ok: !needsMirror, at: now, reason: '', skipped: !needsMirror }
+      let mirrorBlobs = []
+      if (needsMirror) {
+        if (updatesTreeCache.blobs && now - updatesTreeCache.at < UPDATES_TREE_TTL_MS) {
+          mirrorBlobs = updatesTreeCache.blobs
+          mirror.ok = true
+          mirror.at = updatesTreeCache.at
+        } else {
+          try {
+            mirrorBlobs = await ghTree(mirrorRepo, mirrorBranch)
+            updatesTreeCache = { at: now, blobs: mirrorBlobs }
+            mirror.ok = true
+          } catch (error) {
+            mirror.reason = String(error?.message || error)
+          }
+        }
+      }
+
+      const entries = records.map(([key, record]) => {
+        const slash = key.indexOf('/')
+        const kind = record?.kind || (slash > 0 ? key.slice(0, slash) : '')
+        const entryName = record?.name || (slash > 0 ? key.slice(slash + 1) : key)
+        const base = {
+          key, kind, name: entryName,
+          displayName: record?.displayName || entryName,
+          installedAt: typeof record?.installedAt === 'string' ? record.installedAt : '',
+          files: Number(record?.files) || 0,
+          bytes: Number(record?.bytes) || 0,
+          remoteBytes: null,
+          changedFiles: 0,
+          remoteAt: '',
+          reason: '',
+        }
+        if (isOfficialExpert(record)) {
+          if (!official.ok) {
+            return { ...base, status: 'unknown', reason: `official registry unavailable: ${official.reason}` }
+          }
+          const cmp = compareOfficial(record, official.find(entryName))
+          return { ...base, status: cmp.status, remoteAt: cmp.remoteAt, reason: cmp.reason }
+        }
+        if (!mirror.ok) {
+          return { ...base, status: 'unknown', reason: `mirror tree unavailable: ${mirror.reason}` }
+        }
+        const prefix = `${kind}s/${entryName}/`
+        const remote = mirrorBlobs
+          .filter(blob => blob.path.startsWith(prefix))
+          .map(blob => ({ rel: blob.path.slice(prefix.length), sha: blob.sha, size: blob.size || 0 }))
+          .filter(blob => !skippedFromMirrorInstall(blob.rel))
+        const local = listLocalFiles(P.root, record?.dest)
+        if (!local.ok) return { ...base, status: 'unknown', reason: local.reason }
+        const cmp = compareMirror(record, remote, local.files)
+        return {
+          ...base,
+          status: cmp.status,
+          remoteBytes: cmp.remoteBytes,
+          changedFiles: cmp.changed.length + cmp.missing.length + cmp.extra.length,
+          reason: cmp.reason,
+        }
+      })
+
+      const body = {
+        ok: true,
+        checkedAt: new Date(now).toISOString(),
+        cached: false,
+        sources: {
+          official: official.ok
+            ? { ok: true, at: official.at, skipped: Boolean(official.skipped) }
+            : { ok: false, at: official.at, reason: `official registry unavailable: ${official.reason}` },
+          mirror: mirror.ok
+            ? { ok: true, at: mirror.at, skipped: Boolean(mirror.skipped) }
+            : { ok: false, at: mirror.at, reason: `mirror tree unavailable: ${mirror.reason}` },
+        },
+        counts: summarizeUpdates(entries),
+        entries,
+      }
+      updatesResultCache = { at: now, body }
+      json(res, 200, body)
       return true
     }
 

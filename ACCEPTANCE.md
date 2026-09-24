@@ -99,7 +99,7 @@ CDP 辅助（已存在）：`/tmp/wbh-cdp.mjs`（`listTabs/connect/newTab/closeT
 
 | ID | 步骤 | 预期 | 证据 |
 |---|---|---|---|
-| **A1** | `set -o pipefail && npm test` | exit 0；15 个套件全部 `OK`/`ALL TESTS PASSED` | 尾部输出 |
+| **A1** | `set -o pipefail && npm test` | exit 0；16 个套件全部 `OK`/`ALL TESTS PASSED` | 尾部输出 |
 | **A2** | `npm run build:client` 后 `git status --short` | `client.js` 无变化（证明 src 与产物同步） | 命令输出 |
 | **A3** | `node test-package.mjs` | 通过；且其中「真打包→解压→import」一步成功 | 输出里 `import('./index.js') 成功` |
 | **A4** | `npm pack --dry-run --json`，检查产物清单 | 含 `index.js expert-persona.js mcp-manager.js wb-market.js wb-experts.js wb-cats.js wb-unzip.js client.js client.css cordis.patch.yml` 与 `skills/*` | 文件清单 |
@@ -172,6 +172,18 @@ CDP 辅助（已存在）：`/tmp/wbh-cdp.mjs`（`listTabs/connect/newTab/closeT
 | **S3** | 断网/官方接口不可用时打开市场页 | 走镜像兜底或给出可读错误；**不得**白屏 | 页面文本 + `source` 字段 |
 | **S4** | `POST /mount` 传非法 name（含 `/`）与空 sessionId | 400/409 且不写脏数据 | 响应码 + mounts 未变 |
 | **S5** | 未登录时把 `storeRoot` 指向临时目录启动 | 插件正常起来，不报错、不写用户真实目录 | 启动日志 + 目录对比 |
+
+## U. 检查更新 / 一键更新（设置区「已安装」）
+
+| ID | 步骤 | 预期 | 证据 |
+|---|---|---|---|
+| **U1** | 探针 `GET /updates` | `ok:true`，`sources{official,mirror}` 各带 `ok/at`（失败时 `ok:false`+`reason`），`counts{update,current,unknown}`，`entries[]` 含 `key/kind/name/status/remoteAt/installedAt/files/bytes/remoteBytes/changedFiles/reason` | 响应 JSON |
+| **U2** | 连点两次 `GET /updates`（60s 内） | 第二次 `cached:true`，且不再打 GitHub tree / 官方注册表 | 响应 + 网络计数 |
+| **U3** | 断网或让 GitHub API 返回 403 时 `GET /updates?refresh=1` | 相关条目 `status:"unknown"` 且 `reason` 含 HTTP 状态；`counts.current` **必须为 0**（不得把「查不到」当「已是最新」） | 响应 JSON |
+| **U4** | 设置区「已安装」→「检查更新」 | 每行出现徽标（有更新/已是最新/无法检查）；只有「有更新」行有「更新」按钮；顶部出现「全部更新（N）」 | DOM 文本 |
+| **U5** | 点「全部更新」 | 先出现行内确认并显示**总下载量**（MB，估算值带「约」）；确认后才开始逐项更新 | DOM + 安装日志 |
+| **U6** | 更新一项已装技能后再 `GET /updates?refresh=1` | 该项变 `current`；注册表 `installedAt` 更新、文件被重装（先删后落） | 前后响应 + 目录 mtime |
+| **U7** | 更新失败（限流/断网/安装失败） | 界面给出可区分的原因并带 HTTP 状态；**不得**静默，也不得显示「已是最新」 | 通知文案 |
 
 ## R. 发布就绪与一致性
 

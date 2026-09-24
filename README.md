@@ -30,12 +30,34 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 | GET | `/catalog[?refresh=1]` | 拉取并缓存目录索引（树 + CATALOG.md，6h） |
 | GET | `/search?q=&kind=experts\|skills\|connectors&limit=` | 检索，返回中文名/简介/能力标记 |
 | GET | `/installed` | 已装清单（连接器附带实时 `enabled`/`status`/`credentialRefs`） |
+| GET | `/updates[?refresh=1]` | **检查更新**（只读）：官方专家比 `updatedAt` vs `installedAt`，镜像条目逐文件比 git blob sha1；远端不可用一律 `unknown` + 原因，**绝不**判「已是最新」。结果缓存 60s，`refresh=1` 强制重算 |
 | POST | `/install {kind,name}` | 按需下载落地（二进制安全） |
 | POST | `/uninstall {kind,name}` | 先拆传输层与技能链接，再删文件，并摘掉各会话里的挂载 |
 | GET | `/mounted?sessionId=` | 本会话已挂载条目（只读，缺 sessionId 时按最近会话兜底并标 `sessionSource`） |
 | POST | `/mount` \| `/unmount {sessionId,kind,name}` | 会话级挂载（安装 ≠ 挂载）；**写操作必须显式传 `sessionId`，缺失返回 409**，绝不兜底猜会话 |
 | POST | `/connectors/enable` \| `/connectors/disable {name}` | 动态挂载/拆卸 MCP 传输 |
 | GET | `/icon?kind=&name=` | 图标代理（按需从镜像取，磁盘缓存） |
+
+## 检查更新 / 一键更新
+
+设置区「已安装」列表顶部有「检查更新」；逐项徽标为 **有更新 / 已是最新 / 无法检查**，
+只有「有更新」的行出现「更新」按钮，且顶部出现「全部更新（N）」（确认框里显示总下载量）。
+
+判定规则（`GET /updates`，只读；实现见 `src/updates.js`）：
+
+| 条目 | 依据 | 说明 |
+|---|---|---|
+| `source === "official"` 的专家 | 官方注册表原始条目的 `updatedAt` vs 本地 `installedAt` | 必须用 `wb-experts.registry()` 的**原始条目**（`normalise()` 会把 `updatedAt` 丢掉）；缺字段或日期非法 → `unknown` |
+| 技能 / 连接器（镜像来源） | 镜像 tree 的 blob `sha` vs 本地算的 git blob sha1 | 只有 rel 集合与每个 sha **完全相同**才 `current`；远端多 / 本地多 / 内容变都算 `update` |
+
+- **安装时被跳过的图标不参与比对**（`downloadEntry` 默认跳过 `avatars/`、`icons/` 图片），
+  否则任何带头像的条目都会被永久判成「有更新」。
+- **更新 = 重新安装**：安装链路本来就先 `rm -rf` 再落盘（幂等），客户端直接复用
+  `hub.install(kind, name, source==='official' ? 'official' : undefined)`。
+- **查不到就说查不到**：镜像限流（未授权 GitHub API 会 403）或官方注册表不可用时，相关条目显示
+  「无法检查」并给出原因（含 HTTP 状态），界面**不会**把它渲染成「已是最新」。
+- 镜像 tree 一次全量取回后缓存 10 分钟（成功才写），检查结果缓存 60 秒（`?refresh=1` 强制重算）；
+  两个缓存都只在内存里，路由不写注册表、不动文件。
 
 ## 斜杠命令
 
@@ -62,9 +84,9 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 ## 开发
 
 ```bash
-npm test        # 15 个套件：mcp 校验 / 专家人设 / CLI 连接器 / 召唤 / 凭证轮换 /
+npm test        # 16 个套件：mcp 校验 / 专家人设 / CLI 连接器 / 召唤 / 凭证轮换 /
                 #   浏览器槽位 / client bundle / render smoke / session 契约 / pending expert /
-                #   recent experts / auth store / keepalive / install 离线链 / package 完整性
+                #   recent experts / auth store / keepalive / install 离线链 / 更新判定 / package 完整性
 npm run pack:check
 ```
 

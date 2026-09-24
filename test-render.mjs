@@ -121,6 +121,22 @@ const builtClient = readFileSync(new URL('./client.js', import.meta.url), 'utf8'
 assert.ok(builtClient.includes('wbh-btnDanger'), 'the built client must carry the new settings styles')
 assert.ok(builtClient.includes('aria-label'), 'the built client must carry the accessible labels')
 
+// ---- 「检查更新 / 一键更新」：源码与 CSS 契约（语义纪律必须写在代码里）--------
+assert.ok(settingsSrc.includes('hub.updates('), '检查更新必须调宿主只读路由 /updates')
+assert.ok(settingsSrc.includes('aria-label="检查更新"'), '检查更新按钮需要 aria-label')
+assert.ok(settingsSrc.includes('aria-busy'), '检查中/更新中必须有可感知的忙碌态（aria-busy）')
+assert.ok(settingsSrc.includes('无法检查'), '查不到时必须显示「无法检查」，而不是「已是最新」')
+assert.ok(settingsSrc.includes('全部更新'), '存在有更新项时必须提供「全部更新」入口')
+assert.ok(settingsSrc.includes('总下载量'), '「全部更新」确认时必须显示总下载量')
+assert.ok(settingsSrc.includes("entry.record.source === 'official' ? 'official' : undefined"),
+  '更新必须复用安装链路：官方专家传 source=official')
+for (const cls of ['.wbh-badgeUpdate{', '.wbh-badgeCurrent{', '.wbh-badgeUnknown{', '.wbh-updateBar{', '.wbh-updateWarn{', '.wbh-updateBtn,']) {
+  assert.ok(appCss.includes(cls), `app.css must define ${cls}`)
+}
+assert.ok(!/wbh-badgeUpdate|wbh-updateBar/.test(
+  readFileSync(new URL('./src/official.css', import.meta.url), 'utf8')), 'plugin styles must never be added to official-*.css')
+assert.ok(builtClient.includes('wbh-badgeUpdate'), 'the built client must carry the update badge styles')
+
 // ---- 移除流程的纯逻辑：uninstallNotice（真单测，不是字符串断言）--------------
 // SettingsPage.jsx 是 JSX，node 不能直接 import；用构建脚本同款的 esbuild
 // （devDependency）把它编成 ESM 后 import 一次，这样「卸载结果 → 用户看到的文案」
@@ -137,7 +153,10 @@ assert.ok(builtClient.includes('aria-label'), 'the built client must carry the a
     bundle: true, format: 'esm', platform: 'node', jsx: 'transform',
     external: ['react', 'react-dom', 'qrcode'], outfile: outFile, logLevel: 'silent',
   })
-  const { uninstallNotice, InstalledRow } = await import(pathToFileURL(outFile).href)
+  const {
+    uninstallNotice, InstalledRow, humanBytes, updatesSizeLabel,
+    updateFailureReason, updateNotice, statusBadge, checkSummaryText,
+  } = await import(pathToFileURL(outFile).href)
   assert.equal(typeof uninstallNotice, 'function', 'uninstallNotice must be exported for direct unit testing')
   assert.equal(typeof InstalledRow, 'function', 'InstalledRow must be exported for real render coverage')
 
@@ -180,6 +199,71 @@ assert.ok(builtClient.includes('aria-label'), 'the built client must carry the a
   assert.ok(!confirmRow.includes('wbh-btnPrimary'), '确认态也不得出现主色按钮')
   assert.ok(confirmRow.includes('先停用再删除'), '连接器确认文案必须点明「先停用再删除」')
   assert.ok(!confirmRow.includes('aria-label="移除 演示连接器"'), '确认态不再显示空闲态的单个移除按钮')
+
+  // ---- 「检查更新 / 更新」：状态徽标、行内确认、失败分类（真行为覆盖）----------
+  // 语义纪律：unknown 只能是「无法检查」，绝不能渲染成「已是最新」。
+  assert.equal(statusBadge('update').text, '有更新')
+  assert.equal(statusBadge('current').text, '已是最新')
+  assert.equal(statusBadge('unknown').text, '无法检查')
+  assert.equal(statusBadge(undefined), null, '还没检查过就不显示任何徽标')
+
+  const updateRow = renderToString(React.createElement(InstalledRow, {
+    ...rowProps, status: { status: 'update', remoteBytes: 9.8 * 1024 * 1024, reason: '3 个文件内容已变化' },
+  }))
+  assert.ok(updateRow.includes('有更新'), '有更新的行必须显示徽标')
+  assert.ok(updateRow.includes('aria-label="更新 演示连接器"'), '更新按钮的 aria-label 必须含条目名')
+  assert.ok(updateRow.includes('aria-label="移除 演示连接器"'), '同一行必须能同时看到「更新」与「移除」')
+  assert.ok(!updateRow.includes('wbh-btnPrimary'), '行内动作一律次要样式（更新也是）')
+
+  const currentRow = renderToString(React.createElement(InstalledRow, { ...rowProps, status: { status: 'current' } }))
+  assert.ok(currentRow.includes('已是最新'), 'sha 全同 → 已是最新')
+  assert.ok(!currentRow.includes('aria-label="更新 演示连接器"'), '已是最新不显示更新按钮')
+
+  const unknownRow = renderToString(React.createElement(InstalledRow, {
+    ...rowProps, status: { status: 'unknown', reason: 'mirror tree unavailable: tree api 403' },
+  }))
+  assert.ok(unknownRow.includes('无法检查'), '远端取不到 → 无法检查')
+  assert.ok(unknownRow.includes('403'), '无法检查必须把原因（含 HTTP 状态）带给用户（tooltip + aria-label）')
+  assert.ok(!unknownRow.includes('已是最新'), '查不到时绝不能显示「已是最新」')
+  assert.ok(!unknownRow.includes('aria-label="更新 演示连接器"'), '无法检查时不得提供「更新」')
+
+  const updateConfirmRow = renderToString(React.createElement(InstalledRow, {
+    ...rowProps, status: { status: 'update', remoteBytes: 1024 * 1024 },
+    updateConfirming: true, updateBusy: false, updateConfirmRef: { current: null },
+  }))
+  assert.ok(updateConfirmRow.includes('确认更新？'), '更新也要行内二次确认，不用 window.confirm')
+  assert.ok(updateConfirmRow.includes('下载') && updateConfirmRow.includes('1.0 MB'),
+    '确认态必须显示这次要下载多少（React 会在相邻文本节点间插注释，所以分两段断言）')
+  assert.ok(updateConfirmRow.includes('aria-label="确认更新 演示连接器"'))
+  assert.ok(updateConfirmRow.includes('aria-label="取消更新 演示连接器"'))
+  assert.ok(!updateConfirmRow.includes('确认移除？'), '更新与移除的确认态必须互斥')
+
+  // 下载量格式化 + 失败分类（限流 / 断网 / 安装失败必须区分开）
+  assert.equal(humanBytes(9.8 * 1024 * 1024), '9.8 MB')
+  assert.equal(humanBytes(2048), '2.0 KB')
+  assert.equal(humanBytes(0), '0 B')
+  assert.equal(humanBytes(undefined), '0 B')
+  assert.equal(updatesSizeLabel([{ remoteBytes: 1024 * 1024 }, { remoteBytes: 2 * 1024 * 1024 }]), '3.0 MB')
+  assert.ok(updatesSizeLabel([{ bytes: 1024 }]).startsWith('约 '), '官方专家没有远端清单 → 总下载量标「约」')
+  // 回归（实测踩到）：页面上的行对象把 /updates 的判定挂在 row.status 上，不是行本身。
+  // 旧实现只读 entry.remoteBytes，于是真实要下 9.4MB 时确认文案显示成「约 0 B」。
+  assert.equal(updatesSizeLabel([{ status: { remoteBytes: 9 * 1024 * 1024 } }]), '9.0 MB', '行形状（status.remoteBytes）必须能取到远端字节数')
+  assert.ok(updatesSizeLabel([{ status: { bytes: 2048 } }]).startsWith('约 '), '行形状缺远端清单时退回本地并标「约」')
+  assert.equal(
+    updatesSizeLabel([{ status: { remoteBytes: 1024 * 1024 } }, { remoteBytes: 1024 * 1024 }]),
+    '2.0 MB', '裸条目与行形状混用也要算对')
+  assert.equal(updatesSizeLabel([{ status: { remoteBytes: 0 }, bytes: 1024 * 1024 }]), '约 1.0 MB', '远端字节为 0 时退回本地估算')
+  assert.ok(updateFailureReason({ message: 'tree api 403' }).includes('限流'))
+  assert.ok(updateFailureReason({ message: 'fetch failed' }).includes('网络不可达'))
+  const installFail = updateFailureReason({ message: 'landEntry failed', status: 500 })
+  assert.ok(installFail.includes('安装失败') && installFail.includes('500'), '安装失败必须带 HTTP 状态')
+  assert.equal(updateNotice('expert', '演示', { ok: true }).text, '已更新专家「演示」')
+  assert.equal(updateNotice('expert', '演示', { ok: false, message: 'tree api 403' }).ok, false)
+  const failedSummary = checkSummaryText({ ok: false, error: '镜像接口限流：tree api 403' }, false)
+  assert.ok(failedSummary.includes('检查失败'), '整次检查失败要明说失败')
+  assert.ok(!failedSummary.includes('已是最新'), '检查失败绝不能给出「已是最新」的结论')
+  assert.ok(checkSummaryText(null, true).includes('正在检查'))
+  assert.ok(checkSummaryText(null, false).includes('尚未检查'))
   rmSync(cacheDir, { recursive: true, force: true })
 }
 

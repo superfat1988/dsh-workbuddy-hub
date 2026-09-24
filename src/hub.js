@@ -386,6 +386,12 @@ export const hub = {
   },
 
   installed: () => api('/installed').then(r => r.installed || {}),
+  /**
+   * 检查更新（只读路由；宿主侧对结果有 60s 短缓存）。
+   * @param {{refresh?: boolean}} [opts] refresh=true → `?refresh=1` 强制重算
+   *   （安装/更新成功后用它拿到最新判定；普通点「检查更新」走缓存，便宜）。
+   */
+  updates: (opts = {}) => api(`/updates${opts?.refresh ? '?refresh=1' : ''}`),
   localSkills: () => api('/local-skills').then(r => r.rows || []).catch(() => []),
   mounted: sessionId => sessionId
     ? api(`/mounted?sessionId=${encodeURIComponent(sessionId)}`).then(r => r.keys || [])

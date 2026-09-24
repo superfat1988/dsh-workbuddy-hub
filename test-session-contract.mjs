@@ -11,6 +11,7 @@ import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { apply, replacePersonaPrefix, mountEntry, unmountEntry, pruneMounts } from './index.js'
+import { gitBlobSha } from './src/updates.js'
 
 const root = '/tmp/wbh-session-contract'
 rmSync(root, { recursive: true, force: true })
@@ -517,6 +518,187 @@ if (existsSync(REAL_STANDARD)) {
   assert.equal(pruneMounts(mpaths, ''), 0, '空 key 绝不能匹配到所有会话')
   assert.deepEqual(read().s1, s1Others, 'no-op 不得改动任何会话')
   assert.deepEqual(read().s3, s3Before, 'no-op 不得改动任何会话')
+}
+
+// ---- 5. GET /updates：远端取不到时必须 unknown，绝不能判 current ----------------
+// 语义纪律：限流/断网时把「查不到」渲染成「已是最新」是静默的错误结论 —— 用户会以为
+// 一切正常。这里用打桩 fetch 把两条远端路径都打成失败，断言路由如实返回 unknown + 原因
+// （含 HTTP 状态），并断言 60s 结果缓存与 ?refresh=1 的行为；随后切成成功桩，验证
+// 「镜像 tree 的 blob sha == 本地 gitBlobSha」这条判定确实成立（current/update 两侧都测）。
+{
+  const upRoot = '/tmp/wbh-updates-contract'
+  rmSync(upRoot, { recursive: true, force: true })
+  mkdirSync(join(upRoot, '.meta'), { recursive: true })
+  const upExpertDir = join(upRoot, 'experts', 'demo-official')
+  mkdirSync(join(upExpertDir, 'agents'), { recursive: true })
+  writeFileSync(join(upExpertDir, 'agents', 'demo.md'), '---\nname: demo\n---\n你是演示专家。\n')
+  const upSkillDir = join(upRoot, 'skills', 'demo-skill')
+  mkdirSync(upSkillDir, { recursive: true })
+  const SKILL_CONTENT = '# 演示技能\n'
+  writeFileSync(join(upSkillDir, 'SKILL.md'), SKILL_CONTENT)
+  const skillSha = gitBlobSha(SKILL_CONTENT)                 // 本地算出的 git blob sha1
+  const skillBytes = Buffer.byteLength(SKILL_CONTENT)
+  // 顶层 avatars/ 图片：downloadEntry **会**下载它（rel 不含前导段），必须参与比对 ——
+  // 实测用户仓里就有这种条目，一刀切过滤会把本地已有头像算成「本地多出」→ 假更新。
+  const upSkill2Dir = join(upRoot, 'skills', 'demo-skill2')
+  mkdirSync(join(upSkill2Dir, 'avatars'), { recursive: true })
+  const AVATAR_CONTENT = 'PNGDATA'
+  writeFileSync(join(upSkill2Dir, 'avatars', 'pic.png'), AVATAR_CONTENT)
+  const avatarSha = gitBlobSha(AVATAR_CONTENT)
+  const avatarBytes = Buffer.byteLength(AVATAR_CONTENT)
+  writeFileSync(join(upRoot, '.meta', 'registry.json'), JSON.stringify({
+    version: 1,
+    installed: {
+      'expert/demo-official': {
+        kind: 'expert', name: 'demo-official', displayName: '官方演示专家',
+        dest: upExpertDir, source: 'official', installedAt: '2020-01-01T00:00:00.000Z',
+        files: 1, bytes: 40,
+      },
+      'skill/demo-skill': {
+        kind: 'skill', name: 'demo-skill', displayName: '演示技能',
+        dest: upSkillDir, installedAt: '2020-01-01T00:00:00.000Z', files: 1, bytes: skillBytes,
+      },
+      'skill/demo-skill2': {
+        kind: 'skill', name: 'demo-skill2', displayName: '演示技能二',
+        dest: upSkill2Dir, installedAt: '2020-01-01T00:00:00.000Z', files: 1, bytes: avatarBytes,
+      },
+    },
+  }))
+
+  const realFetch = globalThis.fetch
+  const seen = { tree: 0, registry: 0, other: [] }
+  let mode = 'down'      // down = 两条远端都失败；ok / current = 成功桩
+  globalThis.fetch = async input => {
+    const target = String(input?.url ?? input)
+    if (target.includes('api.github.com')) {
+      seen.tree += 1
+      if (mode === 'down') return { ok: false, status: 403, json: async () => ({}), text: async () => '' }
+      const tree = [
+        { type: 'blob', path: 'skills/demo-skill/SKILL.md', sha: skillSha, size: skillBytes },
+        // 嵌套 avatars/ 图片：downloadEntry 默认不下载 → 两侧都必须忽略
+        { type: 'blob', path: 'skills/demo-skill/assets/avatars/a.png', sha: '1'.repeat(40), size: 999 },
+        // 顶层 avatars/ 图片：会被下载 → 必须参与比对
+        { type: 'blob', path: 'skills/demo-skill2/avatars/pic.png', sha: avatarSha, size: avatarBytes },
+      ]
+      return { ok: true, status: 200, json: async () => ({ tree }) }
+    }
+    if (target.includes('expert_center.json')) {
+      seen.registry += 1
+      if (mode === 'down') return { ok: false, status: 503, json: async () => ({}), text: async () => '' }
+      return {
+        ok: true, status: 200,
+        json: async () => ({
+          experts: [{
+            id: 'demo-official', agentName: 'demo-official', plugin: 'demo-plugin',
+            updatedAt: '2024-06-01T00:00:00.000Z', createdAt: '2020-01-01T00:00:00.000Z',
+          }],
+        }),
+      }
+    }
+    seen.other.push(target)
+    throw new Error(`unexpected fetch: ${target}`)
+  }
+
+  try {
+    let upHandler = null
+    apply({ ...ctx, webServer: { register: spec => { upHandler = spec.handler; return () => {} } } },
+      { storeRoot: upRoot, skillPrefix: 'wbh-updates-', keepalive: false })
+    assert.equal(typeof upHandler, 'function')
+    const callUp = async path => {
+      const req = new EventEmitter()
+      req.method = 'GET'
+      req.url = '/workbuddy-hub' + path
+      req.headers = {}
+      req.destroy = () => {}
+      const res = makeRes()
+      const done = upHandler(req, res)
+      setImmediate(() => req.emit('end'))
+      await done
+      let parsed = null
+      try { parsed = JSON.parse(res.body) } catch { parsed = null }
+      return { status: res.statusCode, json: parsed }
+    }
+
+    // 5a. 远端全不可用 → 两条都 unknown（绝不能是 current）
+    const down = await callUp('/updates')
+    assert.equal(down.status, 200)
+    assert.equal(down.json.ok, true)
+    assert.equal(down.json.sources.mirror.ok, false, '镜像不可用必须如实标注')
+    assert.ok(down.json.sources.mirror.reason.includes('403'), '镜像失败原因必须带 HTTP 状态')
+    assert.equal(down.json.sources.official.ok, false, '官方注册表不可用必须如实标注')
+    assert.ok(down.json.sources.official.reason.includes('503'), '官方失败原因必须带 HTTP 状态')
+    assert.equal(down.json.counts.current, 0, '远端取不到时绝不能出现「已是最新」')
+    assert.equal(down.json.counts.update, 0)
+    assert.equal(down.json.counts.unknown, 3)
+    for (const entry of down.json.entries) {
+      assert.equal(entry.status, 'unknown', `${entry.key} 在远端不可用时必须是 unknown`)
+      assert.ok(entry.reason.length > 0, `${entry.key} 的 unknown 必须带原因`)
+    }
+    const downByKey = new Map(down.json.entries.map(e => [e.key, e]))
+    assert.ok(downByKey.get('expert/demo-official').reason.includes('official registry unavailable'))
+    assert.ok(downByKey.get('skill/demo-skill').reason.includes('mirror tree unavailable'))
+
+    // 5b. 60s 结果缓存：第二次调用不再打网络（重复调用要便宜）
+    const treeAfterFirst = seen.tree
+    const registryAfterFirst = seen.registry
+    const cachedCall = await callUp('/updates')
+    assert.equal(cachedCall.json.cached, true, '60s 内的第二次调用必须命中结果缓存')
+    assert.equal(seen.tree, treeAfterFirst, '命中缓存不得再打 GitHub tree')
+    assert.equal(seen.registry, registryAfterFirst, '命中缓存不得再打官方注册表')
+    // ?refresh=1 强制重算（失败不写 tree 缓存 → 会再试一次）
+    const refreshed = await callUp('/updates?refresh=1')
+    assert.equal(refreshed.json.cached, false)
+    assert.ok(seen.tree > treeAfterFirst, 'refresh=1 必须真的重新检查，而不是复用失败结果')
+    assert.equal(refreshed.json.counts.current, 0)
+
+    // 5c. 远端可用：本地 sha == tree 的 blob sha → current；本地漂移 → update
+    //     （tree 缓存 10 分钟是设计行为，所以这里只改本地文件来制造差异）
+    mode = 'ok'
+    const ok = await callUp('/updates?refresh=1')
+    assert.equal(ok.json.sources.mirror.ok, true)
+    assert.equal(ok.json.sources.official.ok, true)
+    const okByKey = new Map(ok.json.entries.map(e => [e.key, e]))
+    const skillRow = okByKey.get('skill/demo-skill')
+    assert.equal(skillRow.status, 'current', '本地 gitBlobSha 与 tree 的 blob sha 相同 → 已是最新')
+    assert.equal(skillRow.changedFiles, 0)
+    assert.equal(skillRow.remoteBytes, skillBytes, 'remoteBytes 不含嵌套 avatars 图片（安装时本就不下载）')
+    const skill2Row = okByKey.get('skill/demo-skill2')
+    assert.equal(skill2Row.status, 'current', '顶层 avatars 图片会被下载，参与比对后仍是「已是最新」')
+    assert.equal(skill2Row.remoteBytes, avatarBytes)
+    const expertRow = okByKey.get('expert/demo-official')
+    assert.equal(expertRow.status, 'update', '官方 updatedAt 比 installedAt 新 → 有更新')
+    assert.equal(expertRow.remoteAt, '2024-06-01T00:00:00.000Z')
+    assert.deepEqual(ok.json.counts, { update: 1, current: 2, unknown: 0 })
+
+    // 本地多出一个文件（远端没有）→ 也**不是** current，且原因说清是「本地多出」
+    writeFileSync(join(upSkillDir, 'note.txt'), 'local only\n')
+    const drifted = await callUp('/updates?refresh=1')
+    const driftSkill = new Map(drifted.json.entries.map(e => [e.key, e])).get('skill/demo-skill')
+    assert.equal(driftSkill.status, 'update', '本地多出文件说明两边不一致，不能判 current')
+    assert.equal(driftSkill.changedFiles, 1)
+    assert.ok(driftSkill.reason.includes('多出'), `原因要说明本地多出文件：${driftSkill.reason}`)
+    assert.equal(driftSkill.remoteBytes, skillBytes)
+    assert.deepEqual(drifted.json.counts, { update: 2, current: 1, unknown: 0 })
+
+    // 本地内容变了 → changed（同样不是 current）
+    rmSync(join(upSkillDir, 'note.txt'), { force: true })
+    writeFileSync(join(upSkillDir, 'SKILL.md'), '# 演示技能（本地改过）\n')
+    const changedLocal = await callUp('/updates?refresh=1')
+    const changedSkill = new Map(changedLocal.json.entries.map(e => [e.key, e])).get('skill/demo-skill')
+    assert.equal(changedSkill.status, 'update')
+    assert.equal(changedSkill.changedFiles, 1)
+    assert.ok(changedSkill.reason.includes('内容'), `原因要说明内容已变化：${changedSkill.reason}`)
+
+    assert.deepEqual(seen.other, [], '只读检查路由不得打别的网络地址')
+    // 只读自检：整个检查过程不得改动注册表
+    assert.equal(
+      JSON.parse(readFileSync(join(upRoot, '.meta', 'registry.json'), 'utf8')).installed['skill/demo-skill'].files,
+      1,
+      '检查更新不得写注册表',
+    )
+  } finally {
+    globalThis.fetch = realFetch
+  }
 }
 
 console.log('session resolution + live MCP tool registry: OK')

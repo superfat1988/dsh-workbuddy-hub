@@ -59,6 +59,19 @@
 .wbh-btnDanger:disabled{cursor:default;opacity:.6}
 .wbh-removeNotice{margin:0 0 8px;padding:7px 10px;border:1px solid #b7eb8f;border-radius:8px;background:#f6ffed;color:#237804;font-size:12px}
 .wbh-removeNotice.is-error{border-color:#ffccc7;background:#fff2f0;color:#cf1322}
+
+/* 已安装列表的「检查更新 / 更新」：状态徽标 + 行内确认（与「移除」互斥，同一行只有一个确认态） */
+.wbh-updateBar{border-bottom:none;padding-bottom:2px}
+.wbh-updateSummary{flex:1;min-width:0;font-size:11.5px;color:var(--wb-color-text-tertiary)}
+.wbh-updateSummary.is-error{color:#cf1322}
+.wbh-updateWarn{margin:0 0 8px;padding:7px 10px;border:1px solid #ffe58f;border-radius:8px;background:#fffbe6;color:#ad6800;font-size:12px;line-height:1.6}
+.wbh-badge{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:999px;border:1px solid transparent;font-size:11px;line-height:1;white-space:nowrap;cursor:default}
+.wbh-badgeUpdate{border-color:#ffd591;background:#fff7e6;color:#ad4e00;font-weight:600}
+.wbh-badgeCurrent{border-color:#b7eb8f;background:#f6ffed;color:#237804}
+.wbh-badgeUnknown{border-color:var(--wb-border-default);background:var(--wb-bg-tertiary,#f4f4f4);color:var(--wb-color-text-tertiary)}
+.wbh-updateBtn,.wbh-updateAllBtn,.wbh-checkBtn{height:26px;padding:0 10px;font-size:12px}
+.wbh-updateBtn{border-color:#ffd591;color:#ad4e00}
+.wbh-updateConfirmBtn{height:26px;padding:0 12px;font-size:12px}
 .wbh-modalInput{box-sizing:border-box;width:100%;padding:8px 10px;border:1px solid var(--wb-border-default);border-radius:8px;background:var(--wb-bg-secondary);color:var(--wb-color-text-primary);font:inherit;font-size:12px;resize:vertical;outline:none}
 .wbh-modalInput:focus{border-color:var(--wb-border-hover)}
 
