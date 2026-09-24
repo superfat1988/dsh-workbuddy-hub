@@ -221,6 +221,11 @@ export const hub = {
             source: 'official-registry',
           }
         }
+        // 带关键字却没命中 → 必须返回空，绝不能落回市场的全量列表
+        // （否则用户看到「搜不到却显示全部」）。空关键字才允许继续兜底。
+        if (String(query).trim() !== '') {
+          return { rows: [], total: 0, hasMore: false, source: 'official-registry' }
+        }
       } catch { /* fall through to the market */ }
     }
     try {

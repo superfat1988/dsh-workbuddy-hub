@@ -2381,6 +2381,9 @@ var hub = {
             source: "official-registry"
           };
         }
+        if (String(query).trim() !== "") {
+          return { rows: [], total: 0, hasMore: false, source: "official-registry" };
+        }
       } catch {
       }
     }
@@ -3092,7 +3095,7 @@ function Catalogue({
     s.label
   ))) : null;
   const categoryChips = kind === "skill" ? /* @__PURE__ */ import_react3.default.createElement("div", { className: "category-chip-list" }, /* @__PURE__ */ import_react3.default.createElement("button", { type: "button", className: `category-chip${category === "" ? " category-chip--active" : ""}`, onClick: () => setCategory("") }, /* @__PURE__ */ import_react3.default.createElement("span", { className: "category-chip-label" }, "\u5168\u90E8")), categories.map((c) => /* @__PURE__ */ import_react3.default.createElement("button", { key: c.id, type: "button", className: `category-chip${category === c.id ? " category-chip--active" : ""}`, onClick: () => setCategory(c.id) }, /* @__PURE__ */ import_react3.default.createElement("span", { className: "category-chip-label" }, c.label)))) : kind === "expert" ? /* @__PURE__ */ import_react3.default.createElement("div", { className: "ec-category-tabs-wrap" }, /* @__PURE__ */ import_react3.default.createElement("div", { className: "ec-category-tabs" }, /* @__PURE__ */ import_react3.default.createElement("button", { type: "button", className: `ec-category-tab${category === "" ? " is-active" : ""}`, onClick: () => setCategory("") }, "\u5168\u90E8"), categories.map((c) => /* @__PURE__ */ import_react3.default.createElement("button", { key: c.id, type: "button", className: `ec-category-tab${category === c.id ? " is-active" : ""}`, onClick: () => setCategory(c.id) }, c.label, c.count != null ? /* @__PURE__ */ import_react3.default.createElement("span", { className: "ec-category-tab-count" }, "(", c.count, ")") : null)))) : null;
-  const cardGrid = kind === "expert" ? /* @__PURE__ */ import_react3.default.createElement("div", { className: "ec-expert-grid" }, loading && skeletonCards, !loading && failed && /* @__PURE__ */ import_react3.default.createElement("div", { className: "wbh-state" }, "\u8BFB\u53D6\u5931\u8D25\uFF1A", failed), !loading && !failed && visible.length === 0 && /* @__PURE__ */ import_react3.default.createElement("div", { className: "wbh-state" }, /* @__PURE__ */ import_react3.default.createElement(WbIcon, { name: kindMeta.icon, size: 40 }), /* @__PURE__ */ import_react3.default.createElement("p", null, "\u6682\u65E0\u8BE5\u5206\u7C7B\u7684\u6761\u76EE")), visible.map((entry) => /* @__PURE__ */ import_react3.default.createElement(
+  const cardGrid = kind === "expert" ? /* @__PURE__ */ import_react3.default.createElement("div", { className: "ec-expert-grid" }, loading && skeletonCards, !loading && failed && /* @__PURE__ */ import_react3.default.createElement("div", { className: "wbh-state" }, "\u8BFB\u53D6\u5931\u8D25\uFF1A", failed), !loading && !failed && visible.length === 0 && /* @__PURE__ */ import_react3.default.createElement("div", { className: "wbh-state" }, /* @__PURE__ */ import_react3.default.createElement(WbIcon, { name: kindMeta.icon, size: 40 }), /* @__PURE__ */ import_react3.default.createElement("p", null, String(query).trim() ? `\u6CA1\u6709\u627E\u5230\u4E0E\u300C${String(query).trim()}\u300D\u5339\u914D\u7684${kindMeta.label}\uFF0C\u8BD5\u8BD5\u5176\u4ED6\u5173\u952E\u8BCD` : `\u6682\u65E0\u8BE5\u5206\u7C7B\u7684\u6761\u76EE`)), visible.map((entry) => /* @__PURE__ */ import_react3.default.createElement(
     ExpertCard,
     {
       key: `${entry.kind}/${entry.name}`,
@@ -3377,7 +3380,7 @@ function Catalogue({
       );
     };
     const listNode = /* @__PURE__ */ import_react3.default.createElement("div", { className: "wbh-flyoutList", ref: scrollRef, onScroll }, loading && /* @__PURE__ */ import_react3.default.createElement("div", { className: "wbh-flyoutState" }, "\u6B63\u5728\u8BFB\u53D6\u2026"), !loading && !failed && visibleRows.length === 0 && /* @__PURE__ */ import_react3.default.createElement("div", { className: "wbh-flyoutState" }, "\u6682\u65E0\u53EF\u7528", kindMeta.label), visibleRows.map(rowNode), loadingMore && /* @__PURE__ */ import_react3.default.createElement("div", { className: "wbh-flyoutState" }, "\u52A0\u8F7D\u4E2D\u2026"));
-    return /* @__PURE__ */ import_react3.default.createElement("div", { className: `wbh-flyout is-${kind}`, role: "dialog", "aria-label": `\u9009\u62E9${kindMeta.label}` }, notice ? /* @__PURE__ */ import_react3.default.createElement("div", { className: "wbh-notice" }, notice) : null, pendingAuth ? /* @__PURE__ */ import_react3.default.createElement("a", { className: "wbh-authLink", href: pendingAuth.url, target: "_blank", rel: "noreferrer" }, "\u6253\u5F00\u300C", pendingAuth.displayName, "\u300D\u6388\u6743\u9875") : null, kind !== "expert" && /* @__PURE__ */ import_react3.default.createElement("div", { className: "wbh-flyoutSearch" }, /* @__PURE__ */ import_react3.default.createElement("span", { className: "wbh-flyoutSearchIcon" }, /* @__PURE__ */ import_react3.default.createElement(PickIcon, { name: "search", size: 16 })), /* @__PURE__ */ import_react3.default.createElement(
+    return /* @__PURE__ */ import_react3.default.createElement("div", { className: `wbh-flyout is-${kind}`, role: "dialog", "aria-label": `\u9009\u62E9${kindMeta.label}` }, notice ? /* @__PURE__ */ import_react3.default.createElement("div", { className: "wbh-notice" }, notice) : null, pendingAuth ? /* @__PURE__ */ import_react3.default.createElement("a", { className: "wbh-authLink", href: pendingAuth.url, target: "_blank", rel: "noreferrer" }, "\u6253\u5F00\u300C", pendingAuth.displayName, "\u300D\u6388\u6743\u9875") : null, /* @__PURE__ */ import_react3.default.createElement("div", { className: "wbh-flyoutSearch" }, /* @__PURE__ */ import_react3.default.createElement("span", { className: "wbh-flyoutSearchIcon" }, /* @__PURE__ */ import_react3.default.createElement(PickIcon, { name: "search", size: 16 })), /* @__PURE__ */ import_react3.default.createElement(
       "input",
       {
         value: query,
@@ -3846,8 +3849,9 @@ function ComposerAdd({ sessionId, runCommand: runCommand2, sessionBlank }) {
           setNotice(`\u5DF2\u8FDE\u63A5\u300C${entry.displayName}\u300D\uFF08\u5DE5\u5177\u547D\u540D\u7A7A\u95F4 ${r.serverName}\uFF09\uFF0C\u4E0B\u4E00\u6B21\u6A21\u578B\u6B65\u9AA4\u8D77\u53EF\u7528\u3002`);
         }
       } else if (entry.kind === "expert") {
-        const r = await summonExpertInNewSession(entry);
-        setNotice(r?.ok ? r.replaced ? `\u5DF2\u6539\u4E3A\u9009\u62E9\u300C${entry.displayName}\u300D\uFF08\u66FF\u6362\u4E86\u4E0A\u4E00\u6B21\u9009\u62E9\u7684\u4E13\u5BB6\uFF09\uFF1A\u65B0\u4F1A\u8BDD\u91CC\u4F1A\u81EA\u52A8\u52A0\u8F7D` : `\u5DF2\u9009\u62E9\u300C${entry.displayName}\u300D\uFF1A\u65B0\u4F1A\u8BDD\u91CC\u4F1A\u81EA\u52A8\u52A0\u8F7D\u8BE5\u4E13\u5BB6\uFF08\u53EF\u81EA\u884C\u9009\u62E9\u5DE5\u4F5C\u533A\uFF09` : `\u5931\u8D25\uFF1A${r?.error || "\u672A\u77E5\u9519\u8BEF"}`);
+        await hub.mount(sessionId, entry.kind, entry.name);
+        addSelection(entry, sessionId);
+        setNotice(`\u5DF2\u9009\u4E2D\u300C${entry.displayName}\u300D\uFF0C\u4E0B\u4E00\u6B65\u8D77\u4EE5\u8BE5\u4E13\u5BB6\u8EAB\u4EFD\u56DE\u7B54`);
       } else {
         await hub.mount(sessionId, entry.kind, entry.name);
         addSelection(entry, sessionId);

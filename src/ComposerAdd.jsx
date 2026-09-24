@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react'
-import { hub, addSelection, summonExpertInNewSession, peekPendingExpert, clearPendingExpert, onCatalogChange, onMarketRequest, setComposerSession } from './hub.js'
+import { hub, addSelection, peekPendingExpert, clearPendingExpert, onCatalogChange, onMarketRequest, setComposerSession } from './hub.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
 import Catalogue from './Catalogue.jsx'
@@ -181,14 +181,11 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
           setNotice(`已连接「${entry.displayName}」（工具命名空间 ${r.serverName}），下一次模型步骤起可用。`)
         }
       } else if (entry.kind === 'expert') {
-        // 官方语义：新建会话 + 该专家加载进去；picker 没有 useWorkspaces，
-        // 由宿主从当前会话的 header.cwd 解析工作区。
-        const r = await summonExpertInNewSession(entry)
-        setNotice(r?.ok
-          ? (r.replaced
-            ? `已改为选择「${entry.displayName}」（替换了上一次选择的专家）：新会话里会自动加载`
-            : `已选择「${entry.displayName}」：新会话里会自动加载该专家（可自行选择工作区）`)
-          : `失败：${r?.error || '未知错误'}`)
+        // picker 在 composer 里 → 用户已在一个会话中：选中即加载到**当前会话**
+        // （不新建会话）。「新建会话 + 该专家」的场景走市场页的「召唤」。
+        await hub.mount(sessionId, entry.kind, entry.name)
+        addSelection(entry, sessionId)
+        setNotice(`已选中「${entry.displayName}」，下一步起以该专家身份回答`)
       } else {
         await hub.mount(sessionId, entry.kind, entry.name)
         addSelection(entry, sessionId)

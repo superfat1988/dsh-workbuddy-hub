@@ -547,7 +547,11 @@ export default function Catalogue({
         {loading && skeletonCards}
         {!loading && failed && <div className="wbh-state">读取失败：{failed}</div>}
         {!loading && !failed && visible.length === 0 && (
-          <div className="wbh-state"><WbIcon name={kindMeta.icon} size={40} /><p>暂无该分类的条目</p></div>
+          <div className="wbh-state"><WbIcon name={kindMeta.icon} size={40} />
+            <p>{String(query).trim()
+              ? `没有找到与「${String(query).trim()}」匹配的${kindMeta.label}，试试其他关键词`
+              : `暂无该分类的条目`}</p>
+          </div>
         )}
         {visible.map(entry => (
           <ExpertCard key={`${entry.kind}/${entry.name}`} entry={entry} kindLabel={kindMeta.label}
@@ -914,14 +918,12 @@ export default function Catalogue({
             打开「{pendingAuth.displayName}」授权页
           </a>
         ) : null}
-        {/* 官方专家面板没有搜索框，只有技能/连接器面板有 */}
-        {kind !== 'expert' && (
-          <div className="wbh-flyoutSearch">
-            <span className="wbh-flyoutSearchIcon"><PickIcon name="search" size={16} /></span>
-            <input value={query} placeholder={`搜索${kindMeta.label}`} aria-label={`搜索${kindMeta.label}`}
-              onChange={e => onQuery(e.target.value)} />
-          </div>
-        )}
+        {/* 三个面板都带搜索框（专家面板此前被误判为「官方没有」而缺失） */}
+        <div className="wbh-flyoutSearch">
+          <span className="wbh-flyoutSearchIcon"><PickIcon name="search" size={16} /></span>
+          <input value={query} placeholder={`搜索${kindMeta.label}`} aria-label={`搜索${kindMeta.label}`}
+            onChange={e => onQuery(e.target.value)} />
+        </div>
         {kind === 'skill' ? <div className="wbh-flyoutBody">{listNode}</div> : listNode}
         <div className="wbh-flyoutDivider" />
         <div className="wbh-flyoutFooter">{footerNode}</div>
