@@ -14,7 +14,8 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 | 本地内容仓 | `~/workbuddyskills/` | `.meta/registry.json`、`.meta/mounts.json`、`.meta/icons/`、`skills/ experts/ connectors/` |
 | DSH 挂载 | `~/.dsh/skills/<prefix><name>` | 符号链接（DSH 扫描器原生跟随） |
 | 随插件 skill | `skills/workbuddy-find-tools`、`skills/workbuddy-experts` | 工具检索 / 专家推荐与召唤 |
-| 随插件脚本 | `scripts/hub-find.mjs` | agent 的**紧凑检索入口**（专家/技能/连接器/已装清单）：本地过滤+排版，一次查询约 0.1–0.9KB，替代会把整段 JSON（12.7KB，最坏 473KB）塞进上下文的裸 curl；也绕开了连接栅栏（裸 curl 连 /health 都 401）|
+| 随插件脚本 | `scripts/hub-find.mjs` | agent 的**紧凑检索入口**（专家/技能/连接器/已装清单 + `inspect` 装前安全预检）：本地过滤+排版，一次查询约 0.1–0.9KB，替代会把整段 JSON（12.7KB，最坏 473KB）塞进上下文的裸 curl；也绕开了连接栅栏（裸 curl 连 /health 都 401）|
+| agent 工具 | `workbuddy_install`（Host 经 `ctx.tools.register` 注册） | **带 DSH 原生审批的安装工具**：装前只读预检 → 审批 → 才真装；连接器落地保持停用 |
 
 **官方源是唯一真源，GitHub 镜像只是灾备**（`mirrorFallback: false` 是默认值）：
 - 列表 / 目录 / 检索（`/market-list`、`/catalog`、`/search`）在官方失败时**不再静默换成镜像内容**，
@@ -48,7 +49,7 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 | GET | `/search?q=&kind=experts\|skills\|connectors&limit=` | 镜像检索。同上，默认关闭时返回 503 + 原因 |
 | GET | `/installed` | 已装清单（连接器附带实时 `enabled`/`status`/`credentialRefs`） |
 | GET | `/updates[?refresh=1]` | **检查更新**（只读）：纯官方元数据比对 —— 技能比官方 `version`、专家比官方 `updatedAt`、连接器比官方 MCP 定义哈希；取不到官方数据一律 `unknown` + 原因，**绝不**判「已是最新」。结果缓存 60s，`refresh=1` 强制重算；**永远不用镜像** |
-| POST | `/install {kind,name}` | 按需安装（官方优先；技能/专家/连接器都记 `officialMeta` 溯源） |
+| POST | `/install {kind,name}` | 按需安装（官方优先；技能/专家/连接器都记 `officialMeta` 溯源）。与 `workbuddy_install` 工具共用同一实现 `installEntry`；本路由是 Web UI 的安装通道（**不经过审批**——审批在工具链路里） |
 | POST | `/uninstall {kind,name}` | 先拆传输层与技能链接，再删文件，并摘掉各会话里的挂载 |
 | GET | `/mounted?sessionId=` | 本会话已挂载条目（只读，缺 sessionId 时按最近会话兜底并标 `sessionSource`） |
 | POST | `/mount` \| `/unmount {sessionId,kind,name}` | 会话级挂载（安装 ≠ 挂载）；**写操作必须显式传 `sessionId`，缺失返回 409**，绝不兜底猜会话 |
@@ -87,6 +88,41 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 
 - `/expert [专家名] [任务]` — 召唤已安装专家：读取人设，启动独立子会话；主对话不注入人设
 - `/connector <连接器名> [on|off]` — 会话内启用/停用连接器
+
+## agent 工具：workbuddy_install（装前预检 + DSH 原生审批）
+
+模型安装任何市场条目的**正规通道**（`index.js` 里 `ctx.tools.register` 注册，普通对象、
+不 import `@deepseek-ai/dsh-tools`——本插件目录解析不到该包）：
+
+```
+workbuddy_install { kind: "expert"|"skill"|"connector", name, source?: "official"|"mirror" }
+```
+
+`execute` 的固定顺序：
+
+1. **只读预检**（与 `hub-find.mjs inspect` 同一实现 `wb-inspect.js`，不落盘、不执行包内代码）；
+2. **DSH 原生审批** `ctx.approval.request({ agent, toolName, callId, reason, signal })`，reason 携带安全卡摘要；
+3. 审批四分支：`allowed-once` → 真装；`rejected`/`cancelled` → 不装并如实转述；**`unavailable` → fail-closed**（「当前没有可用的审批通道，出于安全未安装」），绝不静默放过；`ctx.approval` 服务缺位或 `exec.agent` 缺位时同样 fail-closed；
+4. 安装复用与 `POST /install` 完全相同的 `installEntry`（同一份官方优先/镜像灾备/溯源/软链逻辑，不分叉）；
+5. 收尾语义：技能软链下一轮生效；专家记官方溯源可召唤；**连接器落地保持 `enabled=false`**（带凭据的 MCP 传输要显式启用才建立）；每次调用写一行 `[wbh] install …` 审计（kind/name/审批结果/来源/风险标记）。
+
+只有 turn 内的工具 handler 能发起审批（approval 服务要求 open turn + agent）——
+所以 HTTP 路由与脚本都做不到这件事；Web 设置页的 `/install` 是用户亲手点的另一条通道，不需要审批。
+
+## 装前预检：hub-find.mjs inspect（只读、不落盘）
+
+```bash
+node scripts/hub-find.mjs inspect <expert|skill|connector> <name> [--json]
+```
+
+- **expert**：官方注册表原始条目 → 拉人设 md（文本）过 `scanFlags`；头像只记体积不拉内容；
+- **skill**：`skillDetails` 拿 `download_url` → zip 下载进**内存** → unzip → 列条目、文本文件过 `scanFlags`（二进制只记体积）；
+- **connector**：`connectorRegistry` 该行 → `scanMcpDefinitionFlags` 结构化扫 mcp 定义（外部 URL / 声明命令执行 / 凭据头 / 凭据查询参数）。
+
+输出紧凑安全卡（一行一条）：`INSPECT <kind>/<name> | <中文名>` / `体量` / `可执行脚本: 有(N 个)|无` /
+`风险标记: 无|<列表>` / `外网/命令/凭据` / `头部: <SKILL.md 或人设前 120 字>`。
+失败语义一行给清：`NOT_FOUND`（官方没有此条目，退出码 3）、`NEED_LOGIN`（需登录，退出码 1）、`ERROR <原因>`（退出码 1）。
+inspect 绝不写任何文件、不碰 storeRoot。
 
 ## 三类条目的语义
 
@@ -134,10 +170,10 @@ agent —— 路由与其它插件路由共用同一道 DSH 连接栅栏，而 a
 ## 开发
 
 ```bash
-npm test        # 15 个套件（另 test:live 单独跑联网版）：mcp 校验 / 专家人设 / CLI 连接器 / 召唤 / 凭证轮换 /
+npm test        # 16 个套件（另 test:live 单独跑联网版）：mcp 校验 / 专家人设 / CLI 连接器 / 召唤 / 凭证轮换 /
                 #   浏览器槽位 / client bundle / render smoke / session 契约 / pending expert /
                 #   recent experts / auth store / keepalive / install 离线链 / 更新判定 /
-                #   本地 MCP 管理 / package 完整性
+                #   本地 MCP 管理 / package 完整性 / hub-find 检索+inspect 契约 / 安装工具审批四分支
 npm run pack:check
 ```
 

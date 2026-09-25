@@ -148,11 +148,29 @@ PY
 
 | ID | 步骤 | 预期 | 证据 |
 |---|---|---|---|
-| **A1** | `set -o pipefail && npm test` | exit 0；**15 个套件**全部 `OK`/`PASSED`（联网版 `npm run test:live` 单独跑，离线会 SKIP）| 尾部输出 |
+| **A1** | `set -o pipefail && npm test` | exit 0；**16 个套件**全部 `OK`/`PASSED`（联网版 `npm run test:live` 单独跑，离线会 SKIP）| 尾部输出 |
 | **A2** | `npm run build:client` 后 `git status --short` | `client.js` 无变化（证明 src 与产物同步） | 命令输出 |
 | **A3** | `node test-package.mjs` | 通过；且其中「真打包→解压→import」一步成功 | 输出里 `import('./index.js') 成功` |
-| **A4** | `npm pack --dry-run --json`，检查产物清单 | 含 `index.js expert-persona.js mcp-manager.js wb-market.js wb-experts.js wb-cats.js wb-unzip.js client.js client.css cordis.patch.yml` 与 `skills/*` | 文件清单 |
+| **A4** | `npm pack --dry-run --json`，检查产物清单 | 含 `index.js expert-persona.js mcp-manager.js wb-market.js wb-experts.js wb-cats.js wb-unzip.js scan.js wb-inspect.js client.js client.css cordis.patch.yml` 与 `skills/*` | 文件清单 |
 | **A5** | 跑完 `npm test` 后检查 `~/workbuddyskills/.meta/registry.json` 的 mtime 与 md5 | **与跑之前完全一致**（测试不得写用户真实状态） | 前后对比 |
+
+## I. inspect 预检 + workbuddy_install 审批工具
+
+> 前提：隔离实例（0.1/0.2）+ 插件已加载；登录态实例测 skill/connector 正常流，未登录实例测 NEED_LOGIN/fail-closed。
+
+| ID | 步骤 | 预期 | 证据 |
+|---|---|---|---|
+| **I1** | 登录态实例：`node scripts/hub-find.mjs inspect expert <已收录专家>`（宿主仓库内执行，无需实例） | 输出六行安全卡（INSPECT/体量/可执行脚本/风险标记/外网命令凭据/头部）；专家通常「可执行脚本: 无、风险标记: 无」 | 命令输出 |
+| **I2** | `inspect skill xlsx` 与 `inspect connector <已收录连接器>` | 技能卡列出脚本数与风险标记（spawns-process/external-url 等）；连接器卡列出官方网关外链与「外网/命令/凭据」 | 命令输出 |
+| **I3** | `inspect expert ghost-xxx` / `inspect connector no-such` | 一行 `NOT_FOUND 官方市场/注册表没有…`，退出码 3 | 输出 + `$?` |
+| **I4** | 未登录实例状态跑 `inspect skill xlsx` | 一行 `NEED_LOGIN inspect skill/xlsx 需要登录…`（退出码 1） | 输出 |
+| **I5** | inspect 全程审计：跑完后 `find <storeRoot> -newer <标记文件>`（或对比 md5） | **零新增/修改文件**（inspect 不落盘、不碰 storeRoot） | 文件对比 |
+| **I6** | 工具注册：隔离实例的会话里看 agent 工具清单（或日志 `[wbh]`），确认 `workbuddy_install` 在列且参数含 kind/name/source | 注册成功 | 工具清单/日志 |
+| **I7** | **无审批通道**（headless 无浏览器应答的隔离实例）让模型调 `workbuddy_install` | 返回 fail-closed 文案「当前没有可用的审批通道，出于安全未安装（fail-closed）」；注册表**无**新记录；控制台有 `approval=unavailable` 审计行 | 工具返回 + registry + 日志 |
+| **I8** | 有审批通道的会话（浏览器打开）让模型装一个技能：先 inspect、讲清用途与风险、问用户、调工具 | 弹出 DSH 原生审批卡（含安全卡摘要 reason）；批准后安装成功且返回含 flags/linked；会话日志有 `approval/asked` + `approval/decided: allowed-once` | UI 截图 + 会话事件 |
+| **I9** | 同上但在审批里点**拒绝** | 工具返回「用户未批准…未安装」；注册表无记录；审计行 `approval=rejected` | 工具返回 + registry + 日志 |
+| **I10** | 用工具装一个连接器（批准后） | 记录 `enabled:false`；未调用 `/connectors/enable` 前无 MCP 传输（loader 无 mcp-client 行）；mcp.json 里凭据只有 `${WORKBUDDY_TOKEN}` 引用 | registry + loader + 文件 |
+| **I11** | 一致性：同一 storeRoot 下分别经工具与 `POST /install` 装同名条目，比对两条 registry 记录 | 除时间戳外字段一致（kind/name/dest/source/files/bytes/flags）——证明路由与工具复用同一 `installEntry` | registry 对比 |
 
 ## L. 未登录态（0.2 实例）
 

@@ -16,6 +16,8 @@
  *   node scripts/hub-find.mjs skill     表格 [--limit 5]
  *   node scripts/hub-find.mjs connector 地图 [--limit 5]
  *   node scripts/hub-find.mjs installed            # 本机已装清单
+ *   node scripts/hub-find.mjs inspect  <expert|skill|connector> <name> [--json]
+ *                                  # 装前只读安全预检（不落盘、不执行包内代码）
  *
  * 输出（默认，每行一条，便于模型直接引用）：
  *   expert/content-creator | 文博凯 | 擅长创作引人入胜的多平台内容 | 内容策略,多平台创作
@@ -25,6 +27,7 @@
  *   NO_MATCH        没有命中（建议换关键词，中英都试）
  *   NEED_LOGIN      技能/连接器需要 WorkBuddy 账号登录（专家不需要）
  *   ERROR <原因>    其它失败
+ *   NOT_FOUND <原因>  inspect：官方市场/注册表没有这个条目
  *
  * 环境变量：WBH_STORE 覆盖内容仓路径（默认 ~/workbuddyskills）。
  */
@@ -35,6 +38,7 @@ import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { listExperts } from '../wb-experts.js'
 import { marketList, connectorRegistry } from '../wb-market.js'
+import { inspectExpert, inspectSkill, inspectConnector, formatInspectCard, inspectError } from '../wb-inspect.js'
 
 export const DEFAULT_LIMIT = 5
 export const MAX_LIMIT = 20
@@ -133,13 +137,45 @@ export function filterRows(rows, query) {
 /** 主流程（可被测试调用，返回 { code, lines }）。 */
 export async function run(argv, deps = {}) {
   const args = parseArgs(argv)
+  // 位置参数（去掉 --xxx 选项后的原始序列）：inspect 需要按位置取子类型与名称，
+  // 而 parseArgs 只暴露 kind/query 两个槽。
+  const positional = []
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = String(argv[i] || '')
+    if (a === '--limit' || a === '--store') i += 1
+    else if (!a.startsWith('--')) positional.push(a)
+  }
   const paths = storePaths(args.store)
   const experts = deps.listExperts || listExperts
   const market = deps.marketList || marketList
   const connectors = deps.connectorRegistry || connectorRegistry
 
-  if (!args.kind || !['expert', 'skill', 'connector', 'installed'].includes(args.kind)) {
-    return { code: 2, lines: ['ERROR 用法：hub-find.mjs <expert|skill|connector|installed> [关键词] [--limit N] [--json]'] }
+  if (!args.kind || !['expert', 'skill', 'connector', 'installed', 'inspect'].includes(args.kind)) {
+    return { code: 2, lines: ['ERROR 用法：hub-find.mjs <expert|skill|connector|installed|inspect> [关键词|名称] [--limit N] [--json]'] }
+  }
+
+  // ---- inspect：装前只读安全预检（不落盘、不碰 storeRoot、不执行包内代码）----
+  if (args.kind === 'inspect') {
+    // 调用形态：inspect <expert|skill|connector> <name>。
+    const wanted = { kind: (positional[1] || '').toLowerCase(), name: positional.slice(2).join(' ').trim() }
+    // 预检函数可整体注入（deps.inspect.inspectExpert / inspectSkill / inspectConnector），
+    // 测试据此钉格式契约；生产路径用 wb-inspect.js 的真实现。
+    const hooks = deps.inspect || {}
+    if (!['expert', 'skill', 'connector'].includes(wanted.kind) || !/^[\w.-]+$/.test(wanted.name)) {
+      return { code: 2, lines: ['ERROR 用法：hub-find.mjs inspect <expert|skill|connector> <name> [--json]'] }
+    }
+    try {
+      const card = wanted.kind === 'expert' ? await (hooks.inspectExpert || inspectExpert)(wanted.name, hooks)
+        : wanted.kind === 'skill' ? await (hooks.inspectSkill || inspectSkill)(wanted.name, { stateDir: paths.state, ...hooks })
+        : await (hooks.inspectConnector || inspectConnector)(wanted.name, { stateDir: paths.state, ...hooks })
+      if (args.json) return { code: 0, lines: [JSON.stringify(card)] }
+      return { code: 0, lines: formatInspectCard(card) }
+    } catch (error) {
+      const fail = inspectError(error)
+      if (fail.code === 'NOT_FOUND') return { code: 3, lines: [`NOT_FOUND 官方市场/注册表没有「${wanted.kind}/${wanted.name}」：${oneLine(fail.message, 100)}`] }
+      if (fail.code === 'NEED_LOGIN') return { code: 1, lines: [`NEED_LOGIN inspect ${wanted.kind}/${wanted.name} 需要登录（${oneLine(fail.message, 100)}）`] }
+      return { code: 1, lines: ['ERROR ' + oneLine(fail.message, 160)] }
+    }
   }
 
   if (args.kind === 'installed') {

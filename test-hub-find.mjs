@@ -101,4 +101,116 @@ import { homedir } from 'node:os'
   console.log('6. run() 语义（成功/NO_MATCH/NEED_LOGIN/ERROR/用法/JSON）: OK')
 }
 
+// ---- 7. inspect 子命令：格式契约（注入 fetcher，不联网、不落盘）-----------------
+// inspect 的输出就是模型的「装前安全卡」，同样钉死格式：
+//  · 六行固定骨架（INSPECT/体量/可执行脚本/风险标记/外网命令凭据/头部）；
+//  · 风险标记如何呈现（有则列举、无则「无」）；
+//  · NOT_FOUND / NEED_LOGIN / ERROR 一行语义；
+//  · --json 输出一行合法 JSON。
+{
+  const {
+    inspectError, formatInspectCard,
+  } = await import('./wb-inspect.js')
+
+  // 7-1) 安全卡骨架：六行固定前缀
+  const card = {
+    kind: 'skill', name: 'demo', displayName: '演示技能',
+    files: 3, bytes: 2048, scriptCount: 1,
+    riskFlags: ['run.py: spawns-process', 'run.py: external-url (x.example)'],
+    external: { urls: ['x.example/a'], commandExecution: true, credentialHeaders: [] },
+    head: '# Demo 这是头部摘要。',
+  }
+  const lines = formatInspectCard(card)
+  assert.equal(lines[0], 'INSPECT skill/demo | 演示技能')
+  assert.match(lines[1], /^体量: 3 文件 \/ 约 /)
+  assert.equal(lines[2], '可执行脚本: 有(1 个)')
+  assert.equal(lines[3], '风险标记: run.py: spawns-process; run.py: external-url (x.example)')
+  assert.equal(lines[4], '外网/命令/凭据: 外链 1 个 / 声明命令执行')
+  assert.match(lines[5], /^头部: /)
+  assert.ok(lines.every(l => l.split('\n').length === 1), '安全卡必须一行一条')
+
+  const clean = formatInspectCard({ ...card, riskFlags: [], external: { urls: [], commandExecution: false, credentialHeaders: [] }, scriptCount: 0 })
+  assert.equal(clean[2], '可执行脚本: 无')
+  assert.equal(clean[3], '风险标记: 无')
+  assert.equal(clean[4], '外网/命令/凭据: 无')
+  console.log('7. inspect 安全卡骨架（六行 + 无风险呈「无」）: OK')
+
+  // 7-2) run(['inspect', ...])：整只替换预检函数（不碰网络与磁盘）→ 端到端格式契约
+  const expertCard = {
+    kind: 'expert', name: 'demo-expert', displayName: '演示专家',
+    files: 2, bytes: 486 * 1024, scriptCount: 0, riskFlags: [],
+    external: { urls: [], commandExecution: false, credentialHeaders: [] },
+    head: '---\nname: demo-expert description: …', note: '头像约 475.4 KB（只记录体积，未拉内容）',
+  }
+  const skillCard = {
+    kind: 'skill', name: 'demo-skill', displayName: '演示技能',
+    files: 57, bytes: 1107 * 1024, scriptCount: 12,
+    riskFlags: ['scripts/recalc.py: spawns-process'],
+    external: { urls: ['a.example'], commandExecution: true, credentialHeaders: [] },
+    head: '# Demo',
+  }
+  const connCard = {
+    kind: 'connector', name: 'demo-conn', displayName: '演示连接器',
+    files: 1, bytes: 289, scriptCount: 0,
+    riskFlags: ['mcpServers.demo-conn.url: external-url (gw.example)', 'mcpServers.demo-conn.headers: sensitive-header'],
+    external: { urls: ['gw.example'], commandExecution: false, credentialHeaders: ['sensitive-header'] },
+    head: 'MCP 定义：transport=http',
+  }
+  const expertOut = await run(['inspect', 'expert', 'demo-expert', '--json'], {
+    inspect: { inspectExpert: async () => expertCard },
+  })
+  assert.equal(expertOut.code, 0)
+  const parsed = JSON.parse(expertOut.lines[0])
+  assert.equal(parsed.kind, 'expert'); assert.equal(parsed.name, 'demo-expert'); assert.equal(parsed.files, 2)
+
+  const skillOut = await run(['inspect', 'skill', 'demo-skill'], {
+    inspect: { inspectSkill: async () => skillCard },
+  })
+  assert.equal(skillOut.code, 0)
+  assert.equal(skillOut.lines[0], 'INSPECT skill/demo-skill | 演示技能')
+  assert.ok(skillOut.lines.some(l => l.includes('spawns-process')), '风险标记必须出现在卡里')
+  assert.ok(skillOut.lines.some(l => l.includes('声明命令执行')))
+
+  const connOut = await run(['inspect', 'connector', 'demo-conn'], {
+    inspect: { inspectConnector: async () => connCard },
+  })
+  assert.equal(connOut.code, 0)
+  assert.ok(connOut.lines.some(l => l.includes('凭据')), '凭据线索要可见（含「凭据」字样）')
+  assert.ok(connOut.lines[0].includes('connector/demo-conn'))
+  console.log('8. inspect run() 端到端（打桩三 kind + --json）: OK')
+
+  // 7-3) 失败语义：NOT_FOUND / NEED_LOGIN / ERROR / 用法
+  const nf = await run(['inspect', 'expert', 'ghost'], {
+    inspect: { inspectExpert: async () => { throw new Error('expert not in official registry: ghost') } },
+  })
+  assert.equal(nf.code, 3)
+  assert.match(nf.lines[0], /^NOT_FOUND 官方市场\/注册表没有「expert\/ghost」/)
+
+  const nl = await run(['inspect', 'skill', 'xlsx'], {
+    inspect: { inspectSkill: async () => { throw new Error('official market skill list failed: HTTP 401 code=11217') } },
+  })
+  assert.equal(nl.code, 1)
+  assert.match(nl.lines[0], /^NEED_LOGIN inspect skill\/xlsx 需要登录/)
+
+  const er = await run(['inspect', 'connector', 'boom'], {
+    inspect: { inspectConnector: async () => { throw new Error('upstream exploded') } },
+  })
+  assert.equal(er.code, 1)
+  assert.equal(er.lines[0], 'ERROR upstream exploded')
+
+  const usage = await run(['inspect', 'expert'])
+  assert.equal(usage.code, 2)
+  assert.match(usage.lines[0], /^ERROR 用法：hub-find.mjs inspect/)
+
+  const badKind = await run(['inspect', 'vehicle', 'x'])
+  assert.equal(badKind.code, 2)
+  console.log('9. inspect 失败语义（NOT_FOUND/NEED_LOGIN/ERROR/用法）: OK')
+
+  // 7-4) 预检失败分类器的边界
+  assert.equal(inspectError(new Error('official skill not found: x')).code, 'NOT_FOUND')
+  assert.equal(inspectError(new Error('skill package HTTP 404')).code, 'ERROR', '下载 404 ≠ 市场没有，归 ERROR 更如实')
+  assert.equal(inspectError(new Error('HTTP 403')).code, 'NEED_LOGIN')
+  console.log('10. inspectError 分类边界: OK')
+}
+
 console.log('hub-find (compact retrieval CLI) contract tests: OK')

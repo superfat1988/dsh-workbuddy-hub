@@ -26,6 +26,11 @@ import {
 } from './src/updates.js'
 import { skillDetails } from './wb-market.js'
 import { unzip } from './wb-unzip.js'
+import { inspectExpert, inspectSkill, inspectConnector } from './wb-inspect.js'
+import { scanFlags, scanMcpDefinitionFlags, SCAN_EXT } from './scan.js'
+// 兼容导出：老调用方（test-local-mcp 等）直接 import index.js 的 scanFlags ——
+// 实现的唯一真源在 ./scan.js，这里只转发。
+export { scanFlags, scanMcpDefinitionFlags, SCAN_EXT }
 import { execSync } from 'node:child_process'
 import {
   existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
@@ -39,7 +44,8 @@ import {
 
 export const name = 'workbuddy-hub'
 // agentPresets 供「方案 B」使用：把专家做成真正的 agent preset，由用户在新会话里选中。
-export const inject = ['webServer', 'connection', 'loader', 'commands', 'subagents', 'credentials', 'sessions', 'agents', 'systemPrompt', 'agentPresets', 'sessionController']
+// tools：注册 workbuddy_install 工具（装前预检 + DSH 原生审批）。
+export const inject = ['webServer', 'connection', 'loader', 'commands', 'subagents', 'credentials', 'sessions', 'agents', 'systemPrompt', 'agentPresets', 'sessionController', 'tools']
 
 const PREFIX = '/workbuddy-hub'
 const GH_RAW = 'https://raw.githubusercontent.com'
@@ -230,79 +236,9 @@ export function buildIndex(blobs) {
 }
 
 /* ------------------------------------------------------------------ *
- * Safety scan
+ * Safety scan — 实现已搬到 ./scan.js（宿主与 hub-find.mjs inspect 共用同一份）。
+ * 兼容导出见文件顶部（import + export 转发，landEntry 内部也要用 scanFlags）。
  * ------------------------------------------------------------------ */
-
-// .json 也在扫描范围内：连接器的 mcp.json 恰恰是声明 command/url/headers 的地方，
-// 此前被排除意味着「声明命令执行」「外连非官方域名」这类最高价值的信号永远扫不到。
-const SCAN_EXT = new Set(['.py', '.js', '.mjs', '.cjs', '.sh', '.ps1', '.cmd', '.bat', '.json'])
-
-/** 通用规则：任何被扫描的文本都适用。 */
-const SCAN_RULES = [
-  [/curl\s+[^|]*\|\s*(ba)?sh/i, 'piped-to-shell'],
-  [/\beval\s*\(/, 'eval'],
-  [/new\s+Function\s*\(/, 'dynamic-function'],
-  [/child_process|subprocess/i, 'spawns-process'],
-  [/credentials?|api[_-]?key|secret|token/i, 'mentions-credentials'],
-  [/https?:\/\/(?!raw\.githubusercontent\.com|github\.com)/i, 'external-url'],
-]
-
-/**
- * mcp.json / cli.json 这类「定义文件」的结构化扫描：对 command / url / headers
- * 的值逐个判断并给出明确旗标，而不是只做全文正则。注意这是**可见性**（标记），
- * 不是准入判定 —— 准入由 mcp-manager 的 validateConnectorMcp 负责。
- */
-export function scanMcpDefinitionFlags(raw) {
-  const flags = []
-  const servers = raw?.mcpServers
-  if (servers && typeof servers === 'object' && !Array.isArray(servers)) {
-    for (const [name, server] of Object.entries(servers)) {
-      const label = `mcpServers.${name}`
-      if (server && typeof server === 'object' && !Array.isArray(server)) {
-        // 声明了 stdio = 声明了本机命令执行（即便最终未被挂载，也要标记可见）
-        if (server.transport === 'stdio' || server.type === 'stdio' || server.command !== undefined) {
-          flags.push(`${label}: declares-command-execution`)
-        }
-        for (const [key, value] of Object.entries(server)) {
-          if (typeof value !== 'string') continue
-          if (/^https?:\/\//i.test(value) && !/^(https?:\/\/)(raw\.githubusercontent\.com|github\.com)\//.test(value)) {
-            flags.push(`${label}.${key}: external-url (${value.replace(/^https?:\/\//, '').slice(0, 60)})`)
-          }
-          if (/authorization|cookie|api[-_]?key|token|secret/i.test(key)) {
-            flags.push(`${label}.${key}: sensitive-header`)
-          }
-          // URL 查询串里的凭据型参数（官方连接器就有 ?key=${TENCENT_MAP_KEY} 这种形态）
-          if (/^https?:\/\//i.test(value)) {
-            try {
-              const parsed = new URL(value.replace(/\$\{[^}]+\}/g, 'x'))
-              for (const q of parsed.searchParams.keys()) {
-                if (/^(api[-_]?key|key|token|secret|access[-_]?token|password|sig(nature)?)$/i.test(q)) {
-                  flags.push(`${label}.${key}: sensitive-query-param (${q})`)
-                }
-              }
-            } catch { /* 非法 URL：解析不了就不猜 */ }
-          }
-        }
-      }
-    }
-  }
-  return flags
-}
-
-export function scanFlags(fileName, text) {
-  const flags = []
-  const dot = fileName.lastIndexOf('.')
-  if (dot < 0) return flags
-  const ext = fileName.slice(dot).toLowerCase()
-  if (!SCAN_EXT.has(ext)) return flags
-  const src = String(text)
-  for (const [re, tag] of SCAN_RULES) if (re.test(src)) flags.push(tag)
-  // 定义类文件额外做结构化扫描（值级判定；解析失败就退回纯文本规则的结果）
-  if (ext === '.json') {
-    try { flags.push(...scanMcpDefinitionFlags(JSON.parse(src))) } catch { /* not a definition file */ }
-  }
-  return flags
-}
 
 /* ------------------------------------------------------------------ *
  * Install (binary-safe, one entry, path-confined)
@@ -1294,6 +1230,320 @@ export function apply(ctx, config = {}) {
       bytes: Buffer.byteLength(mcpText),
       defHash: connectorDefHash(row.mcp),
     }
+  }
+
+  /**
+   * 安装一个条目（官方优先，mirrorFallback 灾备）—— **路由（POST /install）与工具
+   * （workbuddy_install）共用的唯一实现**，避免两条安装链路分叉。
+   *
+   * @param {object} ctx0 Hub 宿主 ctx（连接器凭据写入 credentials 用；与 apply 的 ctx 相同）
+   * @param {object} P storePaths(cfg) 的路径表
+   * @param {object} cfg0 插件配置（skillPrefix / skillsMount / mirrorFallback / storeRoot 等）
+   * @param {{kind:'expert'|'skill'|'connector', name:string, source?:'official'|'mirror'}} spec
+   * @returns {Promise<{key:string, report:{files,bytes,flags}, linked:boolean, dest:string}>}
+   *   与原 POST /install 成功响应等价（key/report/linked）。
+   * @throws {Error} 失败时抛错；错误对象带 `installFailure = { status }`（路由据此
+   *   回原状态码 502/404/400；工具 handler 直接把 message 给模型）。
+   */
+  const installEntry = async (ctx0, P, cfg0, { kind, name: entryName, source }) => {
+    const fail = (status, message) => {
+      const error = new Error(message)
+      error.installFailure = { status }
+      throw error
+    }
+    // 官方源优先（官方是唯一真源）：技能/专家/连接器都先走官方，
+    // 官方拿不到时才回落到 GitHub 镜像（灾备；连接器见 landOfficialConnector 说明）。
+    let files, dest, report, officialMeta = null
+    // 官方溯源：安装时把「装的是官方哪一版 / 哪份定义」如实记进注册表，
+    // 供 /updates 做纯官方元数据比对（技能 version / 专家 updatedAt / 连接器 defHash）。
+    let provenance = null
+    let officialFailure = ''
+    if (kind === 'skill' && source !== 'mirror') {
+      // Official skill: the install request carries the human name, so resolve
+      // name → skill_id first, then fetch the record with its download_url.
+      try {
+        const { rows } = await marketList('skill', { page: 1, pageSize: 10, query: entryName }, P.state)
+        const hit = rows.find(r => r.name === entryName)
+          ?? rows.find(r => (r.display_name_zh || r.display_name_en) === entryName)
+          ?? rows[0]
+        if (!hit?.skill_id) throw new Error(`official skill not found: ${entryName}`)
+        const details = await skillDetails([hit.skill_id], P.state)
+        const rec = details.find(x => x.skill_id === hit.skill_id) ?? details[0]
+        if (!rec?.download_url) throw new Error('official skill has no package')
+        const res = await fetch(rec.download_url)
+        if (!res.ok) throw new Error(`skill package HTTP ${res.status}`)
+        const buf = Buffer.from(await res.arrayBuffer())
+        if (buf.length > 8 * 1024 * 1024) throw new Error('skill package too large')
+        if (!(buf[0] === 0x50 && buf[1] === 0x4b)) throw new Error('skill package is not a zip')
+        const entries = unzip(buf).filter(e => !e.name.endsWith('/'))
+        const safeName = /^([\w.-]+)\//.exec(entries[0]?.name ?? '')
+        const root = safeName ? safeName[1] : entryName
+        if (!/^[\w.-]+$/.test(root)) throw new Error('unsafe package layout')
+        dest = join(P.skills, root)
+        mkdirSync(dest, { recursive: true })
+        let count = 0, total = 0
+        const flags = []
+        for (const e of entries) {
+          const rel = e.name.startsWith(root + '/') ? e.name.slice(root.length + 1) : e.name
+          if (!rel || rel.includes('..')) continue
+          const target = join(dest, rel)
+          if (!target.startsWith(dest)) continue
+          mkdirSync(dirname(target), { recursive: true })
+          writeFileSync(target, e.data)
+          count++; total += e.data.length
+          flags.push(...scanFlags(e.data.toString('utf8').slice(0, 20000), rel))
+        }
+        officialMeta = {
+          kind: 'skill', name: root, dest,
+          displayName: rec.display_name_zh || rec.display_name_en || root,
+          description: rec.description_zh || rec.description || rec.description_en || '',
+          files: count, bytes: total, flags: [...new Set(flags)],
+          source: 'official', officialId: rec.skill_id,
+          icon: rec.icon,
+        }
+        // 官方版本 / updated_at：老记录没有 officialMeta → /updates 给 unknown，不伪造
+        provenance = skillProvenance(rec)
+        files = entries
+        report = { files: count, bytes: total, flags: officialMeta.flags }
+      } catch (error) {
+        officialFailure = String(error?.message || error)
+        // 官方装不上：只有显式打开灾备（mirrorFallback=true）才允许装镜像内容；
+        // 默认关时必须如实失败 —— 否则「官方是唯一真源」就成了一句空话。
+        if (!mirrorFallback) {
+          fail(502, `官方技能安装失败，且镜像兜底已关闭（mirrorFallback=false）：${officialFailure}`)
+        }
+        officialMeta = null // 灾备：回落到镜像内容（记录不带 officialMeta，/updates 会如实报 unknown）
+      }
+    } else if (kind === 'expert' && source !== 'mirror') {
+      try {
+        officialMeta = await installExpert(entryName, P.experts, skillPrefix)
+        dest = officialMeta.dest
+        report = { files: officialMeta.files, bytes: officialMeta.bytes, flags: officialMeta.flags }
+        provenance = expertProvenance(officialMeta)
+        invalidateExpertCache() // 人设文件更新过，缓存作废
+      } catch (error) {
+        officialFailure = String(error?.message || error)
+        if (source === 'official') throw error
+        if (!mirrorFallback) {
+          fail(502, `官方专家安装失败，且镜像兜底已关闭（mirrorFallback=false）：${officialFailure}`)
+        }
+        officialMeta = null // 灾备：回落到镜像内容
+      }
+    } else if (kind === 'connector') {
+      // 连接器只认官方注册表（与 POST /connectors/install 同一条链路）：
+      // 镜像里的 connectors 数据不参与安装；官方拿不到时才回落到镜像灾备。
+      const landed = await landOfficialConnector(entryName)
+      if (landed.ok) {
+        dest = landed.dest
+        report = { files: 1, bytes: landed.bytes, flags: landed.flags }
+        provenance = connectorProvenance(landed.row)
+        officialMeta = {
+          kind: 'connector', name: entryName, dest,
+          displayName: landed.row.displayName || entryName,
+          description: landed.row.description || '',
+          icon: landed.row.icon || '',
+          source: 'official', officialId: null,
+        }
+      } else if (!mirrorFallback) {
+        // 官方拿不到（未登录 / 上游失败）且灾备关闭 → 如实失败，不静默装镜像内容。
+        officialFailure = String(landed.error || 'official connector install failed')
+        fail(landed.status || 502, `官方连接器安装失败，且镜像兜底已关闭（mirrorFallback=false）：${officialFailure}`)
+      } else {
+        // 灾备：回落到镜像内容，此时记录**不带** officialMeta —— /updates 会如实报 unknown。
+        officialMeta = null
+      }
+    }
+    if (!officialMeta) {
+      files = await downloadEntry(mirrorRepo, mirrorBranch, `${kind}s`, entryName)
+      const landed = landEntry(P, kind, entryName, files)
+      dest = landed.dest; report = landed.report
+    }
+    const registry = loadJson(P.registry, { version: 1, installed: {} })
+    if (!registry.installed) registry.installed = {}
+    const key = `${kind}/${entryName}`
+    const previous = registry.installed[key]
+    // Persist the catalog's localized label so UI never shows the raw dir id.
+    const cache = loadJson(P.catalogCache, null)
+    const meta = officialMeta
+      ? { displayName: officialMeta.displayName, description: officialMeta.description, tags: officialMeta.tags, icon: officialMeta.icon }
+      : cache?.index?.[`${kind}s`]?.find(e => e.name === entryName)
+    const record = {
+      kind, name: officialMeta?.name ?? entryName, dest,
+      displayName: meta?.displayName || entryName,
+      description: meta?.description || '',
+      installedAt: new Date().toISOString(),
+      files: report.files, bytes: report.bytes, flags: report.flags,
+      linked: false,
+      enabled: kind === 'connector' ? Boolean(previous?.enabled) : undefined,
+    }
+    if (kind === 'skill') {
+      try { linkSkill(P, skillPrefix, officialMeta?.name ?? entryName, skillsMount); record.linked = true } catch (error) {
+        report.flags.push(`symlink failed: ${error.message}`)
+      }
+    }
+    if (kind === 'connector') {
+      // A connector's usable surface is its bundled skills (CLI form) and/or
+      // its MCP declaration (activated separately by the user).
+      try {
+        const linkedSkills = linkConnectorSkills(skillPrefix, entryName, dest)
+        if (linkedSkills.length > 0) record.linkedSkills = linkedSkills
+      } catch (error) {
+        report.flags.push(`skill link failed: ${error.message}`)
+      }
+      const cli = readCliMeta(dest)
+      if (cli !== null) record.cli = cli
+      record.mcp = existsSync(join(dest, 'mcp.json'))
+    }
+    if (officialMeta) {
+      record.source = 'official'
+      record.officialId = officialMeta.officialId ?? null
+      if (officialMeta.icon) record.icon = officialMeta.icon
+      record.official = true
+      // 官方溯源（可能为 null：官方记录本身缺字段时如实留空，/updates 会报 unknown）
+      record.officialMeta = provenance
+    }
+    registry.installed[key] = record
+    saveJson(P.registry, registry)
+    return { key, report, linked: record.linked, dest }
+  }
+
+  /* ---------------------------------------------------------------- *
+   * workbuddy_install 工具：装前只读预检 → DSH 原生审批 → 才真装。
+   *
+   * 审批语义（对齐 @deepseek-ai/dsh-user-approval 的封闭词表）：
+   *  · allowed-once  唯一授权：装；
+   *  · rejected / cancelled  用户说不/撤回：不装，如实转述；
+   *  · unavailable   没有可用审批通道：**fail-closed**，绝不静默放过；
+   *  · ctx.approval 服务缺位 / exec.agent 缺位：同样 fail-closed（没有 agent
+   *    就没有会话可审计、没有 UI 可弹窗 —— 这两处都不能装）。
+   *
+   * 注意：ctx.tools.register 用**普通对象**（不 import @deepseek-ai/dsh-tools：
+   * 本插件目录解析不到该包，实测 MODULE_NOT_FOUND；registry 只要求
+   * output { schema, render } 与 execute 的形状）。
+   * ---------------------------------------------------------------- */
+  const installTool = {
+    name: 'workbuddy_install',
+    description: '安装一个 WorkBuddy 官方市场的专家/技能/连接器到本机 DSH。'
+      + '**预检由本工具内部自动完成**（会先做只读安全预检，并把结果摘要与风险标记写进审批理由），'
+      + '所以你不需要自己去找脚本或另行下载；只需：①用自己的话向用户讲清这个条目是干什么的、解决什么问题、有什么风险'
+      + '（可用 scripts/hub-find.mjs inspect <kind> <name> 拿到更细的安全卡，该脚本随插件发布，路径见插件目录下的 skills/ 文档）；'
+      + '②得到用户口头同意；③调用本工具。'
+      + '调用后仍会弹出 DSH 原生审批，用户在审批里批准才会真的安装；被拒绝/取消/无审批通道时一律不装（fail-closed）。',
+    // ⚠️ 必须是**已投影的 JSON Schema**（object 根 + properties + required 数组）：
+    // workflow 插件那种 schemastery 写法（属性内 required: true）只有在过 defineTool
+    // 编译时才成立；我们不走 defineTool（@deepseek-ai/dsh-tools 在插件目录解析不到），
+    // 所以框架会把这里的对象**原样**发给模型 —— 实测扁平映射会被上游判为非法参数结构并
+    // 整轮 INVALID_REQUEST（工具的参数结构不符合当前模型要求）。对照官方工具发出的形状：
+    // {"type":"object","properties":{…},"required":[…]}
+    parameters: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['expert', 'skill', 'connector'], description: '条目类型。' },
+        name: { type: 'string', description: '条目名（目录名 / 官方 name 字段）。' },
+        source: { type: 'string', enum: ['official', 'mirror'], description: '可选；默认官方优先（官方失败且 mirrorFallback 开启时才回落镜像）。' },
+      },
+      required: ['kind', 'name'],
+      additionalProperties: false,
+    },
+    output: {
+      // ⚠️ 普通（未过 defineTool 编译）的对象走 raw assertSupportedJsonSchema：
+      // 它不认 author-only 的 `type: "json"`（实测 JsonSchemaError）。annotation-only
+      //（无 type）就是官方认可的「任意 JSON 值」raw 形式。
+      schema: { description: 'workbuddy_install 结果（文本说明 + 结构化字段）' },
+      render: (_args, value) => {
+        // 失败/未批准走文本块；成功是 JSON value → 紧凑文本（模型与 UI 都可读）。
+        const v = value && typeof value === 'object' && !Array.isArray(value) ? value : { text: String(value ?? '') }
+        const text = typeof v.text === 'string'
+          ? v.text
+          : [
+            `已安装 ${v.kind}/${v.name}（来源：${v.source === 'official' ? '官方' : '镜像'}）`,
+            `落盘: ${v.dest || ''}`,
+            `体量: ${v.files ?? '?'} 文件 / ${(Number(v.bytes ?? 0) / 1024).toFixed(1)} KB`,
+            `安全标记: ${(Array.isArray(v.flags) && v.flags.length > 0) ? v.flags.join('; ') : '无'}`,
+            v.linked ? '技能已符号链接进挂载目录，下一轮对话生效。' : '',
+            v.note || '',
+          ].filter(Boolean).join('\n')
+        return [{ type: 'text', text }]
+      },
+    },
+    async execute(args, exec) {
+      const kind = String(args.kind || '')
+      const entryName = String(args.name || '')
+      // ---- 1) 只读预检（与 hub-find.mjs inspect 同一实现，不落盘）----
+      let card = null
+      try {
+        card = kind === 'expert' ? await inspectExpert(entryName)
+          : kind === 'skill' ? await inspectSkill(entryName, { stateDir: P.state })
+          : await inspectConnector(entryName, { stateDir: P.state })
+      } catch (error) {
+        return { text: `预检失败，未安装 ${kind}/${entryName}：${String(error?.message || error)}` }
+      }
+      const riskText = card.riskFlags.length > 0 ? card.riskFlags.join('; ') : '无'
+      // ---- 2) DSH 原生审批（fail-closed：没有服务 / 没有 agent / 非 allowed-once 一律不装）----
+      const approval = pluginCtx?.approval ?? ctx.approval ?? undefined
+      if (approval === undefined) {
+        console.info(`[wbh] install ${kind}/${entryName}: approval=unavailable (no approval service) flags=${riskText} source=${args.source || 'official'}`)
+        return { text: `该环境无法完成用户确认（没有可用的审批服务），出于安全未安装 ${kind}/${entryName}。请改用插件的 Web 设置页安装，或让用户在会话里直接确认后重试。` }
+      }
+      if (exec.agent === undefined) {
+        console.info(`[wbh] install ${kind}/${entryName}: approval=unavailable (no agent) flags=${riskText}`)
+        return { text: `当前调用没有可路由的 agent（无法弹出审批、无法留审计），出于安全未安装 ${kind}/${entryName}。` }
+      }
+      const reason = [
+        `安装 WorkBuddy ${kind}「${card.displayName || entryName}」`,
+        `体量: ${card.files} 文件 / 约 ${(card.bytes / 1024).toFixed(1)} KB；可执行脚本: ${card.scriptCount > 0 ? card.scriptCount + ' 个' : '无'}`,
+        `风险标记: ${riskText}`,
+        card.external && (card.external.urls.length || card.external.commandExecution || card.external.credentialHeaders.length)
+          ? `外网/命令/凭据: ${card.external.commandExecution ? '声明命令执行；' : ''}${card.external.urls.length ? card.external.urls.join(', ') : ''}${card.external.credentialHeaders.length ? `；凭据相关 ${card.external.credentialHeaders.length} 处` : ''}`
+          : '外网/命令/凭据: 无',
+        `来源: ${args.source || 'official（官方优先）'}`,
+      ].filter(Boolean).join('；')
+      const outcome = await approval.request({
+        agent: exec.agent,
+        toolName: 'workbuddy_install',
+        callId: exec.callId,
+        reason,
+        signal: exec.signal,
+      })
+      // ---- 3) 四分支：只有 allowed-once 才真装 ----
+      if (outcome !== 'allowed-once') {
+        console.info(`[wbh] install ${kind}/${entryName}: approval=${outcome} flags=${riskText} source=${args.source || 'official'}`)
+        const why = outcome === 'rejected' ? '用户未批准（拒绝），未安装'
+          : outcome === 'cancelled' ? '审批被取消，未安装'
+          : '当前没有可用的审批通道，出于安全未安装（fail-closed）'
+        return { text: `${why} ${kind}/${entryName}。` }
+      }
+      // ---- 4) 真装（与 POST /install 同一实现）+ 收尾说明 ----
+      let result
+      try {
+        result = await installEntry(ctx, P, cfg, { kind, name: entryName, source: args.source })
+      } catch (error) {
+        console.info(`[wbh] install ${kind}/${entryName}: approved but install failed: ${String(error?.message || error)}`)
+        return { text: `安装失败（已获批准）：${String(error?.message || error)}` }
+      }
+      console.info(`[wbh] install ${kind}/${entryName}: approval=allowed-once flags=${riskText} source=${result.report && Array.isArray(result.report.flags) ? 'landed' : 'landed'} at=${new Date().toISOString()}`)
+      const registryRecord = loadJson(P.registry, { version: 1, installed: {} })?.installed?.[result.key]
+      const note = kind === 'skill'
+        ? '技能已符号链接进挂载目录，下一轮对话生效。'
+        : kind === 'expert'
+          ? '专家已落地并记录官方溯源；可用 /expert 或既有语义召唤。'
+          : '连接器已落地但保持停用（enabled=false）：带凭据的 MCP 传输要用户显式启用（/connector 或设置页开关）才会建立。'
+      return {
+        text: note,
+        kind, name: registryRecord?.name ?? entryName,
+        source: registryRecord?.source === 'official' ? 'official' : 'mirror',
+        dest: result.dest,
+        files: result.report?.files ?? 0,
+        bytes: result.report?.bytes ?? 0,
+        flags: result.report?.flags ?? [],
+        linked: Boolean(result.linked),
+        official: registryRecord?.official === true,
+      }
+    },
+  }
+  // tools 服务缺位的 ctx（老测试 / 精简环境）跳过工具注册：其余功能不受影响。
+  if (ctx.tools && typeof ctx.tools.register === 'function') {
+    ctx.effect(() => ctx.tools.register(installTool), 'workbuddy-hub: workbuddy_install tool')
   }
 
   const handler = async (req, res) => {
@@ -2456,163 +2706,17 @@ export function apply(ctx, config = {}) {
       if (!['expert', 'skill', 'connector'].includes(kind) || !/^[\w.-]+$/.test(entryName)) {
         json(res, 400, { error: 'invalid kind or name' }); return true
       }
-      // 官方源优先（官方是唯一真源）：技能/专家/连接器都先走官方，
-      // 官方拿不到时才回落到 GitHub 镜像（灾备；连接器见下面的 mirrorFallback 说明）。
-      let files, dest, report, officialMeta = null
-      // 官方溯源：安装时把「装的是官方哪一版 / 哪份定义」如实记进注册表，
-      // 供 /updates 做纯官方元数据比对（技能 version / 专家 updatedAt / 连接器 defHash）。
-      let provenance = null
-      let officialFailure = ''
-      if (kind === 'skill' && body.source !== 'mirror') {
-        // Official skill: the install request carries the human name, so resolve
-        // name → skill_id first, then fetch the record with its download_url.
-        try {
-          const { rows } = await marketList('skill', { page: 1, pageSize: 10, query: entryName }, P.state)
-          const hit = rows.find(r => r.name === entryName)
-            ?? rows.find(r => (r.display_name_zh || r.display_name_en) === entryName)
-            ?? rows[0]
-          if (!hit?.skill_id) throw new Error(`official skill not found: ${entryName}`)
-          const details = await skillDetails([hit.skill_id], P.state)
-          const rec = details.find(x => x.skill_id === hit.skill_id) ?? details[0]
-          if (!rec?.download_url) throw new Error('official skill has no package')
-          const res = await fetch(rec.download_url)
-          if (!res.ok) throw new Error(`skill package HTTP ${res.status}`)
-          const buf = Buffer.from(await res.arrayBuffer())
-          if (buf.length > 8 * 1024 * 1024) throw new Error('skill package too large')
-          if (!(buf[0] === 0x50 && buf[1] === 0x4b)) throw new Error('skill package is not a zip')
-          const entries = unzip(buf).filter(e => !e.name.endsWith('/'))
-          const safeName = /^([\w.-]+)\//.exec(entries[0]?.name ?? '')
-          const root = safeName ? safeName[1] : entryName
-          if (!/^[\w.-]+$/.test(root)) throw new Error('unsafe package layout')
-          dest = join(P.skills, root)
-          mkdirSync(dest, { recursive: true })
-          let count = 0, total = 0
-          const flags = []
-          for (const e of entries) {
-            const rel = e.name.startsWith(root + '/') ? e.name.slice(root.length + 1) : e.name
-            if (!rel || rel.includes('..')) continue
-            const target = join(dest, rel)
-            if (!target.startsWith(dest)) continue
-            mkdirSync(dirname(target), { recursive: true })
-            writeFileSync(target, e.data)
-            count++; total += e.data.length
-            flags.push(...scanFlags(e.data.toString('utf8').slice(0, 20000), rel))
-          }
-          officialMeta = {
-            kind: 'skill', name: root, dest,
-            displayName: rec.display_name_zh || rec.display_name_en || root,
-            description: rec.description_zh || rec.description || rec.description_en || '',
-            files: count, bytes: total, flags: [...new Set(flags)],
-            source: 'official', officialId: rec.skill_id,
-            icon: rec.icon,
-          }
-          // 官方版本 / updated_at：老记录没有 officialMeta → /updates 给 unknown，不伪造
-          provenance = skillProvenance(rec)
-        files = entries
-        report = { files: count, bytes: total, flags: officialMeta.flags }
-        } catch (error) {
-          officialFailure = String(error?.message || error)
-          // 官方装不上：只有显式打开灾备（mirrorFallback=true）才允许装镜像内容；
-          // 默认关时必须如实失败 —— 否则「官方是唯一真源」就成了一句空话。
-          if (!mirrorFallback) {
-            json(res, 502, { error: `官方技能安装失败，且镜像兜底已关闭（mirrorFallback=false）：${officialFailure}` })
-            return true
-          }
-          officialMeta = null // 灾备：回落到镜像内容（记录不带 officialMeta，/updates 会如实报 unknown）
-        }
-      } else if (kind === 'expert' && body.source !== 'mirror') {
-        try {
-          officialMeta = await installExpert(entryName, P.experts, skillPrefix)
-          dest = officialMeta.dest
-          report = { files: officialMeta.files, bytes: officialMeta.bytes, flags: officialMeta.flags }
-          provenance = expertProvenance(officialMeta)
-          invalidateExpertCache() // 人设文件更新过，缓存作废
-        } catch (error) {
-          officialFailure = String(error?.message || error)
-          if (body.source === 'official') throw error
-          if (!mirrorFallback) {
-            json(res, 502, { error: `官方专家安装失败，且镜像兜底已关闭（mirrorFallback=false）：${officialFailure}` })
-            return true
-          }
-          officialMeta = null // 灾备：回落到镜像内容
-        }
-      } else if (kind === 'connector') {
-        // 连接器只认官方注册表（与 POST /connectors/install 同一条链路）：
-        // 镜像里的 connectors 数据不参与安装；官方拿不到时才回落到镜像灾备。
-        const landed = await landOfficialConnector(entryName)
-        if (landed.ok) {
-          dest = landed.dest
-          report = { files: 1, bytes: landed.bytes, flags: landed.flags }
-          provenance = connectorProvenance(landed.row)
-          officialMeta = {
-            kind: 'connector', name: entryName, dest,
-            displayName: landed.row.displayName || entryName,
-            description: landed.row.description || '',
-            icon: landed.row.icon || '',
-            source: 'official', officialId: null,
-          }
-        } else if (!mirrorFallback) {
-          // 官方拿不到（未登录 / 上游失败）且灾备关闭 → 如实失败，不静默装镜像内容。
-          officialFailure = String(landed.error || 'official connector install failed')
-          json(res, landed.status || 502, { error: `官方连接器安装失败，且镜像兜底已关闭（mirrorFallback=false）：${officialFailure}` })
-          return true
-        } else {
-          // 灾备：回落到镜像内容，此时记录**不带** officialMeta —— /updates 会如实报 unknown。
-          officialMeta = null
-        }
+      // 与工具 handler（workbuddy_install）共用同一条安装实现 —— 逻辑只有一份，
+      // 差异只在失败时如何呈现（路由回 JSON 状态码，工具抛带可读信息的错误）。
+      try {
+        const { key, report, linked } = await installEntry(ctx, P, cfg, { kind, name: entryName, source: body.source })
+        json(res, 200, { ok: true, key, report, linked })
+      } catch (error) {
+        // installFailure 把内部失败翻译回**原有的** HTTP 语义（400/404/502），
+        // 状态码与抽取前保持一致（现有测试必须继续绿）。
+        const fail = error?.installFailure
+        json(res, fail?.status ?? 502, { error: String(error?.message || error) })
       }
-      if (!officialMeta) {
-        files = await downloadEntry(mirrorRepo, mirrorBranch, `${kind}s`, entryName)
-        const landed = landEntry(P, kind, entryName, files)
-        dest = landed.dest; report = landed.report
-      }
-      const registry = loadJson(P.registry, { version: 1, installed: {} })
-      if (!registry.installed) registry.installed = {}
-      const key = `${kind}/${entryName}`
-      const previous = registry.installed[key]
-      // Persist the catalog's localized label so UI never shows the raw dir id.
-      const cache = loadJson(P.catalogCache, null)
-      const meta = officialMeta
-        ? { displayName: officialMeta.displayName, description: officialMeta.description, tags: officialMeta.tags, icon: officialMeta.icon }
-        : cache?.index?.[`${kind}s`]?.find(e => e.name === entryName)
-      const record = {
-        kind, name: officialMeta?.name ?? entryName, dest,
-        displayName: meta?.displayName || entryName,
-        description: meta?.description || '',
-        installedAt: new Date().toISOString(),
-        files: report.files, bytes: report.bytes, flags: report.flags,
-        linked: false,
-        enabled: kind === 'connector' ? Boolean(previous?.enabled) : undefined,
-      }
-      if (kind === 'skill') {
-        try { linkSkill(P, skillPrefix, officialMeta?.name ?? entryName, skillsMount); record.linked = true } catch (error) {
-          report.flags.push(`symlink failed: ${error.message}`)
-        }
-      }
-      if (kind === 'connector') {
-        // A connector's usable surface is its bundled skills (CLI form) and/or
-        // its MCP declaration (activated separately by the user).
-        try {
-          const linkedSkills = linkConnectorSkills(skillPrefix, entryName, dest)
-          if (linkedSkills.length > 0) record.linkedSkills = linkedSkills
-        } catch (error) {
-          report.flags.push(`skill link failed: ${error.message}`)
-        }
-        const cli = readCliMeta(dest)
-        if (cli !== null) record.cli = cli
-        record.mcp = existsSync(join(dest, 'mcp.json'))
-      }
-      if (officialMeta) {
-        record.source = 'official'
-        record.officialId = officialMeta.officialId ?? null
-        if (officialMeta.icon) record.icon = officialMeta.icon
-        record.official = true
-        // 官方溯源（可能为 null：官方记录本身缺字段时如实留空，/updates 会报 unknown）
-        record.officialMeta = provenance
-      }
-      registry.installed[key] = record
-      saveJson(P.registry, registry)
-      json(res, 200, { ok: true, key, report, linked: record.linked })
       return true
     }
 
