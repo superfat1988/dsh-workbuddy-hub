@@ -50,7 +50,7 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 | GET | `/installed` | 已装清单（连接器附带实时 `enabled`/`status`/`credentialRefs`） |
 | GET | `/updates[?refresh=1]` | **检查更新**（只读）：纯官方元数据比对 —— 技能比官方 `version`、专家比官方 `updatedAt`、连接器比官方 MCP 定义哈希；取不到官方数据一律 `unknown` + 原因，**绝不**判「已是最新」。结果缓存 60s，`refresh=1` 强制重算；**永远不用镜像** |
 | POST | `/install {kind,name}` | 按需安装（官方优先；技能/专家/连接器都记 `officialMeta` 溯源）。与 `workbuddy_install` 工具共用同一实现 `installEntry`；本路由是 Web UI 的安装通道（**不经过审批**——审批在工具链路里） |
-| POST | `/uninstall {kind,name}` | 卸载（与 `workbuddy_uninstall` 工具共用同一实现 `uninstallEntry`）：连接器先停用 MCP 传输 → 拆技能链接 → 删文件 → 更新注册表 → 摘掉各会话挂载 → 专家顺带删 agent preset。本路由是 Web 设置页「移除」的通道（用户亲手点的，不需要审批） |
+| POST | `/uninstall {kind,name}` | 卸载（与 `workbuddy_uninstall` 工具共用同一实现 `uninstallEntry`）：连接器先停用 MCP 传输 → 拆技能链接 → 删文件 → 更新注册表 → 摘掉各会话挂载 → 专家顺带释放 agent preset。本路由是 Web 设置页「移除」的通道（用户亲手点的，不需要审批） |
 | GET | `/mounted?sessionId=` | 本会话已挂载条目（只读，缺 sessionId 时按最近会话兜底并标 `sessionSource`） |
 | POST | `/mount` \| `/unmount {sessionId,kind,name}` | 会话级挂载（安装 ≠ 挂载）；**写操作必须显式传 `sessionId`，缺失返回 409**，绝不兜底猜会话 |
 | POST | `/connectors/enable` \| `/connectors/disable {name}` | 动态挂载/拆卸 MCP 传输 |
@@ -122,7 +122,7 @@ workbuddy_uninstall { kind: "expert"|"skill"|"connector", name }
 1. **只读盘点**：从注册表读出该条目的文件数/体量/安装时间/来源/当前启用状态（不写盘、不拆传输、不动挂载）；未安装时如实说「无需卸载」，不弹审批；
 2. **DSH 原生审批**，reason 写清「将移除什么 + 多大体量 + 什么影响（连接器先停用 MCP 传输；专家摘全部会话挂载）+ 不可撤销」；
 3. 审批四分支与 `workbuddy_install` 完全一致：只有 `allowed-once` 才真卸；`rejected`/`cancelled` 不卸并如实转述；**`unavailable` → fail-closed**；`ctx.approval` / `exec.agent` 缺位同样 fail-closed；
-4. 卸载复用与 `POST /uninstall` 完全相同的 `uninstallEntry`（连接器先停用 MCP 传输，防止 mcp-client 行悬空 → 拆技能链接 → 删文件 → 更新注册表 → `pruneMounts` 摘挂载 → 专家删 agent preset）；
+4. 卸载复用与 `POST /uninstall` 完全相同的 `uninstallEntry`（连接器先停用 MCP 传输，防止 mcp-client 行悬空 → 拆技能链接 → 删文件 → 更新注册表 → `pruneMounts` 摘挂载 → 专家释放 agent preset）；
 5. 每次调用写一行 `[wbh] uninstall …` 审计（kind/name/审批结果/时间）。
 
 ## 装前预检：hub-find.mjs inspect（只读、不落盘）

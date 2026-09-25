@@ -302,6 +302,28 @@ PY
 
 ---
 
+## V. DSH 0.1.7 适配（双模型：0.1.6 磁盘副本 / 0.1.7 运行时声明）
+
+> 背景：DSH `0.1.7-rc.2` 删除了 `agentPresets.copy()` / `.remove()`（预设改为**运行时声明**，
+> 且 `$DSH_HOME/.agent-presets/` 不再被读取），并把会话日志代际从 V3 推到 V4。
+> 本插件必须**在 0.1.6 与 0.1.7 上同时可用**，因此走能力探测的双路径。
+> 交叉参考：`DSH/dsh-upgrade-prep/HANDOFF-workbuddy-hub.md`。
+
+| ID | 项 | 预期 | 证据 |
+|---|---|---|---|
+| **V1** | `node test-dsh-071-adaptation.mjs` | 全绿。其中「0.1.7 形状」用**只有 register/resolve、没有 copy/remove** 的假 presets 跑真实 `ensureExpertPreset` —— 新路径只要碰一下旧 API 就 `TypeError`，这是「新路径不依赖已删 API」的可执行证明（强于 grep） | 命令输出 |
+| **V2** | `grep -n "presets\.copy\|presets\.remove\|session\.v3" index.js` | 命中只允许出现在**注释**或**显式隔离的 0.1.6 兼容分支**里；0.1.7 路径不得依赖它们（由 V1 证明） | `grep` 输出 + V1 |
+| **V3** | 专家预设字段来源（静态） | `id` = `workbuddy-<专家名>`（**不得改**，否则已选中该预设的老会话失效）；`name` ← 专家 `plugin.json.displayName`；`description` ← 注册表官方描述（缺失则人设描述）；`order` ← standard.order + 100；`plugins` ← loader 里 `preset-standard` 行的已解析 `config.plugins`，**只替换 persona 行的 `config.prefix`**，其余行逐字节不动（含 `!!js` 表达式） | V1 断言 + `index.js` 的 `standardPresetDeclaration` / `injectPersonaRows` |
+| **V4** | disposer 生命周期（0.1.7） | disposer 由本插件持有（`expertPresetDisposers`），在 `ctx.effect` 的 teardown 里全量释放 —— 否则热重载后再声明同一 id 会抛 `Duplicate agent preset`；卸载专家时释放该条 | V1 的「释放后可重新声明」用例 |
+| **V5** | 幂等与竞态（0.1.7） | 先 `resolve(id)` 探活；命中即复用（不再 register）；并发撞 `Duplicate agent preset` 视为既存成功；声明后 `resolve` 报 `broken` 必须**回滚 + 报错**，不留坏预设 | V1 的幂等/竞态/broken 用例 |
+| **V6** | 启动补声明 | 0.1.7 下声明只活在进程里 → 启动后为**已安装专家**补声明（否则已选中该预设的老会话会 `agent-preset/not-found`，与遗留预设目录失效同一类故障）；失败只记日志、不影响启动 | 隔离实例日志 `[wbh] expert presets declared at startup: n/m` |
+| **V7** | 会话 cwd 读取（代际无关） | 匹配 `^session(?:\.v(\d+))?\.jsonl(\.zstd)?$`；**两代同存时取最高代际**（v4 是 v3 的后继，v3 只是天然备份），同代际优先 `.zstd`；最高代际损坏时**退到下一代**而不是返回空；根目录从 `$DSH_HOME`（空白视为未设置）派生，不再硬编码 `/home/kaitzh/.dsh` | V1 的 `sessionLogsNewestFirst` / `readSessionCwdFromDisk` 用例 |
+| **V8** | 0.1.6 侧不回归（运行期） | 在 0.1.6 隔离实例上 `POST /expert-preset-ensure {name:<已装专家>}` → `{ok:true,presetId}`，且 `$DSH_HOME/.agent-presets/workbuddy-<name>/` 被创建（磁盘副本路径仍生效） | 隔离实例 + 目录清单 |
+| **V9** | 0.1.7 侧运行期复验 | **升级完成后必做**：在 0.1.7 实例上 `POST /expert-preset-ensure` → `{ok:true}`；`remote.agentPresets.select` 能选中；会话恢复可读 V4；`web_search` 仍选中 tavily | 升级后实测（本项在 0.1.6 上无法验证） |
+| **V10** | 客户端 `select` 链路 | 0.1.7 的 `@Remote('select')` 仍在（与 0.1.6 相同），客户端 `remote.agentPresets.select(sessionId, presetId)` 不需要改 | `git grep "Remote('select')" <tag>` 两版对照 |
+
+---
+
 ## 判定与交付格式
 
 验收方须输出：

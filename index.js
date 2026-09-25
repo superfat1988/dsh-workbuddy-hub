@@ -35,6 +35,7 @@ import { execSync } from 'node:child_process'
 import {
   existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync,
   symlinkSync, unlinkSync, lstatSync, statSync,
+  openSync, readSync, closeSync,
 } from 'node:fs'
 import { createConnectorManager, validateConnectorMcp, buildMcpConfig, buildNativeRow, declaredServerNames, localMcpSpec, localTokenRefFor, MCP_SERVER_NAME_PATTERN, MCP_CLIENT_PACKAGE } from './mcp-manager.js'
 import {
@@ -61,6 +62,82 @@ function expandHome(p) {
   if (p === '~') return homedir()
   if (p.startsWith('~/')) return join(homedir(), p.slice(2))
   return p
+}
+
+/**
+ * DSH home（会话目录所在的根）。优先级与 DSH 自己的 `defaultDshHome` 一致：
+ * `$DSH_HOME` → `~/.dsh`；**全空白视为未设置**（照抄上游语义，空白覆盖不应生效）。
+ * 此前这里硬编码 `/home/kaitzh/.dsh`，换机器/换 home 就静默失效。
+ */
+export function dshHomeRoot(env = process.env) {
+  const raw = String(env?.DSH_HOME ?? '')
+  return raw.trim() === '' ? join(homedir(), '.dsh') : resolve(expandHome(raw.trim()))
+}
+
+/**
+ * 会话日志文件名（按代际编址）：`session.jsonl` / `session.v3.jsonl` / `session.v4.jsonl`，
+ * 以及它们的 `.zstd` 压缩形态。
+ */
+const SESSION_LOG_NAME = /^session(?:\.v(\d+))?\.jsonl(\.zstd)?$/
+
+/**
+ * 列出一个会话目录里的**全部代际**日志，最新代际在前。
+ *
+ * 为什么按代际降序：DSH 从 V3 升到 V4 后，新事件写进 `session.v4.jsonl.zstd`，而原
+ * `session.v3.*` 文件**逐字节保留**（升级说明：后继发布、源文件不改）。所以两代同时存在时，
+ * v4 才是「活的这一代」，v3 只是天然备份 —— 读 cwd 必须读最高代际，否则新会话读不到。
+ * 同代际优先 `.zstd`（DSH 默认压缩写）。
+ *
+ * @returns {Array<{file: string, version: number, zstd: boolean}>}
+ */
+export function sessionLogsNewestFirst(dir) {
+  const found = []
+  for (const name of readdirSync(dir)) {
+    const matched = SESSION_LOG_NAME.exec(name)
+    if (!matched) continue
+    found.push({
+      file: join(dir, name),
+      version: Number(matched[1] ?? 1),
+      zstd: Boolean(matched[2]),
+    })
+  }
+  found.sort((a, b) => (b.version - a.version) || (Number(b.zstd) - Number(a.zstd)))
+  return found
+}
+
+/** 读一个会话日志文件的头部（至多 2 KiB），zstd 的走 `zstd -dc`，明文直接读前 2 KiB。 */
+function readSessionLogHead({ file, zstd }) {
+  if (zstd) {
+    return execSync(`zstd -dc '${file}' 2>/dev/null | head -c 2048`,
+      { encoding: 'utf8', timeout: 5000, maxBuffer: 4096 })
+  }
+  const fd = openSync(file, 'r')
+  try {
+    const buffer = Buffer.alloc(2048)
+    const read = readSync(fd, buffer, 0, 2048, 0)
+    return buffer.subarray(0, read).toString('utf8')
+  } finally { closeSync(fd) }
+}
+
+/** 从磁盘会话日志头部读 cwd（内存里没有该会话时的兜底；代际无关，见 sessionLogsNewestFirst）。 */
+export function readSessionCwdFromDisk(sessionId, env = process.env) {
+  try {
+    if (!/^[-\w]+$/.test(String(sessionId))) return ''
+    const root = join(dshHomeRoot(env), 'sessions')
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      const dir = join(root, entry.name, sessionId)
+      if (!existsSync(dir)) continue
+      for (const log of sessionLogsNewestFirst(dir)) {
+        let head = ''
+        try { head = readSessionLogHead(log) } catch { continue /* 这一代读不了就退到下一代 */ }
+        const first = (head.split('\n').find(l => l.includes('"type":"session"')) || '')
+        const cwd = /"cwd":"([^"]+)"/.exec(first)?.[1]
+        if (cwd) return cwd
+      }
+    }
+  } catch { /* 读不到返回空 */ }
+  return ''
 }
 
 /** DSH 凭据引用名：官方 bearer 只以 ${WORKBUDDY_TOKEN} 形式出现在 mcp.json 里。 */
@@ -469,27 +546,6 @@ function invalidateExpertCache() {
   expertCache = new Map()
 }
 
-/** 从磁盘会话日志头部读 cwd（内存里没有该会话时的兜底，zstd 解第一行）。 */
-function readSessionCwdFromDisk(sessionId) {
-  try {
-    if (!/^[-\w]+$/.test(String(sessionId))) return ''
-    const root = '/home/kaitzh/.dsh/sessions'
-    for (const entry of readdirSync(root, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue
-      const dir = join(root, entry.name, sessionId)
-      if (!existsSync(dir)) continue
-      const log = join(dir, 'session.v3.jsonl.zstd')
-      if (!existsSync(log)) continue
-      const head = execSync(`zstd -dc '${log}' 2>/dev/null | head -c 2048`,
-        { encoding: 'utf8', timeout: 5000, maxBuffer: 4096 })
-      const first = (head.split('\n').find(l => l.includes('"type":"session"')) || '')
-      const cwd = /"cwd":"([^"]+)"/.exec(first)?.[1]
-      if (cwd) return cwd
-    }
-  } catch { /* 读不到返回空 */ }
-  return ''
-}
-
 /**
  * 解析 nearSessionId 所属的工作区 id（只解析，不建会话）。
  * 顺序：① 工作区列表的 sessionIds 成员关系（基准事实，不依赖会话头 cwd）；
@@ -624,6 +680,89 @@ export function replacePersonaPrefix(yaml, body) {
   return lines.join('\n')
 }
 
+/* ------------------------------------------------------------------ *
+ * 专家预设：两套模型并存（0.1.6 磁盘副本 / 0.1.7 运行时声明）
+ *
+ * 0.1.6：预设是磁盘目录，`agentPresets.copy('standard', id, name)` 复制一份内置 standard
+ *        到 `$DSH_HOME/.agent-presets/<id>/`，再改写里面 persona 行的 prefix。
+ * 0.1.7：**预设只能是声明**——`$DSH_HOME/.agent-presets/` 已无人读取，`copy`/`remove` 都被
+ *        删除；声明方用 `agentPresets.register(definition)` 提供完整 rows 并**自己持有
+ *        disposer**（重复注册会抛 `Duplicate agent preset`）。
+ *        rows 从 loader 里那条 `preset-standard` 声明行的**已解析 config**里取——这是进程内
+ *        唯一带 config 的结构化来源（`readDocument()` 只给 YAML 文本、`compositionInventory()`
+ *        只给 rows 元数据，都不够用来 register）。
+ * 两套都用 `resolve(id)` 探活做幂等（两版的 resolve 对未知 id 都抛 agent-preset/not-found）。
+ * ------------------------------------------------------------------ */
+
+/** 本插件声明过的专家预设：presetId → disposer（0.1.7 才有）。 */
+const expertPresetDisposers = new Map()
+
+/** 声明模型是否可用（0.1.7 有 register / 没有 copy）。 */
+export function usesPresetDeclarations(presets) {
+  return typeof presets?.register === 'function' && typeof presets?.copy !== 'function'
+}
+
+/**
+ * 从 loader 里找 standard 预设的声明行，返回其 `config`（含 plugins 行列表）。
+ * 行 id 约定是 `preset-<id>`；同时兜底遍历一遍 entries，避免用户改过行 id。
+ */
+export function standardPresetDeclaration(ctx, presetName = 'standard') {
+  const loader = ctx?.loader ?? ctx?.get?.('loader', false)
+  if (!loader) return undefined
+  const candidates = []
+  try { candidates.push(loader.resolve?.(`preset-${presetName}`)) } catch { /* 约定 id 不存在 → 走遍历 */ }
+  try {
+    if (typeof loader.entries === 'function') for (const entry of loader.entries()) candidates.push(entry)
+  } catch { /* 遍历不了就只认约定 id */ }
+  for (const entry of candidates) {
+    const options = entry?.options
+    if (!options || options.name !== '@deepseek-ai/dsh-agent-preset') continue
+    const config = options.config
+    if (!config || config.id !== presetName || !Array.isArray(config.plugins)) continue
+    return config
+  }
+  return undefined
+}
+
+/**
+ * 把专家人设注入一份兼容预设行列表：替换 persona 行的 `config.prefix`。
+ * 不改写别的行、不删行；找不到 persona 行就抛错（宁可失败也不留个没有人设的空壳）。
+ */
+export function injectPersonaRows(rows, body) {
+  let hit = false
+  const out = rows.map(row => {
+    if (!row || typeof row !== 'object') return row
+    const isPersona = row.id === 'persona' || row.name === '@deepseek-ai/dsh-persona'
+    if (!isPersona) return row
+    hit = true
+    return { ...row, config: { ...(row.config || {}), prefix: String(body) } }
+  })
+  if (!hit) throw new Error('standard 组合里没有 persona 行')
+  return out
+}
+
+/** 释放一个专家预设：0.1.7 用自己持有的 disposer；0.1.6 回退到 `remove(id)`（删目录）。 */
+export async function disposeExpertPreset(ctx, presetId) {
+  const dispose = expertPresetDisposers.get(presetId)
+  if (typeof dispose === 'function') {
+    expertPresetDisposers.delete(presetId)
+    try { await dispose() } catch { /* 释放失败不改调用方结论 */ }
+    return true
+  }
+  // 0.1.7 没有 `remove`：不由我们声明的预设（别人的声明 / 上一进程的声明）本来就无可释放，
+  // 这里必须如实返回 false，而不是假装成功。
+  const remove = ctx?.agentPresets?.remove
+  if (typeof remove !== 'function') return false
+  try { await remove.call(ctx.agentPresets, presetId); return true } catch { return false }
+}
+
+/** 释放本插件声明过的全部专家预设（插件卸载 / 热重载时调用）。 */
+export async function disposeAllExpertPresets() {
+  const ids = [...expertPresetDisposers.keys()]
+  for (const id of ids) await disposeExpertPreset(undefined, id)
+  return ids
+}
+
 /**
  * 确保某专家在 user root 里有一份 agent preset（幂等：已存在直接复用）。
  * @returns {Promise<{ok: true, presetId: string} | {ok: false, error: string}>}
@@ -632,11 +771,13 @@ export async function ensureExpertPreset(ctx, paths, expertName) {
   const name = String(expertName || '')
   if (!/^[\w.-]+$/.test(name)) return { ok: false, error: `invalid expert name "${name}"` }
   const presets = ctx?.agentPresets
-  if (!presets || typeof presets.resolve !== 'function' || typeof presets.copy !== 'function') {
+  const declare = usesPresetDeclarations(presets)
+  const legacyCopy = typeof presets?.copy === 'function'
+  if (!presets || typeof presets.resolve !== 'function' || (!declare && !legacyCopy)) {
     return { ok: false, error: 'agentPresets unavailable' }
   }
   const presetId = expertPresetId(name)
-  // 幂等：上一轮召唤已经建过就直接复用，不重复 copy（copy 对已存在的 id 会抛错）。
+  // 幂等：上一轮召唤已经建过就直接复用（0.1.7 下重复 register 会抛 Duplicate agent preset）。
   try {
     await presets.resolve(presetId)
     return { ok: true, presetId }
@@ -647,6 +788,46 @@ export async function ensureExpertPreset(ctx, paths, expertName) {
   const body = presetPersonaText(read.persona)
   if (body === '') return { ok: false, error: '专家人设正文为空' }
 
+  if (declare) {
+    // ---- 0.1.7：声明模型 ----------------------------------------------------
+    const standard = standardPresetDeclaration(ctx)
+    if (!standard) return { ok: false, error: '找不到 standard 预设声明（Loader 里没有 preset-standard 行）' }
+    let plugins
+    try { plugins = injectPersonaRows(standard.plugins, body) } catch (error) {
+      return { ok: false, error: `注入专家人设失败：${String(error?.message || error)}` }
+    }
+    const record = loadJson(paths.registry, { version: 1, installed: {} })?.installed?.[`expert/${name}`] || {}
+    const definition = {
+      id: presetId,
+      name: read.title || name,
+      ...(String(record.description || read.description || '') === ''
+        ? {} : { description: String(record.description || read.description) }),
+      // 排在官方预设之后（standard 是 1），专家之间保持稳定顺序
+      order: (Number.isFinite(Number(standard.order)) ? Number(standard.order) : 1) + 100,
+      plugins,
+    }
+    let dispose
+    try {
+      dispose = await presets.register(definition)
+    } catch (error) {
+      const message = String(error?.message || error)
+      // 并发/热重载竞态：别人（或上一轮）已经声明过同一个 id → 当作既存复用
+      if (/Duplicate agent preset/.test(message)) return { ok: true, presetId }
+      return { ok: false, error: `声明专家预设失败：${message}` }
+    }
+    expertPresetDisposers.set(presetId, dispose)
+    // 声明成功 ≠ 行可用：新模型下激活失败仍会 resolve，用 broken 复核（宁可现在失败）
+    try {
+      const verified = await presets.resolve(presetId)
+      if (verified?.broken !== undefined) throw new Error(String(verified.broken))
+    } catch (error) {
+      await disposeExpertPreset(ctx, presetId)
+      return { ok: false, error: `专家预设不可用：${String(error?.message || error)}` }
+    }
+    return { ok: true, presetId }
+  }
+
+  // ---- 0.1.6：磁盘副本模型 ------------------------------------------------
   try {
     await presets.copy('standard', presetId, read.title || name)
   } catch (error) {
@@ -739,6 +920,33 @@ export function apply(ctx, config = {}) {
    * ---------------------------------------------------------------- */
   const localMcpEnabled = cfg.localMcp === true
   const LOCAL_MCP_GUARD = '本地 MCP 管理未开启：请在插件配置里设 localMcp: true（默认关闭）'
+  // 专家预设（0.1.7 声明模型）：disposer 由**声明方**持有，插件卸载 / HMR 时必须释放，
+  // 否则热重载后再 register 同一个 id 会抛 `Duplicate agent preset`。
+  ctx.effect(() => () => disposeAllExpertPresets(), 'workbuddy-hub: expert preset declarations')
+  // 0.1.7 的声明活在进程里：重启后 `workbuddy-<专家>` 就没人声明了，而**已经选中过该预设的
+  // 会话**在恢复时会 `agent-preset/not-found`（与遗留预设目录失效同一类故障）。所以启动后
+  // 为**已安装的专家**补一次声明，把 0.1.6 里「预设目录持久存在」的语义补齐。
+  // 失败只记日志：绝不因为补声明失败影响插件启动。
+  if (usesPresetDeclarations(ctx.agentPresets)) {
+    void (async () => {
+      try {
+        await ctx.loader?.await?.()
+        const registry = loadJson(P.registry, { version: 1, installed: {} })
+        const names = Object.values(registry.installed ?? {})
+          .filter(record => record?.kind === 'expert' && typeof record.name === 'string')
+          .map(record => record.name)
+        let declared = 0
+        for (const name of names) {
+          const result = await ensureExpertPreset(ctx, P, name)
+          if (result.ok) declared += 1
+          else console.warn(`[wbh] expert preset re-declare failed: ${name} — ${result.error}`)
+        }
+        if (names.length > 0) console.info(`[wbh] expert presets declared at startup: ${declared}/${names.length}`)
+      } catch (error) {
+        console.warn('[wbh] expert preset startup declaration skipped:', String(error?.message || error))
+      }
+    })()
+  }
   // 本地 MCP 的运行时挂载（同 connectors 的 mounted Map）。
   const localMcpRuntime = new Map()
   // 插件卸载 / HMR 时拆掉所有本地 MCP 传输（不留孤儿注册）。
@@ -1649,10 +1857,11 @@ export function apply(ctx, config = {}) {
     // 专家 —— 界面 chip 还在、注入却失败或静默为空。全量清理所有会话里等于该 key
     // 的条目（pruneMounts 内部会 invalidateExpertCache，保证下一步 assembly 不用旧人设）。
     const prunedSessions = pruneMounts(P0, key)
-    // 专家卸载后 best-effort 删掉它对应的 agent preset（按 `workbuddy-<name>`
+    // 专家卸载后 best-effort 释放它对应的 agent preset（按 `workbuddy-<name>`
     // 现算，不改安装记录结构）；删不掉（没建过 / 已不存在 / 被占用）不影响卸载。
+    // 0.1.7 起 preset 不再是磁盘目录，只有**声明方**持有的 disposer 能撤销它。
     if (kind === 'expert') {
-      try { await ctx.agentPresets?.remove?.(expertPresetId(entryName)) } catch { /* best effort */ }
+      try { await disposeExpertPreset(ctx, expertPresetId(entryName)) } catch { /* best effort */ }
     }
     return { key, prunedSessions }
   }

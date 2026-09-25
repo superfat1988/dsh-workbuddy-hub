@@ -48,7 +48,7 @@
  ],
  "scripts": {
   "build:client": "node scripts/build.mjs",
-  "test": "node --check index.js && node --check wb-market.js && node --check src/keepalive.js && node --check src/updates.js && node --check client.js && node --check mcp-manager.js && node --check expert-persona.js && node test-mcp-manager.mjs && node test-expert-persona.mjs && node test-connector-cli.mjs && node test-summon.mjs && node test-client.mjs && node test-render.mjs && node test-selection-hydration.mjs && node test-session-contract.mjs && node test-pending-expert.mjs && node test-auth-store.mjs && node test-keepalive.mjs && node test-install.mjs && node test-updates.mjs && node test-local-mcp.mjs && node test-package.mjs && node --check scripts/hub-find.mjs && node test-install-tool.mjs && node test-uninstall-tool.mjs && node test-hub-find.mjs",
+  "test": "node --check index.js && node --check wb-market.js && node --check src/keepalive.js && node --check src/updates.js && node --check client.js && node --check mcp-manager.js && node --check expert-persona.js && node test-mcp-manager.mjs && node test-expert-persona.mjs && node test-connector-cli.mjs && node test-summon.mjs && node test-client.mjs && node test-render.mjs && node test-selection-hydration.mjs && node test-dsh-071-adaptation.mjs && node test-session-contract.mjs && node test-pending-expert.mjs && node test-auth-store.mjs && node test-keepalive.mjs && node test-install.mjs && node test-updates.mjs && node test-local-mcp.mjs && node test-package.mjs && node --check scripts/hub-find.mjs && node test-install-tool.mjs && node test-uninstall-tool.mjs && node test-hub-find.mjs",
   "pack:check": "npm pack --dry-run",
   "test:live": "node test-install-live.mjs"
  },
