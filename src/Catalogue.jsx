@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { hub, onCatalogChange, addSelection, openMarket, onMarketRequest, consumePendingMarket, recentExpertNames, authState, onAuthChange, refreshAuth, requireAuth, authStale, STALE_LOGIN_REASON } from './hub.js'
+import { hub, onCatalogChange, addSelection, removeSelection, openMarket, onMarketRequest, consumePendingMarket, recentExpertNames, authState, onAuthChange, refreshAuth, requireAuth, authStale, STALE_LOGIN_REASON } from './hub.js'
 import { insertPromptIntoComposer } from './insert-prompt.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
@@ -209,6 +209,7 @@ export default function Catalogue({
   const [localOnly, setLocalOnly] = useState(false)
   const [detail, setDetail] = useState(null)   // 技能/连接器的二级界面
   const [bound, setBound] = useState([])       // 官方已绑定的连接器（真实连接态）
+  const [hostMcp, setHostMcp] = useState([])   // 宿主侧 MCP 总清单（含 DSH 机制加载的）
   const [notice, setNotice] = useState('')     // 操作结果提示（连接/解绑失败等）
   const [busyLocal, setBusyLocal] = useState('')  // 本组件内发起的连接/解绑进行中态
   const [pendingAuth, setPendingAuth] = useState(null)  // 待完成的授权（含可点链接）
@@ -247,6 +248,34 @@ export default function Catalogue({
   // 「最近专家」顺序快照（见下方 picker 排序处的说明）
   const [recentSnapshot, setRecentSnapshot] = useState(() => recentExpertNames())
   useEffect(() => { setRecentSnapshot(recentExpertNames()) }, [kind, query])
+
+  // 宿主侧 MCP 总清单（picker 的「本机 MCP」一节）：本插件托管的本地 MCP + DSH 自己
+  // 加载的（其它插件/配置行）。后者只读展示——插件不代管别人的配置。
+  const refreshHostMcp = useCallback(() => {
+    hub.hostMcpList()
+      .then(r => setHostMcp(Array.isArray(r?.servers) ? r.servers : []))
+      .catch(() => setHostMcp([]))
+  }, [])
+  useEffect(() => { if (variant === 'picker') refreshHostMcp() }, [variant, kind, refreshHostMcp])
+
+  // 本机 MCP 的启/停（picker 里那一节的开关调用）。失败如实提示，绝不乐观改状态。
+  const localMcpAction = useCallback(async entry => {
+    const key = `mcp/${entry.name}`
+    setBusyLocal(key); setNotice('')
+    try {
+      const r = entry.enabled ? await hub.localMcpDisable(entry.name) : await hub.localMcpEnable(entry.name)
+      if (r && r.ok === false) setNotice(`${entry.enabled ? '停用' : '启用'}「${entry.name}」失败：${r.error || ''}`)
+      else setNotice(entry.enabled
+        ? `已停用本机 MCP「${entry.name}」`
+        : `已启用本机 MCP「${entry.name}」，${Number(r?.toolCount ?? 0) || '其'}个工具下一次模型步骤起可用`)
+    } catch (error) {
+      setNotice(`操作失败：${String(error?.message || error)}`)
+    } finally {
+      setBusyLocal('')
+      refreshHostMcp()
+      await onRefresh?.()
+    }
+  }, [onRefresh, refreshHostMcp])
 
   // 行加载完成后通知父组件（picker 用它把面板位置定下来再显示，避免异步加载导致面板
   // 在鼠标底下跳位）。loading 由 true 变 false 那一刻即「就绪」。
@@ -313,6 +342,12 @@ export default function Catalogue({
   const authStaleNow = loggedIn && auth?.stale === true
   const isBound = useCallback(entry => bound.includes(entry.name), [bound])
 
+  // 卸载必须带**显式 sessionId**：宿主路由缺 sessionId 一律 409（防「挂到用户没在看的会话」
+  // 的老缺陷），所以 hub.unmount(undefined,…) 是静默失败——本会话的挂载会残留下来。
+  const unmountHere = useCallback((kind, name) => (
+    sessionId ? hub.unmount(sessionId, kind, name).catch(() => {}) : Promise.resolve()
+  ), [sessionId])
+
   // 懒加载：接近底部继续取下一页
   const onScroll = useCallback(e => {
     const el = e.currentTarget
@@ -363,7 +398,7 @@ export default function Catalogue({
     try {
       await hub.disableConnector(entry.name).catch(() => {})
       const r = await hub.connectorUnbind(entry.name)
-      if (r?.ok) await hub.unmount(undefined, entry.kind, entry.name).catch(() => {})
+      if (r?.ok) await unmountHere(entry.kind, entry.name)
       setNotice(r?.ok ? `已解绑「${entry.displayName}」` : `解绑失败：${r?.message || '官方未确认'}`)
       const fresh = await hub.boundConnectors().catch(() => [])
       setBound(fresh.map(x => x.name))
@@ -427,14 +462,23 @@ export default function Catalogue({
         const rec = installed[`connector/${entry.name}`]
         if (rec?.enabled) {
           await hub.disableConnector(entry.name)
-          await hub.unmount(undefined, entry.kind, entry.name).catch(() => {})
+          await unmountHere(entry.kind, entry.name)
+          // 关掉 = 不再「已加载」→ 输入框下方的 chip 也要撤掉（rail 只表示真的开着）
+          removeSelection(sessionId, entry.kind, entry.name)
           setNotice(`已停用「${entry.displayName}」（官方授权仍保留）`)
         } else {
           const ins = await hub.connectorInstall(entry.name)
           if (!ins?.ok) setNotice(`启用失败：${ins?.error || '本地登记失败'}`)
           else {
             const en = await hub.enableConnector(entry.name)
-            setNotice(en?.ok ? `已启用「${entry.displayName}」，可在对话中使用` : `启用失败：${en?.error || ''}`)
+            if (en?.ok) {
+              // 打开 = 启用 + 挂到当前会话 → 立刻在输入框下方出现该 MCP 的 chip（带官方 icon）
+              if (sessionId) await hub.mount(sessionId, entry.kind, entry.name).catch(() => {})
+              addSelection(entry, sessionId)
+              setNotice(`已启用「${entry.displayName}」，已加到本会话，工具下一次模型步骤起可用`)
+            } else {
+              setNotice(`启用失败：${en?.error || ''}`)
+            }
           }
         }
         await onRefresh?.()
@@ -442,7 +486,7 @@ export default function Catalogue({
       }
       if (isBound(entry)) {
         const r = await hub.connectorUnbind(entry.name)
-        if (r?.ok) await hub.unmount(undefined, entry.kind, entry.name).catch(() => {})
+        if (r?.ok) await unmountHere(entry.kind, entry.name)
         setNotice(r?.ok ? `已解绑「${entry.displayName}」` : `解绑失败：${r?.message || '官方未确认'}`)
       } else {
         const r = await hub.connectorAuthStart(entry.name)
@@ -922,17 +966,27 @@ export default function Catalogue({
       ? localRows.filter(e => (e.displayName || e.name || '').toLowerCase().includes(query.toLowerCase()))
       : localRows)
     const baseRows = kind === 'expert'
-      ? (installedExperts.length ? installedExperts : expertFallback)
+      // 专家面板：**有搜索词就搜官方注册表**（结果来自上面那次 hub.list(kind,{query})，
+      // 即 visible）。此前这里只用「本机已装专家 / 随机兜底」，搜索请求发出去了却被丢弃，
+      // 于是输入关键词列表纹丝不动 —— 真机复现：搜「合同」后行仍是 架构通/体验达。
+      ? (String(query ?? '').trim()
+        ? visible
+        : (installedExperts.length ? installedExperts : expertFallback))
       : kind === 'skill'
         ? localSkills
         : visible
     const pinnedOfKind = pinnedEntries.filter(x => x.kind === kind)
     const merged = [...pinnedOfKind, ...baseRows.filter(b => !pinnedOfKind.some(p => p.name === b.name && p.kind === b.kind))]
-    // 官方实测排序：已连接的连接器置顶（带开关）→ 图钉置顶项 → 其余。
+    // 官方实测排序：**已打开**的连接器置顶（带开关）→ 已授权未打开 → 图钉置顶项 → 其余。
+    // 注意「已打开」必须看本地启用态（installed[].enabled），不是官方账号绑定态：绑定态会让
+    // 一个实际已关闭的 MCP 也显示成 ON（真机复现：腾讯文档 enabled=false 却显示「停用」）。
     const rowRank = x => {
-      if (x.kind === 'connector' && bound.includes(x.name)) return 0
-      if (pinned.has(`${x.kind}/${x.name}`)) return 1
-      return 2
+      if (x.kind === 'connector') {
+        if (installed[`connector/${x.name}`]?.enabled) return 0
+        if (bound.includes(x.name)) return 1
+      }
+      if (pinned.has(`${x.kind}/${x.name}`)) return 2
+      return 3
     }
     // 专家面板：同档内按「最近加载过的专家」优先（越近越靠前）；没有记录时返回同值，
     // 排序保持稳定 = 回落到原有顺序（置顶逻辑不受影响）。
@@ -954,7 +1008,14 @@ export default function Catalogue({
 
     const rowNode = entry => {
       const key = `${entry.kind}/${entry.name}`
-      const connected = entry.kind === 'connector' ? isBound(entry) : Boolean(entry._enabled || entry.isConnected)
+      // 连接器行尾控件的三种形态（对齐官方）：
+      //   ① 本地已启用 → 绿色开关，点 = 停用（并撤掉本会话的 chip）
+      //   ② 已授权但未启用 → 灰开关，点 = 启用 + 挂到本会话（chip 出现，带官方 icon）
+      //   ③ 未授权 → 「连接」文字按钮，点 = 走授权/连接流程
+      // 判断依据必须是**本地启用态**：用官方绑定态（bound）会把已关闭的 MCP 显示成 ON。
+      const connectorEnabled = entry.kind === 'connector' ? Boolean(installed[`connector/${entry.name}`]?.enabled) : false
+      const connectorAuthorised = entry.kind === 'connector' && bound.includes(entry.name)
+      const connected = entry.kind === 'connector' ? connectorEnabled : Boolean(entry._enabled || entry.isConnected)
       const isPinned = pinned.has(key)
       return (
         // 点击整行 = attach（与回车一致）：连接器挂到当前会话并出 chip；技能写输入框；
@@ -987,25 +1048,70 @@ export default function Catalogue({
               <span className="wbh-pinHover"><PickIcon name="pinHover" size={16} /></span>
             </button>
           )}
-          {/* 连接器行尾开关：显式承载「启用/停用」语义（点击整行不再承担它）。
-              停用状态显示为可点的开关（点击 = 启用并 attach），启用状态显示
-              绿色开关（点击 = 停用）。键盘 Enter 落在整行 = attach 语义不变。 */}
-          {entry.kind === 'connector' && (
-            <button type="button" className={`wbh-toggle${connected ? ' is-on' : ''}`}
-              role="switch" aria-checked={connected}
-              aria-label={`${connected ? '停用' : '启用'} ${entry.displayName}`}
+          {/* 连接器行尾控件：见 rowNode 顶部注释（① 已启用=绿开关 / ② 已授权=灰开关 /
+              ③ 未授权=「连接」文字按钮，与官方一致）。点击整行仍是 attach 语义。 */}
+          {entry.kind === 'connector' && (connectorEnabled || connectorAuthorised ? (
+            <button type="button" className={`wbh-toggle${connectorEnabled ? ' is-on' : ''}`}
+              role="switch" aria-checked={connectorEnabled}
+              aria-label={`${connectorEnabled ? '停用' : '启用'} ${entry.displayName}`}
               disabled={busyLocal === key}
               onClick={e => { e.stopPropagation(); void connectorAction(entry) }}>
               <i />
             </button>
-          )}
+          ) : (
+            <button type="button" className="wbh-linkAction" disabled={busyLocal === key}
+              aria-label={`连接 ${entry.displayName}`}
+              onClick={e => { e.stopPropagation(); void connectorAction(entry) }}>
+              <PickIcon name="connLink" size={14} />
+              <span>连接</span>
+            </button>
+          ))}
           {busyLocal === key && <span className="wbh-flyoutBusy">…</span>}
         </div>
       )
     }
 
+    // picker「连接器」面板顶部的「本机 MCP」一节：把**宿主侧真的加载了哪些 MCP** 摆出来
+    // （本插件托管的本地 MCP 可开关；DSH 自己加载的只读展示，插件不代管别人的配置）。
+    // connector 来源不在这里重复列——它在下面就是普通的官方连接器行。
+    const hostMcpRows = (variant === 'picker' && kind === 'connector')
+      ? hostMcp.filter(s => s && s.source !== 'connector')
+      : []
+    const hostMcpSection = hostMcpRows.length > 0 ? (
+      <div className="wbh-mcpSection">
+        <div className="wbh-mcpSectionTitle">本机 MCP</div>
+        {hostMcpRows.map(server => {
+          const key = `mcp/${server.name}`
+          const managed = Boolean(server.managed)
+          return (
+            <div key={key} className="wbh-flyoutRow is-mcp" role="menuitem" tabIndex={managed ? 0 : -1}
+              onClick={managed ? () => void localMcpAction(server) : undefined}
+              onKeyDown={managed ? (e => { if (e.key === 'Enter') void localMcpAction(server) }) : undefined}>
+              <span className="wbh-flyoutIcon is-mcp"><PickIcon name="connLink" size={16} /></span>
+              <span className="wbh-flyoutName">{server.name}</span>
+              <span className="wbh-mcpMeta">
+                {server.source === 'dsh' ? 'DSH 加载' : '本插件托管'} · {Number(server.toolCount) || 0} 个工具
+              </span>
+              {managed ? (
+                <button type="button" className={`wbh-toggle${server.enabled ? ' is-on' : ''}`}
+                  role="switch" aria-checked={Boolean(server.enabled)}
+                  aria-label={`${server.enabled ? '停用' : '启用'} ${server.name}`}
+                  disabled={busyLocal === key}
+                  onClick={e => { e.stopPropagation(); void localMcpAction(server) }}>
+                  <i />
+                </button>
+              ) : (
+                <span className="wbh-mcpBadge" title={server.note || ''}>只读</span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    ) : null
+
     const listNode = (
       <div className="wbh-flyoutList" ref={scrollRef} onScroll={onScroll}>
+        {hostMcpSection}
         {loading && <div className="wbh-flyoutState">正在读取…</div>}
         {!loading && !failed && visibleRows.length === 0 && (
           <div className="wbh-flyoutState">{String(query).trim()

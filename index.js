@@ -941,6 +941,76 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  /**
+   * 本进程里**所有**以 mcp__<serverName>__ 形式注册的 MCP 服务器 → 工具数。
+   * DSH 的 tools 服务按 scope chain 现算，所以这里看到的就是「当前真的加载了哪些 MCP」，
+   * 不管它是本插件托管的本地 MCP、官方连接器建立的 MCP 行，还是 DSH 配置 / 其它插件
+   * （如 openviking 的 mcp-proxy）拉起来的服务器。
+   */
+  const liveServerNames = () => {
+    const out = {}
+    try {
+      const tools = ctx.get?.('tools', false)
+      if (!tools || typeof tools.schemas !== 'function') return out
+      for (const schema of tools.schemas()) {
+        const name = schema?.name
+        if (typeof name !== 'string' || !name.startsWith('mcp__')) continue
+        const rest = name.slice('mcp__'.length)
+        // 按**第一个** __ 切：DSH 的 serverName 契约是 [A-Za-z0-9_-]{1,32}
+        // （packages/mcp/mcp-client 的 SERVER_NAME_PATTERN），所以 serverName 里
+        // 不可能出现 __；而工具名里可以（真机撞到过 mcp__tdocs-app__smartsheet__add_…，
+        // 按最后一个 __ 切会凭空造出一个不存在的服务器）。
+        const cut = rest.indexOf('__')
+        if (cut <= 0) continue
+        const server = rest.slice(0, cut)
+        out[server] = (out[server] || 0) + 1
+      }
+    } catch { /* 读不到就返回空表：调用方按「没有活工具」呈现 */ }
+    return out
+  }
+
+  /**
+   * 宿主侧 MCP 总清单（picker 的「本机 MCP」用它）。三类来源，边界明确：
+   *  · local-mcp：本插件托管的本地 MCP（storeRoot/mcp-servers/*.json）—— 可开关；
+   *  · connector：官方连接器落地后建立的 MCP 行 —— 连接器列表里已单列，这里带上
+   *    serverName 供对账（客户端会跳过它，避免重复展示）；
+   *  · dsh：进程里确实有 mcp__<server>__ 工具，但不属于上面两类 —— 由 DSH 配置或
+   *    其它插件加载。**只读展示**：插件不代管别人的 profile/配置，绝不替用户改写。
+   */
+  const hostMcpInventory = () => {
+    const live = liveServerNames()
+    const out = []
+    for (const entry of listLocalMcp()) {
+      const serverName = entry.serverName || entry.name
+      out.push({
+        name: entry.name, serverName, source: 'local-mcp', managed: true,
+        enabled: Boolean(entry.enabled), toolCount: live[serverName] ?? 0,
+        url: entry.url || '', transport: entry.transport || 'streamable-http',
+        tokenRef: entry.tokenRef || '', lastError: String(entry.lastError || ''),
+      })
+      delete live[serverName]
+    }
+    const registry = loadJson(P.registry, { version: 1, installed: {} })
+    for (const rec of Object.values(registry.installed ?? {})) {
+      if (rec?.kind !== 'connector') continue
+      const serverName = rec.serverName || rec.name
+      out.push({
+        name: rec.name, serverName, source: 'connector', managed: true,
+        enabled: Boolean(rec.enabled), toolCount: live[serverName] ?? 0, connector: rec.name,
+      })
+      delete live[serverName]
+    }
+    for (const [serverName, toolCount] of Object.entries(live)) {
+      out.push({
+        name: serverName, serverName, source: 'dsh', managed: false,
+        enabled: true, toolCount,
+        note: '由 DSH 配置或其它插件加载：本插件只展示，不代管（改配置请走 DSH 自己的设置）',
+      })
+    }
+    out.sort((a, b) => (Number(b.toolCount) - Number(a.toolCount)) || a.name.localeCompare(b.name))
+    return out
+  }
+
   // 只读：某个已安装连接器在本进程注册表中的实际工具（配合 /connectors/tools 的
   // 上游清单，一次调用即可闭合「上游 N 个 → 宿主 N 个」）。
   const liveToolsRoute = (res, url) => {
@@ -2516,6 +2586,18 @@ export function apply(ctx, config = {}) {
      * 栅栏 b) URL 白名单 loopback（localMcpSpec.isLoopbackUrl）
      * 栅栏 d) 每个写动作 console 日志 + 条目时间戳；disable/remove 立即 dispose
      * ---------------------------------------------------------------- */
+    // 宿主侧 MCP 总清单（含 DSH 机制加载的）。只读；即使 localMcp 关着也返回，
+    // 好让 picker 至少能把「DSH 已加载了哪些 MCP」如实显示出来。
+    if (route === 'GET /mcp/host') {
+      json(res, 200, {
+        ok: true,
+        guarded: !localMcpEnabled,
+        reason: localMcpEnabled ? '' : LOCAL_MCP_GUARD,
+        servers: hostMcpInventory(),
+      })
+      return true
+    }
+
     if (route === 'GET /mcp/local') {
       if (!localMcpEnabled) {
         json(res, 200, { ok: true, guarded: true, reason: LOCAL_MCP_GUARD, servers: [] })

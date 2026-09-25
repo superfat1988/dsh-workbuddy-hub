@@ -398,10 +398,17 @@ console.log('render smoke + hub import completeness: OK')
   // b) 行尾显式开关：真 button + role=switch + stopPropagation
   const toggleBlock = rowBlock.slice(rowBlock.indexOf("entry.kind === 'connector' && ("))
   assert.match(toggleBlock, /<button type="button" className=\{`wbh-toggle/, '连接器行尾必须是显式开关按钮（wbh-toggle）')
-  assert.ok(toggleBlock.includes('role="switch"') && toggleBlock.includes('aria-checked={connected}'), '开关要暴露 switch 语义与当前状态')
+  assert.ok(toggleBlock.includes('role="switch"') && toggleBlock.includes('aria-checked={connectorEnabled}'),
+    '开关要暴露 switch 语义，状态取**本地启用态** connectorEnabled（不是官方绑定态）')
   assert.ok(toggleBlock.includes('e.stopPropagation()'), '开关点击必须 stopPropagation（不能连带触发整行 attach）')
   assert.ok(toggleBlock.includes('void connectorAction(entry)'), '开关点击才调用 connectorAction（启/停用）')
-  assert.ok(toggleBlock.includes('aria-label={`${connected'), '开关 aria-label 必须按状态区分「启用/停用」')
+  assert.ok(toggleBlock.includes('aria-label={`${connectorEnabled'), '开关 aria-label 必须按状态区分「启用/停用」')
+  // b2) 未授权（未 bound）时行尾是官方那种「连接」文字按钮，而不是灰开关
+  assert.ok(toggleBlock.includes('className="wbh-linkAction"'), '未授权的连接器行尾要有「连接」文字按钮（对齐官方）')
+  assert.ok(rowBlock.includes('connectorAuthorised'), '行尾控件三态判定要基于「已启用 / 已授权 / 未授权」')
+  // b3) 开关状态不得再取官方绑定态（真机缺陷：bound 但本地 enabled=false 却显示 ON）
+  assert.ok(!rowBlock.includes('const connected = entry.kind === \'connector\' ? isBound(entry)'),
+    '连接器开关状态不得用官方绑定态 isBound()（会把已关闭的 MCP 显示成 ON）')
   // c) attach 的连接器分支：点击与回车都进入「未启用先启用 + mount 到当前会话」，
   //    不再承担「已启用时再点 = 断开」（那是开关的职责）
   const attachConnector = composerSrc.slice(composerSrc.indexOf("if (entry.kind === 'connector') {"), composerSrc.indexOf("} else if (entry.kind === 'expert') {"))
@@ -426,5 +433,24 @@ console.log('render smoke + hub import completeness: OK')
   assert.ok(composerCatch.includes('addSelection(replacedOnAdd[0], sessionId)'), '专家单槽位：失败要把被替换的专家 chip 还原')
   assert.match(composerSrc, /import \{[^}]*\bremoveSelection\b[^}]*\} from '\.\/hub\.js'/, 'removeSelection 必须从 hub.js 导入')
   assert.ok(built.includes('removeSelection(sessionId, entry.kind, entry.name)'), '构建产物必须携带 chip 回滚行为')
+  // g) 开关打开 = 真的「已加载」：启用后挂到本会话并出 chip；关闭时撤 chip
+  const connAction = catalogueSrc.slice(catalogueSrc.indexOf('const connectorAction'), catalogueSrc.indexOf('const openDetail'))
+  assert.ok(connAction.includes('addSelection(entry, sessionId)'), '启用连接器后要把它加成 chip（输入框下方显示其 icon）')
+  assert.ok(connAction.includes("hub.mount(sessionId, entry.kind, entry.name)"), '启用连接器后要挂到当前会话（chip 才不是空壳）')
+  assert.ok(connAction.includes('removeSelection(sessionId, entry.kind, entry.name)'), '停用连接器后要撤掉本会话的 chip')
+  // 卸载必须带显式 sessionId：hub.unmount(undefined,…) 会被宿主 409 静默丢掉（挂载残留）
+  assert.ok(!connAction.includes('hub.unmount(undefined'), '停用路径不得再用 unmount(undefined)（静默 409）')
+  assert.ok(catalogueSrc.includes('const unmountHere'), '要有一个统一带 sessionId 的卸载助手')
+  // h) picker 专家搜索：有搜索词时用官方注册表结果（此前结果被丢弃 → 列表纹丝不动）
+  const baseRowsBlock = pickerBlock.slice(pickerBlock.indexOf('const baseRows = kind ==='), pickerBlock.indexOf('const pinnedOfKind'))
+  assert.ok(baseRowsBlock.includes("String(query ?? '').trim()"), '专家面板要按「有没有搜索词」分支')
+  assert.ok(baseRowsBlock.includes('? visible'), '有搜索词时必须用 hub.list(kind,{query}) 的结果（visible），否则搜索无效')
+  // i) picker 连接器面板要有「本机 MCP」一节（含 DSH 自己加载的，只读展示）
+  const mcpSection = pickerBlock.slice(pickerBlock.indexOf('const hostMcpSection'), pickerBlock.indexOf('const listNode'))
+  assert.ok(pickerBlock.includes('hub.hostMcpList()') || catalogueSrc.includes('hostMcpList()'), '要拉宿主侧 MCP 总清单 /mcp/host')
+  assert.ok(mcpSection.includes('wbh-mcpSectionTitle'), '要有「本机 MCP」分组标题')
+  assert.ok(mcpSection.includes("'DSH 加载'") && mcpSection.includes('wbh-mcpBadge'), 'DSH 自己加载的 MCP 只读展示（带徽标，不给开关）')
+  assert.ok(mcpSection.includes('localMcpAction(server)'), '本插件托管的本地 MCP 才有开关（localMcpAction）')
+  assert.ok(built.includes('wbh-mcpSection'), '构建产物必须携带「本机 MCP」一节')
 }
 console.log('picker connector row: click == Enter (attach) + explicit toggle + failed attach rolls the chip back: OK')

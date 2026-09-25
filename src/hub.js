@@ -442,6 +442,12 @@ export const hub = {
   localMcpDisable: name => post('/mcp/local/disable', { name }),
   localMcpRemove: name => post('/mcp/local/remove', { name }).then(r => { _emitChange(); return r }),
 
+  // 宿主侧 MCP 总清单：本插件托管的本地 MCP + 官方连接器建立的 MCP 行 + **DSH 自己
+  // 加载的**（其它插件 / 配置行，如 openviking 的 mcp-proxy）。picker 的「本机 MCP」用它。
+  hostMcpList: () => api('/mcp/host').catch(error => ({
+    ok: false, guarded: false, servers: [], error: String(error?.message || error),
+  })),
+
   auth: () => api('/wb-auth'),
   authStart: () => post('/wb-auth/start', {}),
   authPoll: () => post('/wb-auth/poll', {}),

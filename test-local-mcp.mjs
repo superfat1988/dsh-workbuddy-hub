@@ -34,6 +34,7 @@ function makeCtx(root, opts = {}) {
   const ctx = {
     get: name => (name === 'tools' ? { schemas: () => [
       { name: 'mcp__scrapling__fetch' }, { name: 'bash' },
+      ...(opts.extraTools ?? []),
     ] } : undefined),
     connection: {},
     webServer: { register: spec => { handler.current = spec.handler; return () => {} } },
@@ -334,6 +335,62 @@ console.log('6. 任务 4：mcp.json 的 command/url/headers 必须被扫到 …'
   assert.ok(!flags3.some(f => f.includes('external-url')), 'official-source urls must not be flagged')
   // 损坏的 json 退回纯文本规则（不抛错）
   assert.deepEqual(scanFlags('mcp.json', '{not json'), [])
+}
+console.log('   OK')
+
+// ---- 9. GET /mcp/host：宿主侧 MCP 总清单（三类来源，含 DSH 自己加载的）-------
+// picker 的「本机 MCP」一节靠它：本插件托管的可开关；DSH 自己加载的只读展示。
+// 假 ctx 的 tools 服务里有 mcp__scrapling__fetch + bash，所以：
+//   · 'demo-local' 是 store 里注册并启用的本地 MCP → source=local-mcp（可管）
+//   · 'scrapling' 在 tools 里活着但不在 store/连接器里 → source=dsh（只读）
+//   · 手工写进 registry 的连接器 → source=connector（客户端会跳过它避免重复）
+{
+  const root = makeRoot('host')
+  mkdirSync(join(root, '.meta'), { recursive: true })
+  writeFileSync(join(root, '.meta', 'registry.json'), JSON.stringify({
+    version: 1,
+    installed: { 'connector/tdocs-app': { kind: 'connector', name: 'tdocs-app', serverName: 'tdocs-app', enabled: false, dest: join(root, 'connectors', 'tdocs-app') } },
+  }, null, 2))
+  const { ctx, handler } = makeCtx(root, { extraTools: [
+    // 真机撞到过：工具名里含 __ → 必须仍归属 serverName=tdocs-app，而不是造出假服务器
+    { name: 'mcp__tdocs-app__smartsheet__add_dashboard_component' },
+  ] })
+  apply(ctx, { storeRoot: root, localMcp: true, keepalive: false })
+  const call = makeCaller(handler.current)
+
+  const reg = await call('POST', '/mcp/local', { name: 'demo-local', url: 'http://127.0.0.1:9111/mcp' })
+  assert.equal(reg.status, 200, `register demo-local: ${reg.raw}`)
+  const en = await call('POST', '/mcp/local/enable', { name: 'demo-local' })
+  assert.equal(en.status, 200, `enable demo-local: ${en.raw}`)
+
+  const host = await call('GET', '/mcp/host')
+  assert.equal(host.status, 200)
+  const byName = Object.fromEntries((host.json.servers || []).map(s => [s.name, s]))
+
+  assert.ok(byName['demo-local'], '/mcp/host 必须列出本插件托管的本地 MCP')
+  assert.equal(byName['demo-local'].source, 'local-mcp')
+  assert.equal(byName['demo-local'].managed, true, '托管条目 managed=true（客户端才给开关）')
+  assert.equal(byName['demo-local'].enabled, true)
+
+  assert.ok(byName.scrapling, '/mcp/host 必须列出 DSH 自己加载的 MCP（有 mcp__<server>__ 工具但不在托管清单里）')
+  assert.equal(byName.scrapling.source, 'dsh')
+  assert.equal(byName.scrapling.managed, false, 'DSH 加载的条目 managed=false（只读展示，插件不代管别人的配置）')
+  assert.equal(byName.scrapling.toolCount, 1, '工具数按活注册表现算')
+
+  assert.ok(byName['tdocs-app'], '/mcp/host 必须列出连接器建立的 MCP 行（客户端据此去重）')
+  assert.equal(byName['tdocs-app'].source, 'connector')
+  assert.equal(byName['tdocs-app'].toolCount, 1, '工具名里含 __ 时也要正确归属到 serverName=tdocs-app')
+  assert.ok(!byName['tdocs-app__smartsheet'],
+    '不得按最后一个 __ 切出假服务器（serverName 契约不允许 __）')
+
+  // localMcp 关着时：仍然返回清单（好让 picker 如实显示 DSH 已加载了什么），但带 guarded 标记
+  const { ctx: ctx2, handler: handler2 } = makeCtx(makeRoot('host-off'))
+  apply(ctx2, { storeRoot: makeRoot('host-off2'), keepalive: false })
+  const call2 = makeCaller(handler2.current)
+  const off = await call2('GET', '/mcp/host')
+  assert.equal(off.status, 200)
+  assert.equal(off.json.guarded, true, 'localMcp 关闭时也要能列出 DSH 侧清单，并标 guarded')
+  assert.ok((off.json.servers || []).some(s => s.source === 'dsh'), '关闭态下 DSH 侧条目仍要可见')
 }
 console.log('   OK')
 

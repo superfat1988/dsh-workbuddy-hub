@@ -284,3 +284,14 @@
 .wbh-flyoutRow .wbh-toggle.is-on:hover{background:#00a55d}
 .wbh-flyoutRow .wbh-toggle:focus-visible{outline:2px solid var(--wb-palette-blue-1,#2f6bff);outline-offset:1px}
 .wbh-flyoutRow .wbh-toggle:disabled{opacity:.5;cursor:default}
+
+/* --- picker「本机 MCP」一节 -------------------------------------------------
+   显示宿主侧真的加载了哪些 MCP：本插件托管的本地 MCP（可开关）+ DSH 自己加载的
+   （其它插件/配置行，只读展示）。样式沿用官方 picker 行，只加分组标题与元信息。 */
+.wbh-mcpSection{padding:2px 0 6px;border-bottom:1px solid var(--wb-border-subtle,rgba(0,0,0,.06));margin-bottom:4px}
+.wbh-mcpSectionTitle{padding:2px 14px 4px;font-size:11px;line-height:16px;color:var(--wb-color-text-tertiary,#999)}
+.wbh-flyoutRow.is-mcp{cursor:default}
+.wbh-flyoutRow.is-mcp .wbh-flyoutIcon.is-mcp{border-radius:4px}
+.wbh-flyoutRow.is-mcp .wbh-flyoutName{flex:0 0 auto}
+.wbh-mcpMeta{flex:0 1 auto;min-width:0;text-align:right;padding-right:8px;font-size:11px;line-height:16px;color:var(--wb-color-text-tertiary,#999);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wbh-mcpBadge{flex:0 0 auto;padding:0 6px;border:1px solid var(--wb-border-default,rgba(0,0,0,.12));border-radius:4px;font-size:10px;line-height:18px;color:var(--wb-color-text-tertiary,#999)}
