@@ -367,7 +367,7 @@ assert.ok(/aria-label=\{name\}/.test(railSrc), '连接器图标必须带名字�
   assert.ok(withIcon.includes('<img'), '有官方 icon 时渲染 <img>')
   assert.ok(withIcon.includes(`alt="${label}"`), 'img 的 alt 必须是 displayName')
   assert.ok(withIcon.includes(`aria-label="${label}"`), 'img 的 aria-label 必须带名字')
-  assert.ok(withIcon.includes('wbh-railIconImg'), '图标必须挂 wbh- 前缀的样式类')
+  assert.ok(withIcon.includes('wbh-chipLogoImg'), '图标必须挂 wbh- 前缀的样式类（官方式 16px 圆形 logo）')
   const withoutIcon = renderToString(React.createElement(Icon, { icon: '', name: label }))
   assert.ok(!withoutIcon.includes('<img'), '没有 icon 时不渲染 img（原通用图标回退）')
   rmSync(cache, { recursive: true, force: true })
@@ -454,3 +454,34 @@ console.log('render smoke + hub import completeness: OK')
   assert.ok(built.includes('wbh-mcpSection'), '构建产物必须携带「本机 MCP」一节')
 }
 console.log('picker connector row: click == Enter (attach) + explicit toggle + failed attach rolls the chip back: OK')
+
+// ---- 已加载 chip 的官方对齐 + 开关动画（官方产物实测值）------------------------
+// chip 数值来自官方 chat 端产物静态 CSS（.cr-chip-base/.cr-connector-chip__logo/.cr-chip-label）；
+// 开关来自官方 TDesign（.t-switch / size-s），关键点是**用 transform 位移**而不是 animate left。
+{
+  const rail = readFileSync(new URL('./src/AttachedRail.jsx', import.meta.url), 'utf8')
+  const css = readFileSync(new URL('./src/app.css', import.meta.url), 'utf8')
+  const toggleCss = readFileSync(new URL('./src/official-picker.css', import.meta.url), 'utf8')
+  // a) chip 结构：关闭按钮 + 官方圆形 logo + 13px 标签
+  assert.ok(rail.includes('wbh-chipClose') && rail.includes('wbh-chipLogo') && rail.includes('wbh-chipLabel'),
+    'chip 结构要是 [关闭][logo][名称]（对齐官方 .cr-chip-*）')
+  assert.ok(!rail.includes('wbh-railX') && !rail.includes('wbh-railIcon'),
+    '旧的胶囊 chip 类名（wbh-railX / wbh-railIcon）应已被官方规格替换')
+  // b) chip 数值 = 官方值
+  assert.ok(css.includes('height:32px;padding:0 8px;border:none;border-radius:8px;background:transparent'),
+    'chip 容器要用官方 .cr-chip-base 的 32/8/透明底 数值')
+  assert.ok(css.includes('background-color .15s ease'), 'chip hover 过渡用官方 .15s ease')
+  assert.ok(css.includes('font-size:13px;font-weight:500;line-height:20px'), '标签用官方 13px/500/20px')
+  assert.ok(css.includes('.wbh-chipLogo.is-connector{margin-left:-4px'), '连接器 logo 用官方 -4px 收紧')
+  assert.ok(css.includes('border-radius:50%'), '连接器 logo 是圆形（官方 .cr-connector-chip__logo）')
+  assert.ok(css.includes('rgba(0,0,0,.06)'), 'hover 底色用官方 rgba(0,0,0,.06)')
+  // c) 开关：官方曲线 + transform 位移（旧实现 animate left → 卡顿根因）
+  assert.ok(toggleCss.includes('cubic-bezier(.38,0,.24,1)'), '开关要用官方 TDesign 曲线 cubic-bezier(.38,0,.24,1)')
+  assert.ok(toggleCss.includes('transition:all .2s cubic-bezier(.38,0,.24,1)'), '时长/属性照抄官方 .2s all')
+  assert.ok(/\.wbh-toggle\.is-on i\{transform:translateX\(10px\)\}/.test(toggleCss),
+    '把手位移必须走 transform（官方 .t-switch__handle 用 translate(-100%)）')
+  assert.ok(!/\.wbh-toggle\.is-on i\{[^}]*left:/.test(toggleCss), '把手不得再用 left 做位移')
+  const builtRail = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
+  assert.ok(builtRail.includes('wbh-chipLabel'), '构建产物必须携带新 chip 结构')
+}
+console.log('loaded chips: official .cr-chip-* metrics + TDesign switch animation: OK')

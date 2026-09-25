@@ -176,17 +176,38 @@
 .wbh-linkAction svg{flex:0 0 14px;width:14px;height:14px;display:block;color:#666}
 .wbh-linkAction span{font-size:12px;line-height:22px;color:#666}
 .wbh-flyoutRow:hover .wbh-linkAction svg,.wbh-flyoutRow:hover .wbh-linkAction span{color:#333}
+/* 开关 —— 官方 picker 用的是 TDesign Switch（.t-switch），几何取官方 size-s：
+     .t-switch  -> height:var(--td-comp-size-xxxs)=16px; min-width:16/.618≈25.9→26px;
+                   border-radius:var(--td-radius-round); background:#ddd（--td-bg-color-secondarycomponent）
+                   hover 底色 #c6c6c6；checked 用 --td-brand-color（本站主题为绿色）
+     把手 .t-size-s .t-switch__handle -> top:2px; left:2px; 12x12; border-radius:round
+     checked 位：left:calc(100% - 2px) + transform:translate(-100%)
+   两条规则都带官方曲线 transition:all .2s cubic-bezier(.38,0,.24,1)。
+   ⚠️ 之前「动画不流畅」的根因有二：
+   ① 旧实现 animate 的是 left（每帧重排），这里改为 left 固定、用 translateX 走位；
+   ② DSH 皮肤有一条**未分层**的 `html[data-dsh-skin] button{transition:background-color .13s,…}`，
+      而未分层规则无条件压过分层规则（插件 CSS 被 DSH 包在 @layer 里）—— 所以 track 的
+      过渡必须 !important，否则会被皮肤降级成 .13s 的默认按钮过渡。 */
 .wbh-toggle{
-  flex:0 0 26px;width:26px;height:16px;border-radius:999px;background:rgba(0,0,0,.06);
-  border:none;padding:0;cursor:pointer;position:relative;transition:background .15s;
+  flex:0 0 26px;width:26px;height:16px;border-radius:999px;background:#ddd;
+  border:none;padding:0;cursor:pointer;position:relative;
+  transition:all .2s cubic-bezier(.38,0,.24,1) !important;
   box-sizing:border-box;display:inline-flex;align-items:center;
 }
 .wbh-toggle i{
   width:12px;height:12px;border-radius:50%;background:#fff;
-  box-shadow:0 1px 2px rgba(0,0,0,.1);position:absolute;top:2px;left:2px;transition:left .15s;
+  box-shadow:0 1px 2px rgba(0,0,0,.12);
+  position:absolute;top:2px;left:2px;transform:translateX(0);
+  transition:all .2s cubic-bezier(.38,0,.24,1);
+  will-change:transform;
 }
 .wbh-toggle.is-on{background:#00b96b}
-.wbh-toggle.is-on i{left:12px}
+.wbh-toggle.is-on i{transform:translateX(10px)}
+.wbh-toggle:hover{background:#c6c6c6}
+.wbh-toggle.is-on:hover{background:#00a55d}
+.wbh-toggle:disabled{cursor:not-allowed;opacity:.5}
+.wbh-toggle:disabled:hover{background:#ddd}
+.wbh-toggle.is-on:disabled:hover{background:#00b96b}
 .wbh-flyoutBusy{font-size:12px;line-height:22px;color:rgba(26,26,26,.6);flex:0 0 auto}
 
 /* ---------- 分隔线 + 底部项（官方 _divider/_footer/_footerItem/_actionRow） ---------- */

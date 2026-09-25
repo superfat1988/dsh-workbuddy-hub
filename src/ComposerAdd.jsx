@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react'
-import { hub, addSelection, removeSelection, markExpertRecent, peekPendingExpert, clearPendingExpert, onCatalogChange, onMarketRequest, setComposerSession, authState, onAuthChange, refreshAuth, onAuthRequired, claimAuthGate, settleAuthGate, STALE_LOGIN_REASON } from './hub.js'
+import { hub, addSelection, removeSelection, reconcileSelections, markExpertRecent, peekPendingExpert, clearPendingExpert, onCatalogChange, onMarketRequest, setComposerSession, authState, onAuthChange, refreshAuth, onAuthRequired, claimAuthGate, settleAuthGate, STALE_LOGIN_REASON } from './hub.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
 import Catalogue from './Catalogue.jsx'
@@ -58,6 +58,9 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
       const [inst, mnt] = await Promise.all([hub.installed(), hub.mounted(sessionId)])
       setInstalled(inst)
       setMounted(new Set(mnt))
+      // 宿主才是「这个会话挂了什么」的真源：刷新/切会话后据此对账 chip，
+      // 否则已加载的 MCP/专家在输入框下方一个都不显示（真机缺陷）。
+      reconcileSelections(sessionId, mnt, inst)
     } catch { /* keep previous */ }
   }, [sessionId])
 

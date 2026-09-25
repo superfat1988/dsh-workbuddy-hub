@@ -34,19 +34,33 @@
 .wbh-btnGhost{border:1px solid var(--wb-border-default);background:transparent;color:var(--wb-color-text-primary)}
 .wbh-btnGhost:hover{background:var(--wb-bg-hover)}
 
-.wbh-rail{display:inline-flex;align-items:center;gap:7px;margin-left:6px;flex-wrap:nowrap}
-.wbh-railChip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 6px 0 4px;border:1px solid var(--wb-border-default);border-radius:999px;background:var(--wb-bg-secondary);font-size:12px;color:var(--wb-color-text-primary)}
-.wbh-railIcon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;overflow:hidden;background:var(--wb-bg-hover)}
-.wbh-railIcon img{width:100%;height:100%;object-fit:cover}
-/* 连接器 chip 的官方 MCP 图标：官方注册表 icon 是方形素材 → 图标盒用小圆角（不是
-   专家/技能的圆形盒），16px 居中，与 chip 文字垂直对齐。加载失败时 React 换回
-   通用 link 图标（见 AttachedRail 的 RailConnectorIcon），样式上不会出现破图。 */
-.wbh-railIcon.is-connector{border-radius:4px}
-.wbh-railIcon.is-connector img.wbh-railIconImg{width:16px;height:16px;object-fit:cover;border-radius:3px}
-.wbh-railName{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wbh-railX{display:grid;place-items:center;width:16px;height:16px;padding:0;border:none;border-radius:50%;background:transparent;color:var(--wb-color-text-tertiary);cursor:pointer;opacity:0;transition:opacity .12s ease}
-.wbh-railChip:hover .wbh-railX,.wbh-railX:focus-visible{opacity:1}
-.wbh-railX:hover{background:var(--wb-bg-hover);color:var(--wb-color-text-primary)}
+.wbh-rail{display:inline-flex;align-items:center;gap:4px;margin-left:6px;flex-wrap:nowrap}
+/* ---------------------------------------------------------------------------
+   已加载条目的 chip —— 数值照抄官方 chat 端（genie-chat-ui 的 .cr-chip-base /
+   .cr-connector-chip / .cr-chip-label，取自官方产物静态 CSS）：
+     .cr-chip-base{display:inline-flex;align-items:center;gap:4px;height:32px;
+                   padding:0 8px;border:none;border-radius:8px;background:transparent;
+                   transition:background-color .15s ease}
+     .cr-chip-base--static:hover{background:rgba(0,0,0,.06)}
+     .cr-chip-icon{width:16px;height:16px;color:rgba(0,0,0,.5)}
+     .cr-chip-label{font-size:13px;font-weight:500;line-height:20px;color:rgba(0,0,0,.5)}
+     .cr-connector-chip__logo{width:16px;height:16px;border-radius:50%;overflow:hidden;
+                              background:#f5f5f5;margin-left:-4px}
+   即：32 高 / 圆角 8（不是胶囊）/ 透明底 + hover 浅灰 / 16px 圆形 logo / 13px 500 标签。
+--------------------------------------------------------------------------- */
+.wbh-railChip{display:inline-flex;align-items:center;gap:4px;height:32px;padding:0 8px;border:none;border-radius:8px;background:transparent;cursor:default;flex-shrink:0;transition:background-color .15s ease}
+.wbh-railChip:hover,.wbh-railChip:focus-within{background:var(--wbh-chip-hover-bg,rgba(0,0,0,.06))}
+.wbh-chipClose{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;padding:0;border:none;border-radius:4px;background:transparent;color:rgba(0,0,0,.5);cursor:pointer;flex-shrink:0;transition:color .15s ease}
+.wbh-railChip:hover .wbh-chipClose,.wbh-chipClose:focus-visible{color:rgba(0,0,0,.9)}
+.wbh-chipClose:focus-visible{outline:2px solid #007fd4;outline-offset:1px}
+.wbh-chipClose:disabled{opacity:.45;cursor:default}
+.wbh-chipLogo{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;overflow:hidden;flex-shrink:0;background:#f5f5f5}
+.wbh-chipLogo img{width:100%;height:100%;object-fit:cover;display:block}
+/* 连接器 logo 按官方 .cr-connector-chip__logo：圆形 + 左侧 -4px 收紧（与关闭按钮贴齐） */
+.wbh-chipLogo.is-connector{margin-left:-4px;border-radius:50%}
+.wbh-chipLogo img.wbh-chipLogoImg{width:16px;height:16px;object-fit:cover;border-radius:50%}
+.wbh-chipLabel{font-size:13px;font-weight:500;line-height:20px;color:rgba(0,0,0,.5);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;user-select:none}
+.wbh-railChip:hover .wbh-chipLabel,.wbh-railChip:focus-within .wbh-chipLabel{color:rgba(0,0,0,.9)}
 
 .wbh-settings{padding:4px 2px}
 .wbh-secTitle{margin:0 0 10px;font-size:13px;font-weight:600;color:var(--wb-color-text-primary)}

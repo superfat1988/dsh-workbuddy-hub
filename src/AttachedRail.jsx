@@ -14,7 +14,7 @@ export function RailConnectorIcon({ icon, name }) {
   return (
     <img src={icon} alt={name} title={name} aria-label={name}
       onError={() => setBroken(true)}
-      className="wbh-railIconImg" />
+      className="wbh-chipLogoImg" />
   )
 }
 
@@ -48,20 +48,23 @@ export default function AttachedRail({ sessionId }) {
   return (
     <div className="wbh-rail" data-rail-count={items.length} data-session={sessionId || 'none'}>
       {items.map(item => (
-        <span key={item.key} className="wbh-railChip" title={`${item.kind}：${item.displayName}`}>
-          <span className={`wbh-railIcon${item.kind === 'connector' ? ' is-connector' : ''}`}>
-            {/* 连接器走官方 MCP icon（独立小图标分支）；专家/技能语义不同，保持原样 */}
+        /* 结构对齐官方 chat 端 chip（.cr-chip-base）：[关闭][logo][名称]，
+           容器 32 高 / 圆角 8 / 透明底 + hover 底色，具体数值见 app.css。 */
+        <span key={item.key} className="wbh-railChip" data-kind={item.kind}
+          title={`${item.kind}：${item.displayName}`}>
+          <button type="button" className="wbh-chipClose" disabled={busy === item.key}
+            aria-label={`移除 ${item.displayName}`} onClick={() => void detach(item)}>
+            <WbIcon name="close" size={14} />
+          </button>
+          <span className={`wbh-chipLogo${item.kind === 'connector' ? ' is-connector' : ''}`}>
+            {/* 连接器走官方 MCP icon（加载失败回退通用图标）；专家/技能语义不同，保持原样 */}
             {item.kind === 'connector'
               ? <RailConnectorIcon icon={item.icon} name={item.displayName} />
               : item.icon
                 ? <img src={item.icon} alt="" onError={e => { e.currentTarget.style.display = 'none' }} />
                 : <WbIcon name={item.kind === 'expert' ? 'person' : 'sparkle'} size={13} />}
           </span>
-          <span className="wbh-railName" aria-hidden="true">{item.displayName}</span>
-          <button type="button" className="wbh-railX" disabled={busy === item.key}
-            aria-label={`移除 ${item.displayName}`} onClick={() => void detach(item)}>
-            <WbIcon name="close" size={11} />
-          </button>
+          <span className="wbh-chipLabel">{item.displayName}</span>
         </span>
       ))}
     </div>

@@ -152,6 +152,46 @@ export function removeSelection(sessionId, kind, name) {
   if (next.length !== before) { _selectedBySession.set(key, next); _emitSelection() }
 }
 
+/**
+ * 把宿主侧的真实挂载**对账**进客户端 chip 列表。
+ *
+ * 背景（真机缺陷）：chip 此前只活在客户端内存里（_selectedBySession），而「这个会话挂了什么」
+ * 的真源是宿主 mounts.json。于是**刷新页面（含插件重启）或切到别的会话**时客户端列表是空的
+ * → 输入框下方已加载的 MCP / 专家一个都不渲染，而宿主其实还挂着。
+ *
+ * 对账规则：宿主赢。mounts 有、客户端没有的 → 补上（displayName/icon 取自 registry）；
+ * 客户端有、宿主没有的（幽灵 chip）→ 丢掉。待生效专家在落位时会立刻 mount，不会被误删。
+ *
+ * @param {string} sessionId
+ * @param {string[]} mountedKeys 宿主返回的 'kind/name' 列表
+ * @param {Record<string, object>} installed 宿主 registry（供 displayName / icon）
+ */
+export function reconcileSelections(sessionId, mountedKeys, installed = {}) {
+  const key = sessionId || '_unbound'
+  const prev = _selectedBySession.get(key) || []
+  const next = []
+  for (const entryKey of mountedKeys || []) {
+    const raw = String(entryKey || '')
+    const cut = raw.indexOf('/')
+    if (cut <= 0) continue
+    const kind = raw.slice(0, cut)
+    const name = raw.slice(cut + 1)
+    if (!kind || !name || next.some(x => x.key === raw)) continue
+    const rec = installed[raw] || {}
+    next.push({
+      key: raw, kind, name,
+      displayName: rec.displayName || rec.name || name,
+      icon: rec.icon || '',
+    })
+  }
+  const same = prev.length === next.length && prev.every((item, i) => item.key === next[i].key)
+  if (same) return prev
+  if (next.length === 0) _selectedBySession.delete(key)
+  else _selectedBySession.set(key, next)
+  _emitSelection()
+  return next
+}
+
 const _changeListeners = new Set()
 export const onCatalogChange = fn => { _changeListeners.add(fn); return () => { _changeListeners.delete(fn) } }
 const _emitChange = () => { for (const fn of _changeListeners) { try { fn() } catch {} } }
