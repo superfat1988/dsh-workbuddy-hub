@@ -14,8 +14,8 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 | 本地内容仓 | `~/workbuddyskills/` | `.meta/registry.json`、`.meta/mounts.json`、`.meta/icons/`、`skills/ experts/ connectors/` |
 | DSH 挂载 | `~/.dsh/skills/<prefix><name>` | 符号链接（DSH 扫描器原生跟随） |
 | 随插件 skill | `skills/workbuddy-find-tools`、`skills/workbuddy-experts` | 工具检索 / 专家推荐与召唤 |
-| 随插件脚本 | `scripts/hub-find.mjs` | agent 的**紧凑检索入口**（专家/技能/连接器/已装清单 + `inspect` 装前安全预检）：本地过滤+排版，一次查询约 0.1–0.9KB，替代会把整段 JSON（12.7KB，最坏 473KB）塞进上下文的裸 curl；也绕开了连接栅栏（裸 curl 连 /health 都 401）|
-| agent 工具 | `workbuddy_install`（Host 经 `ctx.tools.register` 注册） | **带 DSH 原生审批的安装工具**：装前只读预检 → 审批 → 才真装；连接器落地保持停用 |
+| 随插件脚本 | `scripts/hub-find.mjs` | agent 的**紧凑检索入口**（专家/技能/连接器/已装清单 + `inspect` 装前安全预检 + `update-check` 只读检查更新）：本地过滤+排版，一次查询约 0.1–0.9KB，替代会把整段 JSON（12.7KB，最坏 473KB）塞进上下文的裸 curl；也绕开了连接栅栏（裸 curl 连 /health 都 401）|
+| agent 工具 | `workbuddy_install` / `workbuddy_uninstall`（Host 经 `ctx.tools.register` 注册） | **带 DSH 原生审批的安装/卸载工具**：安装=装前只读预检 → 审批 → 才真装（连接器落地保持停用）；卸载=只读盘点 → 审批 → 才真卸（连接器先停用 MCP 传输、专家摘全部会话挂载） |
 
 **官方源是唯一真源，GitHub 镜像只是灾备**（`mirrorFallback: false` 是默认值）：
 - 列表 / 目录 / 检索（`/market-list`、`/catalog`、`/search`）在官方失败时**不再静默换成镜像内容**，
@@ -50,7 +50,7 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 | GET | `/installed` | 已装清单（连接器附带实时 `enabled`/`status`/`credentialRefs`） |
 | GET | `/updates[?refresh=1]` | **检查更新**（只读）：纯官方元数据比对 —— 技能比官方 `version`、专家比官方 `updatedAt`、连接器比官方 MCP 定义哈希；取不到官方数据一律 `unknown` + 原因，**绝不**判「已是最新」。结果缓存 60s，`refresh=1` 强制重算；**永远不用镜像** |
 | POST | `/install {kind,name}` | 按需安装（官方优先；技能/专家/连接器都记 `officialMeta` 溯源）。与 `workbuddy_install` 工具共用同一实现 `installEntry`；本路由是 Web UI 的安装通道（**不经过审批**——审批在工具链路里） |
-| POST | `/uninstall {kind,name}` | 先拆传输层与技能链接，再删文件，并摘掉各会话里的挂载 |
+| POST | `/uninstall {kind,name}` | 卸载（与 `workbuddy_uninstall` 工具共用同一实现 `uninstallEntry`）：连接器先停用 MCP 传输 → 拆技能链接 → 删文件 → 更新注册表 → 摘掉各会话挂载 → 专家顺带删 agent preset。本路由是 Web 设置页「移除」的通道（用户亲手点的，不需要审批） |
 | GET | `/mounted?sessionId=` | 本会话已挂载条目（只读，缺 sessionId 时按最近会话兜底并标 `sessionSource`） |
 | POST | `/mount` \| `/unmount {sessionId,kind,name}` | 会话级挂载（安装 ≠ 挂载）；**写操作必须显式传 `sessionId`，缺失返回 409**，绝不兜底猜会话 |
 | POST | `/connectors/enable` \| `/connectors/disable {name}` | 动态挂载/拆卸 MCP 传输 |
@@ -109,6 +109,22 @@ workbuddy_install { kind: "expert"|"skill"|"connector", name, source?: "official
 只有 turn 内的工具 handler 能发起审批（approval 服务要求 open turn + agent）——
 所以 HTTP 路由与脚本都做不到这件事；Web 设置页的 `/install` 是用户亲手点的另一条通道，不需要审批。
 
+## agent 工具：workbuddy_uninstall（先说明 → DSH 原生审批 → 才真卸）
+
+模型移除任何已装条目的**正规通道**（与 `workbuddy_install` 同一套写法）：
+
+```
+workbuddy_uninstall { kind: "expert"|"skill"|"connector", name }
+```
+
+`execute` 的固定顺序：
+
+1. **只读盘点**：从注册表读出该条目的文件数/体量/安装时间/来源/当前启用状态（不写盘、不拆传输、不动挂载）；未安装时如实说「无需卸载」，不弹审批；
+2. **DSH 原生审批**，reason 写清「将移除什么 + 多大体量 + 什么影响（连接器先停用 MCP 传输；专家摘全部会话挂载）+ 不可撤销」；
+3. 审批四分支与 `workbuddy_install` 完全一致：只有 `allowed-once` 才真卸；`rejected`/`cancelled` 不卸并如实转述；**`unavailable` → fail-closed**；`ctx.approval` / `exec.agent` 缺位同样 fail-closed；
+4. 卸载复用与 `POST /uninstall` 完全相同的 `uninstallEntry`（连接器先停用 MCP 传输，防止 mcp-client 行悬空 → 拆技能链接 → 删文件 → 更新注册表 → `pruneMounts` 摘挂载 → 专家删 agent preset）；
+5. 每次调用写一行 `[wbh] uninstall …` 审计（kind/name/审批结果/时间）。
+
 ## 装前预检：hub-find.mjs inspect（只读、不落盘）
 
 ```bash
@@ -123,6 +139,23 @@ node scripts/hub-find.mjs inspect <expert|skill|connector> <name> [--json]
 `风险标记: 无|<列表>` / `外网/命令/凭据` / `头部: <SKILL.md 或人设前 120 字>`。
 失败语义一行给清：`NOT_FOUND`（官方没有此条目，退出码 3）、`NEED_LOGIN`（需登录，退出码 1）、`ERROR <原因>`（退出码 1）。
 inspect 绝不写任何文件、不碰 storeRoot。
+
+## 检查更新：hub-find.mjs update-check（只读、诚实语义）
+
+```bash
+node scripts/hub-find.mjs update-check            # 全部已装条目
+node scripts/hub-find.mjs update-check skill      # 按 kind 过滤（expert|skill|connector）
+node scripts/hub-find.mjs update-check <名称>     # 按名称过滤（子串匹配 key/name/displayName）
+node scripts/hub-find.mjs update-check --json     # 机器可读（一行 JSON 数组，带中文 label）
+```
+
+- 与 `GET /updates` 同一判定来源：纯函数 `src/updates.js`（compareOfficial / compareSkillVersion /
+  compareConnectorDef / summarizeUpdates）+ 内容仓 `registry.json` + 官方注册表/技能接口/连接器注册表；
+- 输出每行一条：`kind/name | 已是最新|有更新|无法检查 | 本地→远端`（技能为 version 对、专家为 updatedAt 对、
+  连接器为 defHash 前缀），unknown 行附原因（缺 officialMeta / 缺官方 version / 未登录 / 接口失败 / 已下架）；
+  末尾一行汇总 `# 共 N 项：有更新 x / 已是最新 y / 无法检查 z`；未登录时另有一行 `NEED_LOGIN ...`；
+- **诚实语义**：信息不足一律「无法检查」，绝不判「已是最新」（与设置页同一口径，见 test-hub-find.mjs 第 11–16 组）；
+- 只读：不写注册表、不触发任何启用或重装；失败一行给清（`NEED_LOGIN` / `ERROR <原因>` / `NO_MATCH`）。
 
 ## 三类条目的语义
 
@@ -170,10 +203,11 @@ agent —— 路由与其它插件路由共用同一道 DSH 连接栅栏，而 a
 ## 开发
 
 ```bash
-npm test        # 16 个套件（另 test:live 单独跑联网版）：mcp 校验 / 专家人设 / CLI 连接器 / 召唤 / 凭证轮换 /
-                #   浏览器槽位 / client bundle / render smoke / session 契约 / pending expert /
+npm test        # 17 个套件（另 test:live 单独跑联网版）：mcp 校验 / 专家人设 / CLI 连接器 / 召唤 / 凭证轮换 /
+                #   浏览器槽位 / client bundle / render smoke（含 picker 点击=回车契约）/ session 契约 / pending expert /
                 #   recent experts / auth store / keepalive / install 离线链 / 更新判定 /
-                #   本地 MCP 管理 / package 完整性 / hub-find 检索+inspect 契约 / 安装工具审批四分支
+                #   本地 MCP 管理 / package 完整性 / hub-find 检索+inspect+update-check 契约 /
+                #   安装工具审批四分支 / 卸载工具审批四分支
 npm run pack:check
 ```
 

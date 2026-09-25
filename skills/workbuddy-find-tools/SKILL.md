@@ -104,19 +104,38 @@ workbuddy_install { kind: "skill" | "connector", name: "<name>", source?: "offic
 
 ### 5. 检查更新 / 卸载
 
-```bash
-# 检查更新（只读；技能比官方 version、连接器比官方 MCP 定义哈希）
-curl -s "http://127.0.0.1:3080/workbuddy-hub/updates?refresh=1"
+检查更新用只读脚本（**不要用裸 curl** 打 `/workbuddy-hub/updates`，401）：
 
-curl -s -X POST http://127.0.0.1:3080/workbuddy-hub/uninstall \
-  -H 'content-type: application/json' \
-  -d '{"kind":"...","name":"..."}'
+```bash
+node <插件目录>/scripts/hub-find.mjs update-check           # 全部已装条目
+node <插件目录>/scripts/hub-find.mjs update-check skill     # 只查技能
+node <插件目录>/scripts/hub-find.mjs update-check <名称>    # 只查某一条
+node <插件目录>/scripts/hub-find.mjs update-check --json    # 机器可读
 ```
+
+输出每行一条（`kind/name | 状态 | 本地→远端`），末尾一行汇总（`# 共 N 项：有更新 x / 已是最新 y / 无法检查 z`）。
+
+**语义必须诚实转述**：状态只有「有更新 / 已是最新 / 无法检查」三种。
+「无法检查」= 信息不足（未登录、官方版本缺失、老安装没有溯源记录、官方接口失败、条目已下架）——
+**绝不能**把它说成「已是最新」；未登录时输出里会有一行 `NEED_LOGIN ...`，提示用户去扫码登录后再查。
+
+卸载（移除）**不要用裸 curl** 打 `/workbuddy-hub/uninstall`（401，且绕过审批）。正规流程：
+
+1. 先用自己的话向用户说明将要移除什么（哪个条目、占多少体量、移除后的影响）；
+2. 用户口头同意后，调用 DSH 工具：
+
+```
+workbuddy_uninstall { kind: "expert" | "skill" | "connector", name: "<name>" }
+```
+
+工具内部会：只读盘点 → 弹出 **DSH 原生审批** → 用户批准才真的卸载（连接器会先停用 MCP 传输再删；专家/技能会同时摘掉所有会话里的挂载）。看返回再转述：
+- 「用户未批准/审批被取消」→ 如实告知未移除，不要重试；
+- 「当前没有可用的审批通道，出于安全未卸载」→ fail-closed，如实转述并停在原地。
 
 ## 话术约束（对齐 WorkBuddy 语义）
 
 - 装不装、授不授权始终是用户的决定；每次推荐结尾固定询问：「要安装吗？」
 - 安装连接器前必须说明其前置条件（尤其需要账号授权/凭据的）。
 - 未检索到匹配时如实说明，不硬凑；可建议放宽关键词。
-- 「查不到」与「已是最新」是两件事：接口报错/未登录时**不许**说成「没有更新」或「市场里没有」。
-- **不要自己加 --confirm/绕过审批**；**不要用裸 curl 调安装路由**（实测 401）；未登录时如实告知去扫码登录，不要硬凑结果。
+- 「查不到」与「已是最新」是两件事：接口报错/未登录时**不许**说成「没有更新」或「市场里没有」——`update-check` 会如实给「无法检查」，照它转述。
+- **不要自己加 --confirm/绕过审批**；**不要用裸 curl 调安装/卸载路由**（实测 401）；未登录时如实告知去扫码登录，不要硬凑结果。

@@ -38,6 +38,11 @@
 .wbh-railChip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 6px 0 4px;border:1px solid var(--wb-border-default);border-radius:999px;background:var(--wb-bg-secondary);font-size:12px;color:var(--wb-color-text-primary)}
 .wbh-railIcon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;overflow:hidden;background:var(--wb-bg-hover)}
 .wbh-railIcon img{width:100%;height:100%;object-fit:cover}
+/* 连接器 chip 的官方 MCP 图标：官方注册表 icon 是方形素材 → 图标盒用小圆角（不是
+   专家/技能的圆形盒），16px 居中，与 chip 文字垂直对齐。加载失败时 React 换回
+   通用 link 图标（见 AttachedRail 的 RailConnectorIcon），样式上不会出现破图。 */
+.wbh-railIcon.is-connector{border-radius:4px}
+.wbh-railIcon.is-connector img.wbh-railIconImg{width:16px;height:16px;object-fit:cover;border-radius:3px}
 .wbh-railName{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wbh-railX{display:grid;place-items:center;width:16px;height:16px;padding:0;border:none;border-radius:50%;background:transparent;color:var(--wb-color-text-tertiary);cursor:pointer;opacity:0;transition:opacity .12s ease}
 .wbh-railChip:hover .wbh-railX,.wbh-railX:focus-visible{opacity:1}
@@ -268,3 +273,14 @@
 .wbh-localMcpUrl{flex:1 1 260px}
 .wbh-localMcpToken{flex:1 1 200px}
 .wbh-localMcpForm button[type="submit"]{flex:none}
+
+/* --- picker 连接器行：点击整行 = attach，行尾开关只承载「启用/停用」一种语义 ---
+   （修复：此前点击整行走的是行内开关 connectorAction，与回车（attach）不一致，
+   导致「已加载的连接器在输入框下方显示图标」这条链路点击走不到。
+   开关本体样式沿用 official-picker.css 的 .wbh-toggle；这里只补「它是真按钮」
+   的可用性细节：焦点环、hover 加深、禁用态。官方对齐值不动。） */
+.wbh-flyoutRow .wbh-toggle{flex:0 0 26px}
+.wbh-flyoutRow .wbh-toggle:hover{background:rgba(0,0,0,.12)}
+.wbh-flyoutRow .wbh-toggle.is-on:hover{background:#00a55d}
+.wbh-flyoutRow .wbh-toggle:focus-visible{outline:2px solid var(--wb-palette-blue-1,#2f6bff);outline-offset:1px}
+.wbh-flyoutRow .wbh-toggle:disabled{opacity:.5;cursor:default}

@@ -213,4 +213,168 @@ import { homedir } from 'node:os'
   console.log('10. inspectError 分类边界: OK')
 }
 
+// ---- 11. update-check：诚实语义（用打桩数据，不联网、不写盘）------------------
+// 纪律：信息不足（缺官方版本 / 缺 officialMeta / 未登录 / 已下架 / 接口失败）一律
+// 「无法检查」，**绝不**说成「已是最新」——这个子命令的输出就是模型转述给用户的依据。
+{
+  const { UPDATE_LABELS, formatUpdateLine } = await import('./scripts/hub-find.mjs')
+  const { createHash } = await import('node:crypto')
+  const TMP = '/tmp/hub-find-uc-test'
+
+  const DEF = { gateway_url: 'https://gw.example/x', transport: 'http', ide_server_name: 'conn-1' }
+  const DEF_HASH = createHash('sha256').update(
+    JSON.stringify(Object.fromEntries(['auth_mode','gateway_url','ide_server_name','sandbox_url','transport','upstream_url']
+      .map(k => [k, k in DEF ? String(DEF[k]) : '']))), 'utf8').digest('hex')
+
+  // 11-1) 缺 officialMeta 的老记录（历史遗留安装）→ 「无法检查」，绝不能是「已是最新」
+  {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const root = mkdtempSync(join(tmpdir(), 'wbh-uc-legacy-'))
+    mkdirSync(join(root, '.meta'), { recursive: true })
+    writeFileSync(join(root, '.meta', 'registry.json'), JSON.stringify({ version: 1, installed: {
+      'connector/legacy-conn': { kind: 'connector', name: 'legacy-conn', installedAt: '2026-01-01T00:00:00.000Z' },
+    } }))
+    try {
+      const out = await run(['update-check', '--store', root], {
+        loadAuth: () => ({ access_token: 'fake' }),
+        connectorRegistry: async () => [{ name: 'legacy-conn', mcp: DEF }],
+      })
+      assert.equal(out.code, 0)
+      assert.match(out.lines[0], /legacy-conn \| 无法检查 \|/, `老记录必须「无法检查」：${out.lines[0]}`)
+      assert.match(out.lines[0], /officialMeta\.defHash/, '原因要指出缺 defHash（提示重装可记录）')
+      assert.ok(!out.lines[0].includes('已是最新'), '绝不能说成已是最新')
+      assert.match(out.lines[1], /^# 共 1 项：有更新 0 \/ 已是最新 0 \/ 无法检查 1$/)
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  }
+  console.log('11. update-check：老记录缺 officialMeta → 无法检查（绝不报「已是最新」）: OK')
+
+  // 11-2) 官方版本缺失（官方记录没有 version）→ 无法检查；官方 version 变了 → 有更新
+  {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const mk = records => {
+      const root = mkdtempSync(join(tmpdir(), 'wbh-uc-skill-'))
+      mkdirSync(join(root, '.meta'), { recursive: true })
+      writeFileSync(join(root, '.meta', 'registry.json'), JSON.stringify({ version: 1, installed: records }))
+      return root
+    }
+    const rootA = mk({ 'skill/xlsx': { kind: 'skill', name: 'xlsx', officialId: 's1', officialMeta: { version: '1.0.0' } } })
+    const rootB = mk({ 'skill/xlsx': { kind: 'skill', name: 'xlsx', officialId: 's1', officialMeta: { version: '1.0.0' } } })
+    try {
+      // 官方记录缺 version → 无法检查（不能拿「查不到版本」当「已是最新」）
+      const a = await run(['update-check', '--store', rootA], {
+        loadAuth: () => ({ access_token: 'fake' }),
+        skillDetailsFor: async () => [{ skill_id: 's1', version: '' }],
+      })
+      assert.match(a.lines[0], /xlsx \| 无法检查 \|/)
+      assert.match(a.lines[0], /官方技能记录缺少 version/)
+      // 官方 version 升级 → 有更新，且本地→远端都展示
+      const b = await run(['update-check', '--store', rootB], {
+        loadAuth: () => ({ access_token: 'fake' }),
+        skillDetailsFor: async () => [{ skill_id: 's1', version: '2.0.0' }],
+      })
+      assert.match(b.lines[0], /xlsx \| 有更新 \| 1\.0\.0→2\.0\.0/)
+    } finally { rmSync(rootA, { recursive: true, force: true }); rmSync(rootB, { recursive: true, force: true }) }
+  }
+  console.log('12. update-check：官方缺 version → 无法检查；版本变化 → 有更新: OK')
+
+  // 11-3) 未登录：技能/连接器一律无法检查 + NEED_LOGIN 一行结论；专家不受影响
+  {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const root = mkdtempSync(join(tmpdir(), 'wbh-uc-nologin-'))
+    mkdirSync(join(root, '.meta'), { recursive: true })
+    writeFileSync(join(root, '.meta', 'registry.json'), JSON.stringify({ version: 1, installed: {
+      'expert/demo-expert': { kind: 'expert', name: 'demo-expert', installedAt: '2026-06-01T00:00:00.000Z', officialMeta: { updatedAt: '2026-06-01T00:00:00.000Z' } },
+      'skill/xlsx': { kind: 'skill', name: 'xlsx', officialId: 's1', officialMeta: { version: '1.0.0' } },
+      'connector/c1': { kind: 'connector', name: 'c1', officialMeta: { defHash: DEF_HASH } },
+    } }))
+    try {
+      const out = await run(['update-check', '--store', root], {
+        loadAuth: () => ({}),   // 未登录
+        registry: async () => ({ experts: [{ agentName: 'demo-expert', updatedAt: '2026-06-01T00:00:00.000Z' }] }),
+      })
+      const skillLine = out.lines.find(l => l.includes('skill/xlsx'))
+      const connLine = out.lines.find(l => l.includes('connector/c1'))
+      const expertLine = out.lines.find(l => l.includes('expert/demo-expert'))
+      assert.match(skillLine, /无法检查/, '未登录时技能必须无法检查')
+      assert.match(connLine, /无法检查/, '未登录时连接器必须无法检查')
+      assert.match(expertLine, /已是最新/, '专家注册表公开：未登录仍可比对')
+      assert.ok(out.lines.some(l => l.startsWith('NEED_LOGIN ')), '未登录要给一行 NEED_LOGIN 结论')
+      assert.match(out.lines[out.lines.length - 1], /# 共 3 项：有更新 0 \/ 已是最新 1 \/ 无法检查 2$/)
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  }
+  console.log('13. update-check：未登录（技能/连接器无法检查 + NEED_LOGIN；专家照常）: OK')
+
+  // 11-4) 官方接口失败 → 无法检查（不是 current）；官方注册表未收录（下架）→ 无法检查
+  {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const root = mkdtempSync(join(tmpdir(), 'wbh-uc-err-'))
+    mkdirSync(join(root, '.meta'), { recursive: true })
+    writeFileSync(join(root, '.meta', 'registry.json'), JSON.stringify({ version: 1, installed: {
+      'connector/c1': { kind: 'connector', name: 'c1', officialMeta: { defHash: DEF_HASH } },
+      'skill/gone': { kind: 'skill', name: 'gone', officialId: 's9', officialMeta: { version: '1.0.0' } },
+    } }))
+    try {
+      const out = await run(['update-check', '--store', root], {
+        loadAuth: () => ({ access_token: 'fake' }),
+        connectorRegistry: async () => { throw new Error('registry2c failed: HTTP 502') },
+        skillDetailsFor: async () => [],   // s9 查不到 → 已下架
+      })
+      const c1 = out.lines.find(l => l.includes('connector/c1'))
+      const gone = out.lines.find(l => l.includes('skill/gone'))
+      assert.match(c1, /无法检查.*HTTP 502/, '接口失败要带原因')
+      assert.match(gone, /无法检查.*下架/, '官方查不到 → 如实说下架（unknown）')
+      const entryLines = out.lines.filter(l => !l.startsWith('# '))
+      assert.ok(entryLines.every(l => !l.includes('已是最新') && !l.includes('有更新')),
+        '逐条输出里没有任何一条可以伪装成已是最新/有更新')
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  }
+  console.log('14. update-check：接口失败 / 已下架 → 无法检查（带原因）: OK')
+
+  // 11-5) 正常路径：current / update 全都能判；--json 是一行合法 JSON；过滤参数可用
+  {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const root = mkdtempSync(join(tmpdir(), 'wbh-uc-ok-'))
+    mkdirSync(join(root, '.meta'), { recursive: true })
+    writeFileSync(join(root, '.meta', 'registry.json'), JSON.stringify({ version: 1, installed: {
+      'connector/c1': { kind: 'connector', name: 'c1', officialMeta: { defHash: DEF_HASH } },
+      'connector/c2': { kind: 'connector', name: 'c2', officialMeta: { defHash: DEF_HASH } },
+    } }))
+    try {
+      const out = await run(['update-check', 'c1', '--store', root], {
+        loadAuth: () => ({ access_token: 'fake' }),
+        connectorRegistry: async () => [
+          { name: 'c1', mcp: DEF },                                  // 同定义 → current
+          { name: 'c2', mcp: { ...DEF, gateway_url: 'https://gw2.example/x' } }, // 变了 → update
+        ],
+      })
+      assert.equal(out.lines.length, 2, `名称过滤只留 c1：${JSON.stringify(out.lines)}`)
+      assert.match(out.lines[0], /c1 \| 已是最新 \|/)
+      const j = await run(['update-check', '--json', '--store', root], {
+        loadAuth: () => ({ access_token: 'fake' }),
+        connectorRegistry: async () => [{ name: 'c1', mcp: DEF }, { name: 'c2', mcp: { ...DEF, gateway_url: 'https://gw2.example/x' } }],
+      })
+      assert.equal(j.lines.length, 1)
+      const parsed = JSON.parse(j.lines[0])
+      assert.equal(parsed.length, 2)
+      assert.deepEqual(parsed.map(e => e.label), ['已是最新', '有更新'])
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  }
+  console.log('15. update-check：current/update 判定 + --json + 名称过滤: OK')
+
+  // 11-6) formatUpdateLine / UPDATE_LABELS：一行契约（竖线/换行不可破坏分列）
+  assert.deepEqual(UPDATE_LABELS, { update: '有更新', current: '已是最新', unknown: '无法检查' })
+  const line = formatUpdateLine({ kind: 'skill', name: 'xlsx', label: '有更新', localVersion: '1.0.0', remoteVersion: '2.0.0' })
+  assert.equal(line, 'skill/xlsx | 有更新 | 1.0.0→2.0.0')
+  assert.equal(line.split('\n').length, 1)
+  // 没有任何版本/时间/哈希可比时占位「—」，但不改变状态标签
+  assert.match(formatUpdateLine({ kind: 'connector', name: 'c', label: '无法检查', localHash: '', remoteHash: '' }), /无法检查 \| —/)
+  void TMP
+  console.log('16. update-check 行格式与状态词表: OK')
+}
+
 console.log('hub-find (compact retrieval CLI) contract tests: OK')

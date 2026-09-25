@@ -68,10 +68,15 @@ const WB_TOKEN_REF = 'WORKBUDDY_TOKEN'
 
 const PROFILES_ROOT = join(homedir(), '.dsh', 'profiles')
 
+/** 工具错误信息里展示原始参数用：压成单行并截断，绝不回显任意长度输入。 */
+function oneLineOf(value, max = 40) {
+  const s = String(value ?? '').replace(/\s+/g, ' ').trim()
+  return s.length > max ? s.slice(0, max - 1) + '…' : s
+}
+
 export function storePaths(config) {
   const root = resolve(expandHome(config.storeRoot || '~/workbuddyskills'))
-  return {
-    root,
+  return {    root,
     store: join(root, '.store'),
     skills: join(root, 'skills'),
     experts: join(root, 'experts'),
@@ -1546,6 +1551,168 @@ export function apply(ctx, config = {}) {
     ctx.effect(() => ctx.tools.register(installTool), 'workbuddy-hub: workbuddy_install tool')
   }
 
+  /* ---------------------------------------------------------------- *
+   * 卸载一个条目 —— **路由（POST /uninstall）与工具（workbuddy_uninstall）
+   * 共用的唯一实现**，避免两条卸载链路分叉（与 installEntry 同一原则）。
+   *
+   * 顺序与原 POST /uninstall 保持一致（现有测试钉着它）：
+   *   连接器先拆 MCP 传输（否则 mcp-client 行悬空）→ 拆技能链接 → 删文件 →
+   *   更新注册表 → pruneMounts（摘掉所有会话里的挂载，含 invalidateExpertCache）
+   *   → 专家 best-effort 删 agent preset。
+   * 只删注册表里真实存在的记录；调用方负责「没装」的用户呈现。
+   * ---------------------------------------------------------------- */
+  const uninstallEntry = async (P0, cfg0, { kind, name: entryName }) => {
+    const key = `${kind}/${entryName}`
+    const registry = loadJson(P0.registry, { version: 1, installed: {} })
+    const record = registry.installed?.[key]
+    if (!record) return null
+    // Tear the transport down (and await it) before deleting its files.
+    if (kind === 'connector') {
+      await connectors.disable(key)
+      unlinkConnectorSkills(skillPrefix, record.linkedSkills, skillsMount)
+    }
+    if (kind === 'skill') unlinkSkill(skillPrefix, entryName, skillsMount)
+    rmSync(record.dest, { recursive: true, force: true })
+    delete registry.installed[key]
+    saveJson(P0.registry, registry)
+    // 卸载必须连带摘掉挂载：只删文件与注册表，会留下一位「人设文件已被删掉」的
+    // 专家 —— 界面 chip 还在、注入却失败或静默为空。全量清理所有会话里等于该 key
+    // 的条目（pruneMounts 内部会 invalidateExpertCache，保证下一步 assembly 不用旧人设）。
+    const prunedSessions = pruneMounts(P0, key)
+    // 专家卸载后 best-effort 删掉它对应的 agent preset（按 `workbuddy-<name>`
+    // 现算，不改安装记录结构）；删不掉（没建过 / 已不存在 / 被占用）不影响卸载。
+    if (kind === 'expert') {
+      try { await ctx.agentPresets?.remove?.(expertPresetId(entryName)) } catch { /* best effort */ }
+    }
+    return { key, prunedSessions }
+  }
+
+  /** 工具预检用：卸载前只读盘算「将移除什么」（不写盘、不动挂载、不拆传输）。 */
+  const uninstallPreview = (P0, { kind, name: entryName }) => {
+    const key = `${kind}/${entryName}`
+    const record = loadJson(P0.registry, { version: 1, installed: {} }).installed?.[key]
+    if (!record) return null
+    return {
+      key,
+      displayName: record.displayName || entryName,
+      installedAt: typeof record.installedAt === 'string' ? record.installedAt : '',
+      files: Number(record.files) || 0,
+      bytes: Number(record.bytes) || 0,
+      source: record.source === 'official' ? 'official' : 'mirror',
+      enabled: record.enabled === true,
+      hasMcp: record.kind === 'connector' ? record.mcp !== false : undefined,
+    }
+  }
+
+  /* ---------------------------------------------------------------- *
+   * workbuddy_uninstall 工具：只读说清将移除什么 → DSH 原生审批 → 才真卸。
+   * 与 workbuddy_install 同一套写法与分支语义：
+   *  · allowed-once  唯一授权：卸；
+   *  · rejected / cancelled  用户说不/撤回：不卸，如实转述；
+   *  · unavailable   没有可用审批通道：**fail-closed**（绝不静默放过）；
+   *  · ctx.approval / exec.agent 缺位：同样 fail-closed。
+   * ---------------------------------------------------------------- */
+  const uninstallTool = {
+    name: 'workbuddy_uninstall',
+    description: '从本机 DSH 移除一个已安装的 WorkBuddy 专家/技能/连接器（会同时摘掉所有会话里的挂载；连接器先停用 MCP 传输再删）。'
+      + '调用前先用你自己的话向用户讲清将要移除什么（可用 scripts/hub-find.mjs installed 查看本机已装清单）、'
+      + '征得用户同意，再调用本工具。调用后会弹出 DSH 原生审批，用户在审批里批准才会真的卸载；'
+      + '被拒绝/取消/无审批通道时一律不卸载（fail-closed）。',
+    // ⚠️ 必须是**已投影的 JSON Schema**（object 根 + properties + required 数组）——
+    // 与 workbuddy_install 相同的坑：schemastery 扁平映射（属性内 required: true）会被
+    // 框架原样发给模型，上游整轮 INVALID_REQUEST。见 installTool.parameters 处的长注释。
+    parameters: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['expert', 'skill', 'connector'], description: '条目类型。' },
+        name: { type: 'string', description: '条目名（目录名 / 注册表里的 name）。' },
+      },
+      required: ['kind', 'name'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: { description: 'workbuddy_uninstall 结果（文本说明 + 结构化字段）' },
+      render: (_args, value) => {
+        const v = value && typeof value === 'object' && !Array.isArray(value) ? value : { text: String(value ?? '') }
+        const text = typeof v.text === 'string'
+          ? v.text
+          : [
+            `已移除 ${v.kind}/${v.name}（${v.prunedSessions ? `从 ${v.prunedSessions} 个会话摘除挂载` : '没有会话挂着它'}）`,
+            v.removedFiles != null ? `删除: ${v.removedFiles} 个文件 / ${(Number(v.removedBytes ?? 0) / 1024).toFixed(1)} KB` : '',
+          ].filter(Boolean).join('\n')
+        return [{ type: 'text', text }]
+      },
+    },
+    async execute(args, exec) {
+      const kind = String(args.kind || '')
+      const entryName = String(args.name || '')
+      if (!['expert', 'skill', 'connector'].includes(kind) || !/^[\w.-]+$/.test(entryName)) {
+        return { text: `参数无效：kind 必须是 expert|skill|connector，name 只允许字母数字._-（收到 kind=${oneLineOf(kind)} name=${oneLineOf(entryName)}）。未做任何改动。` }
+      }
+      // ---- 1) 只读预览：说清将移除什么（不写盘、不拆传输、不动挂载）----
+      const preview = uninstallPreview(P, { kind, name: entryName })
+      if (!preview) {
+        return { text: `${kind}/${entryName} 本机没有安装（或注册表里没有这条记录），无需卸载。` }
+      }
+      // ---- 2) DSH 原生审批（fail-closed：没有服务 / 没有 agent / 非 allowed-once 一律不卸）----
+      const approval = pluginCtx?.approval ?? ctx.approval ?? undefined
+      if (approval === undefined) {
+        console.info(`[wbh] uninstall ${kind}/${entryName}: approval=unavailable (no approval service) remote=unknown at=${new Date().toISOString()}`)
+        return { text: `该环境无法完成用户确认（没有可用的审批服务），出于安全未卸载 ${kind}/${entryName}。请改用插件 Web 设置页的「移除」按钮，或让用户在会话里直接确认后重试。` }
+      }
+      if (exec.agent === undefined) {
+        console.info(`[wbh] uninstall ${kind}/${entryName}: approval=unavailable (no agent) at=${new Date().toISOString()}`)
+        return { text: `当前调用没有可路由的 agent（无法弹出审批、无法留审计），出于安全未卸载 ${kind}/${entryName}。` }
+      }
+      const reason = [
+        `移除 WorkBuddy ${kind}「${preview.displayName}」`,
+        `${preview.files} 个文件 / 约 ${(preview.bytes / 1024).toFixed(1)} KB（安装于 ${preview.installedAt || '未知时间'}，来源 ${preview.source === 'official' ? '官方' : '镜像'}）`,
+        kind === 'connector'
+          ? (preview.enabled ? '该连接器当前已启用：会先停用 MCP 传输再删除' : '该连接器当前未启用；删除后其 MCP 行彻底消失')
+          : kind === 'expert' ? '会同时从所有会话摘掉该专家的挂载' : '会同时摘掉技能软链与各会话挂载',
+        '此操作删除本机文件，不可撤销。',
+      ].join('；')
+      const outcome = await approval.request({
+        agent: exec.agent,
+        toolName: 'workbuddy_uninstall',
+        callId: exec.callId,
+        reason,
+        signal: exec.signal,
+      })
+      // ---- 3) 四分支：只有 allowed-once 才真卸 ----
+      if (outcome !== 'allowed-once') {
+        console.info(`[wbh] uninstall ${kind}/${entryName}: approval=${outcome} at=${new Date().toISOString()}`)
+        const why = outcome === 'rejected' ? '用户未批准（拒绝），未卸载'
+          : outcome === 'cancelled' ? '审批被取消，未卸载'
+          : '当前没有可用的审批通道，出于安全未卸载（fail-closed）'
+        return { text: `${why} ${kind}/${entryName}。` }
+      }
+      // ---- 4) 真卸（与 POST /uninstall 同一实现）----
+      let result
+      try {
+        result = await uninstallEntry(P, cfg, { kind, name: entryName })
+      } catch (error) {
+        console.info(`[wbh] uninstall ${kind}/${entryName}: approved but uninstall failed: ${String(error?.message || error)}`)
+        return { text: `卸载失败（已获批准）：${String(error?.message || error)}` }
+      }
+      if (!result) {
+        return { text: `${kind}/${entryName} 在审批通过后已不存在（可能被并行移除），无需重复卸载。` }
+      }
+      console.info(`[wbh] uninstall ${kind}/${entryName}: approval=allowed-once prunedSessions=${result.prunedSessions} at=${new Date().toISOString()}`)
+      return {
+        text: `已移除 ${kind}/${entryName}${result.prunedSessions ? `，并从 ${result.prunedSessions} 个会话摘除挂载` : ''}。`,
+        kind,
+        name: entryName,
+        removedFiles: preview.files,
+        removedBytes: preview.bytes,
+        prunedSessions: result.prunedSessions,
+      }
+    },
+  }
+  if (ctx.tools && typeof ctx.tools.register === 'function') {
+    ctx.effect(() => ctx.tools.register(uninstallTool), 'workbuddy-hub: workbuddy_uninstall tool')
+  }
+
   const handler = async (req, res) => {
     const url = new URL(req.url, 'http://localhost')
     if (!url.pathname.startsWith(PREFIX)) return false
@@ -1699,6 +1866,16 @@ export function apply(ctx, config = {}) {
         let officialError = ''
         try { rows = await connectorRegistry(P.state) } catch (error) { officialError = String(error?.message || error) }
         if (rows.length > 0) {
+          // 修 bug：官方注册表接口没有关键词参数，此前直接把 24 条全量原样返回，
+          // **完全忽略 q**（实测：搜「地图」和不搜都是 24 条）。官方不支持就得本地过滤：
+          // 与 scripts/hub-find.mjs filterRows 同一口径 —— name / displayName /
+          // description / authType 的**大小写不敏感** includes；空关键词不过滤；
+          // 无命中给空列表（客户端走既有「暂无连接器」空态，不报错）。
+          const q1 = q0.toLowerCase()
+          if (q1) {
+            rows = rows.filter(e => [e.name, e.displayName, e.description, e.authType]
+              .some(v => String(v || '').toLowerCase().includes(q1)))
+          }
           json(res, 200, { ok: true, source: 'official', total: rows.length, rows })
           return true
         }
@@ -1722,9 +1899,16 @@ export function apply(ctx, config = {}) {
       const kind = kindQ === 'skill' ? 'skill' : 'expert'
       const payload = {
         page: Math.max(1, Number(url.searchParams.get('page') || 1) || 1),
-        page_size: Math.min(100, Number(url.searchParams.get('pageSize') || 60) || 60),
+        pageSize: Math.min(100, Number(url.searchParams.get('pageSize') || 60) || 60),
       }
-      if (q0) payload.keyword = q0
+      // 修 bug：此前写成 page_size/keyword —— marketList 的解构签名是
+      // ({ page, pageSize, query })，两个名字都对不上：pageSize 静默落回 60，
+      // keyword 整个被丢掉 → 官方收到的 body 里没有 keyword，**任何关键词都返回
+      // 全量列表**（隔离实例实测：q=表格 / q=zzzz不存在zzzz 与 q=空逐字节一致）。
+      // 官方后端的 keyword 过滤本身是好的：marketList('skill', { query:'表格' })
+      // → total 335，query='zzzz不存在zzzz' → total 0。技能与专家共用本分支；
+      // 专家在客户端优先走 /official-experts（本地注册表过滤），仅在其空/失败时落回这里。
+      if (q0) payload.query = q0
       const cat = url.searchParams.get('category')
       if (cat && cat !== 'all') payload.categories = [cat]
       try {
@@ -1734,7 +1918,7 @@ export function apply(ctx, config = {}) {
         const q2 = q0.toLowerCase()
         const hits = mirrorHits(kind === 'expert' ? 'experts' : 'skills',
           e => !q2 || (e.displayName || '').toLowerCase().includes(q2) || (e.description || '').toLowerCase().includes(q2))
-          .slice(0, payload.page_size)
+          .slice(0, payload.pageSize)
         if (hits.length === 0) {
           // mirrorFallback=false（默认）：不静默换成镜像内容，如实暴露失败
           json(res, 200, {
@@ -2724,29 +2908,14 @@ export function apply(ctx, config = {}) {
       const body = JSON.parse((await readBody(req)) || '{}')
       const kind = String(body.kind || '')
       const entryName = String(body.name || '')
-      const key = `${kind}/${entryName}`
-      const registry = loadJson(P.registry, { version: 1, installed: {} })
-      const record = registry.installed?.[key]
-      if (!record) { json(res, 404, { error: 'not installed' }); return true }
-      // Tear the transport down (and await it) before deleting its files.
-      if (kind === 'connector') {
-        await connectors.disable(key)
-        unlinkConnectorSkills(skillPrefix, record.linkedSkills, skillsMount)
+      if (!['expert', 'skill', 'connector'].includes(kind) || !/^[\w.-]+$/.test(entryName)) {
+        json(res, 400, { error: 'invalid kind or name' }); return true
       }
-      if (kind === 'skill') unlinkSkill(skillPrefix, entryName, skillsMount)
-      rmSync(record.dest, { recursive: true, force: true })
-      delete registry.installed[key]
-      saveJson(P.registry, registry)
-      // 卸载必须连带摘掉挂载：只删文件与注册表，会留下一位「人设文件已被删掉」的
-      // 专家 —— 界面 chip 还在、注入却失败或静默为空。全量清理所有会话里等于该 key
-      // 的条目（pruneMounts 内部会 invalidateExpertCache，保证下一步 assembly 不用旧人设）。
-      const prunedSessions = pruneMounts(P, key)
-      // 专家卸载后 best-effort 删掉它对应的 agent preset（按 `workbuddy-<name>`
-      // 现算，不改安装记录结构）；删不掉（没建过 / 已不存在 / 被占用）不影响卸载。
-      if (kind === 'expert') {
-        try { await ctx.agentPresets?.remove?.(expertPresetId(entryName)) } catch { /* best effort */ }
-      }
-      json(res, 200, { ok: true, removed: key, prunedSessions })
+      // 与工具 handler（workbuddy_uninstall）共用同一条卸载实现 —— 逻辑只有一份，
+      // 差异只在「没装」时如何呈现（路由回 404 JSON，工具给模型一段可读文本）。
+      const removed = await uninstallEntry(P, cfg, { kind, name: entryName })
+      if (!removed) { json(res, 404, { error: 'not installed' }); return true }
+      json(res, 200, { ok: true, removed: removed.key, prunedSessions: removed.prunedSessions })
       return true
     }
 

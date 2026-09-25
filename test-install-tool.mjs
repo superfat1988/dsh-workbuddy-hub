@@ -116,8 +116,9 @@ const run = async () => {
     const root = mkRoot('register')
     const { ctx, calls } = makeToolCtx(root)
     apply(ctx, { storeRoot: root, keepalive: false, skillsMount: join(root, 'mount') })
-    assert.equal(calls.registered.length, 1, '应注册 1 个工具')
+    assert.equal(calls.registered.length, 2, '应注册 2 个工具（install + uninstall）')
     assert.equal(calls.registered[0].name, 'workbuddy_install')
+    assert.equal(calls.registered[1].name, 'workbuddy_uninstall')
     // 注册后的**运行时形状**必须是已投影的 JSON Schema（不是 schemastery 扁平映射：
     // 那种形状会被框架原样发给模型，实测导致整轮 INVALID_REQUEST）
     const params = calls.registered[0].parameters
@@ -125,8 +126,16 @@ const run = async () => {
     assert.deepEqual(params.required, ['kind', 'name'], 'required 必须是顶层数组')
     assert.deepEqual(params.properties.kind.enum, ['expert', 'skill', 'connector'])
     assert.deepEqual(params.properties.source.enum, ['official', 'mirror'])
+    // uninstall 工具同样是投影后的 JSON Schema，且只收 kind/name
+    const uparams = calls.registered[1].parameters
+    assert.equal(uparams.type, 'object', 'uninstall parameters 必须是 object 根')
+    assert.deepEqual(uparams.required, ['kind', 'name'], 'uninstall required 必须是顶层数组')
+    assert.deepEqual(uparams.properties.kind.enum, ['expert', 'skill', 'connector'])
+    assert.equal(uparams.properties.source, undefined, 'uninstall 不需要 source')
     assert.equal(typeof calls.registered[0].execute, 'function')
     assert.equal(typeof calls.registered[0].output.render, 'function')
+    assert.equal(typeof calls.registered[1].execute, 'function')
+    assert.equal(typeof calls.registered[1].output.render, 'function')
     const src = readFileSync(join(import.meta.dirname, 'index.js'), 'utf8')
     assert.match(src, /export const inject = \[.*'tools'.*\]/, 'inject 数组必须包含 tools')
     console.log('   OK')

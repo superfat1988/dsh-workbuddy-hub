@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react'
-import { hub, addSelection, markExpertRecent, peekPendingExpert, clearPendingExpert, onCatalogChange, onMarketRequest, setComposerSession, authState, onAuthChange, refreshAuth, onAuthRequired, claimAuthGate, settleAuthGate, STALE_LOGIN_REASON } from './hub.js'
+import { hub, addSelection, removeSelection, markExpertRecent, peekPendingExpert, clearPendingExpert, onCatalogChange, onMarketRequest, setComposerSession, authState, onAuthChange, refreshAuth, onAuthRequired, claimAuthGate, settleAuthGate, STALE_LOGIN_REASON } from './hub.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
 import Catalogue from './Catalogue.jsx'
@@ -189,15 +189,12 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
         }
       }
       if (entry.kind === 'connector') {
-        if (installed[key]?.enabled) {
-          await hub.disableConnector(entry.name)
-          if (sessionId) await hub.unmount(sessionId, entry.kind, entry.name)
-          setNotice(`已断开「${entry.displayName}」`)
-        } else {
-          const r = await hub.enableConnector(entry.name)
-          if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
-          setNotice(`已连接「${entry.displayName}」（工具命名空间 ${r.serverName}），下一次模型步骤起可用。`)
-        }
+        // attach 语义（点击与回车同路）：装好就启用（停用状态先启用）+ 挂到当前会话
+        // → chip 出现、工具下一轮可用。「停用」改由行尾开关显式承担（Catalogue 里），
+        // 这里不再承担「已启用时再点 = 断开」的开关语义。
+        if (!installed[key]?.enabled) await hub.enableConnector(entry.name)
+        if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
+        setNotice(`已连接「${entry.displayName}」，下一次模型步骤起可在对话中使用。`)
       } else if (entry.kind === 'expert') {
         // picker 在 composer 里 → 用户已在一个会话中：选中即加载到**当前会话**
         // （不新建会话）。「新建会话 + 该专家」的场景走市场页的「召唤」。
@@ -215,11 +212,21 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
       setRecent(prev => [entry, ...prev.filter(e => e.key !== key)].slice(0, 5))
       await refresh()
     } catch (error) {
+      // 失败 → 撤掉这次先出的乐观 chip：rail 上的条目必须代表「宿主真的挂上了」。
+      // 真机复现（隔离实例）：连接器 enable 因缺凭据 502 → 下面的 hub.mount 根本没执行
+      // （网络面板里没有任何 POST /mount）→ 但 chip 已由 addSelection 出现；用户关掉凭据
+      // 弹窗后，输入框下方就留着一个「已加载」的假图标（宿主 mounts.json / GET /mounted 皆空）。
+      // 按用户定义的语义修：**只有真的加载了才叠加图标**。
+      if (!mounted.has(key)) {
+        removeSelection(sessionId, entry.kind, entry.name)
+        // 专家是单槽位：挂载失败时宿主仍是原来那位，chip 也要还原成原来那位
+        if (replacedOnAdd.length) addSelection(replacedOnAdd[0], sessionId)
+      }
       const refs = error.body?.credentialRefs ?? []
       if (refs.length > 0) setAuthorising({ entry, refs, error: error.message })
       else setNotice(`失败：${error.message}`)
     } finally { setBusy('') }
-  }, [installed, refresh, runCommand, sessionId])
+  }, [installed, mounted, refresh, runCommand, sessionId])
 
   const onDetail = useCallback(entry => {
     if (entry.kind === 'expert') { setSummoning(entry); setPickerOpen(false) }

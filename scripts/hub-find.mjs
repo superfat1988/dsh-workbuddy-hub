@@ -18,6 +18,8 @@
  *   node scripts/hub-find.mjs installed            # 本机已装清单
  *   node scripts/hub-find.mjs inspect  <expert|skill|connector> <name> [--json]
  *                                  # 装前只读安全预检（不落盘、不执行包内代码）
+ *   node scripts/hub-find.mjs update-check [kind|name] [--json]
+ *                                  # 只读检查更新（复用 src/updates.js 与内容仓注册表）
  *
  * 输出（默认，每行一条，便于模型直接引用）：
  *   expert/content-creator | 文博凯 | 擅长创作引人入胜的多平台内容 | 内容策略,多平台创作
@@ -29,6 +31,13 @@
  *   ERROR <原因>    其它失败
  *   NOT_FOUND <原因>  inspect：官方市场/注册表没有这个条目
  *
+ * update-check 的语义纪律（与 GET /updates、设置页同一口径）：
+ *  · 每行一条：`kind/name | 状态 | 本地→远端`，状态只有「已是最新 / 有更新 / 无法检查」；
+ *  · 信息不足（官方版本缺失、老记录没有 officialMeta、未登录、接口失败）一律
+ *    **无法检查**，绝不许说成「已是最新」——静默的假「已是最新」比报错更糟；
+ *  · 末尾一行汇总：`# 共 N 项：有更新 x / 已是最新 y / 无法检查 z`；
+ *  · 全程只读：不写任何文件、不触发任何启用或重装。
+ *
  * 环境变量：WBH_STORE 覆盖内容仓路径（默认 ~/workbuddyskills）。
  */
 import { readFileSync } from 'node:fs'
@@ -36,9 +45,13 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
-import { listExperts } from '../wb-experts.js'
-import { marketList, connectorRegistry } from '../wb-market.js'
+import { listExperts, registry as officialRegistry } from '../wb-experts.js'
+import { marketList, connectorRegistry, loadAuth, skillDetails } from '../wb-market.js'
 import { inspectExpert, inspectSkill, inspectConnector, formatInspectCard, inspectError } from '../wb-inspect.js'
+// 更新判定与宿主 GET /updates 共用同一份纯模块（无 IO、无 DSH 依赖）。
+import {
+  compareOfficial, compareSkillVersion, compareConnectorDef, summarizeUpdates,
+} from '../src/updates.js'
 
 export const DEFAULT_LIMIT = 5
 export const MAX_LIMIT = 20
@@ -134,6 +147,136 @@ export function filterRows(rows, query) {
     .some(v => String(v || '').toLowerCase().includes(q)))
 }
 
+/**
+ * update-check 的一行输出。状态词只有三个，与设置页徽标同口径：
+ * 「已是最新 / 有更新 / 无法检查」—— unknown **绝不**渲染成「已是最新」。
+ * 每一列都单独过 oneLine（竖线/换行在列内被清掉），再用「 | 」拼行 —— 与 formatRow
+ * 同一做法：整行直接过 oneLine 会把分列符自己也替换掉（实测 `|` → `/`）。
+ */
+export function formatUpdateLine(entry) {
+  const local = entry.localVersion || entry.localAt || entry.localHash || ''
+  const remote = entry.remoteVersion || entry.remoteAt || entry.remoteHash || ''
+  const pair = [local, remote].filter(Boolean).join('→') || '—'
+  return [
+    oneLine(`${entry.kind}/${entry.name}`, 48),
+    oneLine(entry.label, 8),
+    oneLine(pair, 80),
+  ].join(' | ')
+}
+
+/** 状态 → 中文标签（唯一映射，防止各处措辞漂移）。 */
+export const UPDATE_LABELS = { update: '有更新', current: '已是最新', unknown: '无法检查' }
+
+/**
+ * update-check 主实现（与宿主 GET /updates 同一判定来源，但**独立读盘/读官方**，
+ * 不经过 hub HTTP —— 裸 curl 会 401）。只读：不写注册表、不触发任何启用或重装。
+ *
+ * @returns {Promise<{code:number, lines:string[]}>}
+ */
+export async function runUpdateCheck({ args, paths, positional, deps }) {
+  const hookable = deps.hooks || {}
+  // ---- 1) 读注册表（只读；读不到 = 什么都没装）----
+  let reg = { installed: {} }
+  try { reg = JSON.parse(readFileSync(paths.registry, 'utf8')) } catch { reg = { installed: {} } }
+  let records = Object.entries(reg.installed || {})
+  // 位置参数：可以是 kind（expert/skill/connector）过滤，也可以是具体 name。
+  const wanted = (positional.slice(1).join(' ') || '').trim().toLowerCase()
+  const KINDS = ['expert', 'skill', 'connector']
+  if (wanted && KINDS.includes(wanted)) records = records.filter(([, rec]) => String(rec?.kind || '') === wanted)
+  else if (wanted) records = records.filter(([key, rec]) => key.toLowerCase().includes(wanted)
+    || String(rec?.name || '').toLowerCase().includes(wanted)
+    || String(rec?.displayName || '').toLowerCase().includes(wanted))
+  if (records.length === 0) return { code: 0, lines: ['NO_MATCH 内容仓里没有可检查的条目（没装任何东西，或名称不匹配）'] }
+
+  // ---- 2) 拉官方数据（各自尽力，失败只把相关条目判 unknown，绝不影响别的 kind）----
+  const sourceError = { expert: '', skill: '', connector: '' }
+  let expertIndex = null, skillIndex = null, connectorIndex = null
+  let loggedIn = false
+  try { loggedIn = Boolean(deps.loadAuth?.(paths.state)?.access_token) } catch { loggedIn = false }
+  if (records.some(([, r]) => r?.kind === 'expert')) {
+    try {
+      const data = await (hookable.expertRegistry || deps.registry)()
+      expertIndex = new Map()
+      for (const raw of data?.experts ?? []) {
+        if (raw?.id) expertIndex.set(String(raw.id), raw)
+        if (raw?.plugin) expertIndex.set(String(raw.plugin), raw)
+        if (raw?.agentName) expertIndex.set(String(raw.agentName), raw)
+      }
+    } catch (error) { sourceError.expert = String(error?.message || error) }
+  }
+  if (records.some(([, r]) => r?.kind === 'skill')) {
+    if (!loggedIn) sourceError.skill = 'NEED_LOGIN 需要登录才能读取官方技能数据'
+    else {
+      const ids = [...new Set(records
+        .filter(([, r]) => r?.kind === 'skill')
+        .map(([, r]) => (r?.officialId == null ? '' : String(r.officialId))).filter(Boolean))]
+      try {
+        const rows = ids.length ? await (hookable.skillDetails || deps.skillDetailsFor)(ids, paths.state) : []
+        skillIndex = new Map(rows.map(row => [String(row?.skill_id ?? row?.skillId ?? ''), row]))
+      } catch (error) { sourceError.skill = String(error?.message || error) }
+    }
+  }
+  if (records.some(([, r]) => r?.kind === 'connector')) {
+    if (!loggedIn) sourceError.connector = 'NEED_LOGIN 需要登录才能读取官方连接器注册表'
+    else {
+      try {
+        const rows = await (hookable.connectorRegistry || deps.connectors)(paths.state)
+        connectorIndex = new Map(rows.map(row => [String(row?.name ?? ''), row]))
+      } catch (error) { sourceError.connector = String(error?.message || error) }
+    }
+  }
+
+  // ---- 3) 逐条判定（纯函数来自 src/updates.js，与 GET /updates 同一份）----
+  const entries = records.map(([key, record]) => {
+    const slash = key.indexOf('/')
+    const kind = record?.kind || (slash > 0 ? key.slice(0, slash) : '')
+    const entryName = record?.name || (slash > 0 ? key.slice(slash + 1) : key)
+    if (kind === 'expert') {
+      if (expertIndex === null) {
+        return { key, kind, name: entryName, status: 'unknown', reason: `官方专家注册表不可用：${sourceError.expert}`, localAt: '', remoteAt: '' }
+      }
+      const cmp = compareOfficial(record, expertIndex.get(String(entryName)) ?? null)
+      return { key, kind, name: entryName, status: cmp.status, reason: cmp.reason, localAt: cmp.localAt, remoteAt: cmp.remoteAt }
+    }
+    if (kind === 'skill') {
+      if (skillIndex === null) {
+        return { key, kind, name: entryName, status: 'unknown', reason: sourceError.skill || '官方技能数据不可用', localVersion: '', remoteVersion: '' }
+      }
+      const officialId = record?.officialId == null ? '' : String(record.officialId)
+      if (!officialId) {
+        return { key, kind, name: entryName, status: 'unknown', reason: '本地记录缺少官方技能 ID（officialId），无法与官方比对；重装一次即可记录', localVersion: '', remoteVersion: '' }
+      }
+      const cmp = compareSkillVersion(record, skillIndex.get(officialId) ?? null)
+      return { key, kind, name: entryName, status: cmp.status, reason: cmp.reason, localVersion: cmp.localVersion, remoteVersion: cmp.remoteVersion }
+    }
+    if (kind === 'connector') {
+      if (connectorIndex === null) {
+        return { key, kind, name: entryName, status: 'unknown', reason: sourceError.connector || '官方连接器注册表不可用', localHash: '', remoteHash: '' }
+      }
+      const cmp = compareConnectorDef(record, connectorIndex.get(String(entryName)) ?? null)
+      return { key, kind, name: entryName, status: cmp.status, reason: cmp.reason, localHash: cmp.localHash, remoteHash: cmp.remoteHash }
+    }
+    return { key, kind, name: entryName, status: 'unknown', reason: `未知条目类型：${kind || '(空)'}` }
+  })
+
+  // ---- 4) 输出：一行一条 + 汇总；失败时一行机器可读结论 ----
+  if (args.json) {
+    return { code: 0, lines: [JSON.stringify(entries.map(e => ({ ...e, label: UPDATE_LABELS[e.status] })))] }
+  }
+  const counts = summarizeUpdates(entries)
+  const lines = entries.map(entry => {
+    const line = formatUpdateLine({ ...entry, label: UPDATE_LABELS[entry.status] || UPDATE_LABELS.unknown })
+    return entry.status === 'unknown' ? `${line}（${oneLine(entry.reason, 60)}）` : line
+  })
+  // 源级失败单独一行提示（NEED_LOGIN / ERROR 一行结论，模型据此行动）。
+  if (sourceError.skill.startsWith('NEED_LOGIN') || sourceError.connector.startsWith('NEED_LOGIN')) {
+    lines.push(`NEED_LOGIN ${sourceError.skill || sourceError.connector}`.slice(0, 160))
+  }
+  lines.push(`# 共 ${entries.length} 项：有更新 ${counts.update} / 已是最新 ${counts.current} / 无法检查 ${counts.unknown}`)
+  return { code: 0, lines }
+}
+
+
 /** 主流程（可被测试调用，返回 { code, lines }）。 */
 export async function run(argv, deps = {}) {
   const args = parseArgs(argv)
@@ -150,8 +293,8 @@ export async function run(argv, deps = {}) {
   const market = deps.marketList || marketList
   const connectors = deps.connectorRegistry || connectorRegistry
 
-  if (!args.kind || !['expert', 'skill', 'connector', 'installed', 'inspect'].includes(args.kind)) {
-    return { code: 2, lines: ['ERROR 用法：hub-find.mjs <expert|skill|connector|installed|inspect> [关键词|名称] [--limit N] [--json]'] }
+  if (!args.kind || !['expert', 'skill', 'connector', 'installed', 'inspect', 'update-check'].includes(args.kind)) {
+    return { code: 2, lines: ['ERROR 用法：hub-find.mjs <expert|skill|connector|installed|inspect|update-check> [关键词|名称] [--limit N] [--json]'] }
   }
 
   // ---- inspect：装前只读安全预检（不落盘、不碰 storeRoot、不执行包内代码）----
@@ -187,6 +330,16 @@ export async function run(argv, deps = {}) {
       note: oneLine(rec.source === 'official' ? '官方' : '镜像时代安装', 12), tags: [],
     }))
     return finish(rows, args, rows.length)
+  }
+
+  // ---- update-check：只读检查更新（复用 src/updates.js，与 GET /updates 同一判定）----
+  // 语义纪律：信息不足（缺官方版本 / 缺 officialMeta / 未登录 / 接口失败 / 已下架）
+  // 一律「无法检查」，**绝不能**说成「已是最新」；全程不写盘、不触发启用或重装。
+  if (args.kind === 'update-check') {
+    return runUpdateCheck({ args, paths, positional, deps: {
+      registry: deps.registry || officialRegistry, connectors: deps.connectorRegistry || connectorRegistry,
+      skillDetailsFor: deps.skillDetailsFor || skillDetails, loadAuth: deps.loadAuth || loadAuth,
+    } })
   }
 
   let rows = []

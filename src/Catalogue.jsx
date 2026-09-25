@@ -573,6 +573,11 @@ export default function Catalogue({
     </div>
   )
 
+  // 搜索关键词变化时重置「推荐/套件」分段（官方搜索结果是平铺列表，没有分段）：
+  // 否则切到「套件」后搜索，segment 仍是 1，行为说不清（真实 UI 复现过）。
+  const trimmedQuery = String(query ?? '').trim()
+  useEffect(() => { setSegment(0) }, [trimmedQuery])
+
   // 官方搜索框：.ec-search-wrapper 220x32 > .wb-input-wrapper--medium
   // (p 0 8 / gap 4 / r8 / #f2f2f2 / border 1px rgba(0,0,0,.08)) + prefix 图标 14px
   // + input 16px + placeholder rgba(0,0,0,.3)；占位文案官方每页不同
@@ -649,7 +654,15 @@ export default function Catalogue({
       <div className="skills-grid">
         {loading && skeletonCards}
         {!loading && failed && <div className="wbh-state">读取失败：{failed}</div>}
-        {!loading && !failed && visible.length === 0 && <div className="wbh-state"><p>暂无{kindMeta.label}</p></div>}
+        {!loading && !failed && visible.length === 0 && (
+          // 与专家页同口径：有搜索词给「没找到」，没搜索词才是「暂无」——
+          // 搜索无命中时「暂无技能」读起来像目录本身空了，误导。
+          <div className="wbh-state"><WbIcon name={kindMeta.icon} size={40} />
+            <p>{trimmedQuery
+              ? `没有找到与「${trimmedQuery}」匹配的${kindMeta.label}，试试其他关键词`
+              : `暂无${kindMeta.label}`}</p>
+          </div>
+        )}
         {visible.map(entry => kind === 'connector'
           ? <ConnectorCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busyAll} onDetail={handleDetail} onAction={onAction} onConnectorAction={connectorAction} bound={bound} />
           : <SkillCard key={`${entry.kind}/${entry.name}`} entry={entry} busy={busy} onDetail={handleDetail} onAction={onAction} />)}
@@ -944,10 +957,11 @@ export default function Catalogue({
       const connected = entry.kind === 'connector' ? isBound(entry) : Boolean(entry._enabled || entry.isConnected)
       const isPinned = pinned.has(key)
       return (
+        // 点击整行 = attach（与回车一致）：连接器挂到当前会话并出 chip；技能写输入框；
+        // 专家走 onAction（召唤）。行内开关只承载「启/停用」这一种语义（见行尾）。
         <div key={key} className={`wbh-flyoutRow is-${entry.kind}`} role="menuitem" tabIndex={0}
           onClick={() => {
             if (entry.kind === 'skill') handleSkillPick(entry)
-            else if (entry.kind === 'connector') void connectorAction(entry)
             else onAction?.(entry)
           }}
           onKeyDown={e => { if (e.key === 'Enter') onAction?.(entry) }}>
@@ -973,15 +987,17 @@ export default function Catalogue({
               <span className="wbh-pinHover"><PickIcon name="pinHover" size={16} /></span>
             </button>
           )}
+          {/* 连接器行尾开关：显式承载「启用/停用」语义（点击整行不再承担它）。
+              停用状态显示为可点的开关（点击 = 启用并 attach），启用状态显示
+              绿色开关（点击 = 停用）。键盘 Enter 落在整行 = attach 语义不变。 */}
           {entry.kind === 'connector' && (
-            connected
-              ? <span className="wbh-toggle is-on" role="switch" aria-checked="true" aria-label="已连接"><i /></span>
-              : (
-                <span className="wbh-linkAction" aria-hidden="true">
-                  <PickIcon name="connLink" size={14} />
-                  <span>连接</span>
-                </span>
-              )
+            <button type="button" className={`wbh-toggle${connected ? ' is-on' : ''}`}
+              role="switch" aria-checked={connected}
+              aria-label={`${connected ? '停用' : '启用'} ${entry.displayName}`}
+              disabled={busyLocal === key}
+              onClick={e => { e.stopPropagation(); void connectorAction(entry) }}>
+              <i />
+            </button>
           )}
           {busyLocal === key && <span className="wbh-flyoutBusy">…</span>}
         </div>

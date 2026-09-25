@@ -333,4 +333,98 @@ assert.ok(!catalogueSrc.includes('connectorLoginGate'),
 assert.ok(catalogueSrc.includes('STALE_LOGIN_REASON'),
   '已登录但凭证失效（stale）时必须与连接器页同样处理')
 
+// ---- 连接器 chip 的官方 MCP 图标：源码/渲染契约 --------------------------------
+// 官方效果：输入框下方的已加载连接器 chip 显示注册表的 `icon`（远端 URL）。
+// 纪律：加载失败（断网 / CSP / 404）必须优雅回退成原文字 chip，绝不出现破图；
+// 且只影响连接器 —— 专家/技能的 icon 字段语义不同，不得被牵连改掉。
+const railSrc = readFileSync(new URL('./src/AttachedRail.jsx', import.meta.url), 'utf8')
+assert.ok(railSrc.includes('onError={() => setBroken(true)}'),
+  '连接器图标加载失败必须走 React 状态回退（onError → broken → 通用图标）')
+assert.ok(railSrc.includes("kind === 'connector'"), '图标分支必须只对连接器生效')
+assert.ok(/alt=\{name\}/.test(railSrc), '连接器图标必须带 displayName 作为 alt')
+assert.ok(/title=\{name\}/.test(railSrc), '连接器图标必须带悬停 title（全名）')
+assert.ok(/aria-label=\{name\}/.test(railSrc), '连接器图标必须带名字的 aria-label')
+{
+  // 真渲染两种形态：有 icon（img + 可访问性属性）、没有 icon（回退，不渲染 img）。
+  // railEntry.jsx 用 esbuild（构建脚本同款）编成 ESM 后 import —— AttachedRail.jsx
+  // 是 JSX，node 不能直接 import。
+  const repoDir = fileURLToPath(new URL('.', import.meta.url))
+  const cache = join(repoDir, 'node_modules', '.cache', 'wbh-settings-test')
+  mkdirSync(cache, { recursive: true })
+  const railEntry = join(cache, 'rail-entry.jsx')
+  writeFileSync(railEntry, [
+    `export { default, RailConnectorIcon as Icon } from ${JSON.stringify(join(repoDir, 'src', 'AttachedRail.jsx'))}`,
+  ].join('\n'))
+  const railOut = join(cache, 'rail.mjs')
+  await build({
+    entryPoints: [railEntry],
+    bundle: true, format: 'esm', platform: 'node', jsx: 'transform',
+    external: ['react', 'react-dom', 'qrcode'], outfile: railOut, logLevel: 'silent',
+  })
+  const { Icon } = await import(pathToFileURL(railOut).href)
+  const label = '腾讯文档'
+  const withIcon = renderToString(React.createElement(Icon, { icon: 'https://example.invalid/x.png', name: label }))
+  assert.ok(withIcon.includes('<img'), '有官方 icon 时渲染 <img>')
+  assert.ok(withIcon.includes(`alt="${label}"`), 'img 的 alt 必须是 displayName')
+  assert.ok(withIcon.includes(`aria-label="${label}"`), 'img 的 aria-label 必须带名字')
+  assert.ok(withIcon.includes('wbh-railIconImg'), '图标必须挂 wbh- 前缀的样式类')
+  const withoutIcon = renderToString(React.createElement(Icon, { icon: '', name: label }))
+  assert.ok(!withoutIcon.includes('<img'), '没有 icon 时不渲染 img（原通用图标回退）')
+  rmSync(cache, { recursive: true, force: true })
+}
+
 console.log('render smoke + hub import completeness: OK')
+
+// ---- picker 连接器行：点击 = attach（与回车一致），开关只承载启/停 --------------
+// 真机缺陷：点击一行走的是行内开关（connectorAction），不把连接器 attach 到当前会话、
+// 不出 chip；只有回车才走 onAction → attach。结果「已加载的连接器在输入框下方显示图标」
+// 这条链路点击根本走不到。修复契约（源码层断言）：
+//  1) picker 行的 onClick / onKeyDown 收敛到同一 onAction（attach）；连接器不再有分支；
+//  2) 行尾有一个显式的 <button> 开关（wbh-toggle）承担原「启/停用」语义，点击带
+//     stopPropagation，不会双重触发；
+//  3) 专家/技能行的既有语义不动（技能写输入框、专家走 onAction）。
+{
+  const composerSrc = readFileSync(new URL('./src/ComposerAdd.jsx', import.meta.url), 'utf8')
+  // picker 的行渲染在 Catalogue（variant==='picker' 分支）
+  const pickerBlock = catalogueSrc.slice(catalogueSrc.indexOf("variant === 'picker'"))
+  const rowBlock = pickerBlock.slice(pickerBlock.indexOf('const rowNode'), pickerBlock.indexOf('const listNode'))
+  // a) 整行点击/回车：只有 skill 分支与 onAction —— 连接器不再有独立的 connectorAction 分支
+  const rowOnClick = rowBlock.slice(rowBlock.indexOf('onClick={() => {'), rowBlock.indexOf('onKeyDown'))
+  assert.ok(rowOnClick.includes("if (entry.kind === 'skill') handleSkillPick(entry)"), '技能行点击仍是写输入框')
+  assert.ok(rowOnClick.includes('onAction?.(entry)'), '其余条目（含连接器）行点击必须走 onAction（= attach）')
+  assert.ok(!rowOnClick.includes('connectorAction'), '整行点击不得再触发 connectorAction（那是开关的语义）')
+  const rowOnKeyDown = rowBlock.slice(rowBlock.indexOf('onKeyDown'), rowBlock.indexOf('<span className={`wbh-flyoutIcon'))
+  assert.ok(rowOnKeyDown.includes("if (e.key === 'Enter') onAction?.(entry)"), '回车 = onAction（attach），与点击一致')
+  // b) 行尾显式开关：真 button + role=switch + stopPropagation
+  const toggleBlock = rowBlock.slice(rowBlock.indexOf("entry.kind === 'connector' && ("))
+  assert.match(toggleBlock, /<button type="button" className=\{`wbh-toggle/, '连接器行尾必须是显式开关按钮（wbh-toggle）')
+  assert.ok(toggleBlock.includes('role="switch"') && toggleBlock.includes('aria-checked={connected}'), '开关要暴露 switch 语义与当前状态')
+  assert.ok(toggleBlock.includes('e.stopPropagation()'), '开关点击必须 stopPropagation（不能连带触发整行 attach）')
+  assert.ok(toggleBlock.includes('void connectorAction(entry)'), '开关点击才调用 connectorAction（启/停用）')
+  assert.ok(toggleBlock.includes('aria-label={`${connected'), '开关 aria-label 必须按状态区分「启用/停用」')
+  // c) attach 的连接器分支：点击与回车都进入「未启用先启用 + mount 到当前会话」，
+  //    不再承担「已启用时再点 = 断开」（那是开关的职责）
+  const attachConnector = composerSrc.slice(composerSrc.indexOf("if (entry.kind === 'connector') {"), composerSrc.indexOf("} else if (entry.kind === 'expert') {"))
+  assert.ok(attachConnector.includes('hub.enableConnector(entry.name)'), 'attach：未启用的连接器要先启用')
+  assert.ok(attachConnector.includes('hub.mount(sessionId'), 'attach：连接器必须挂到当前会话（chip 链路）')
+  assert.ok(!attachConnector.includes('hub.disableConnector'), 'attach 不再承担断开语义（断开在行尾开关 / AttachedRail 的 X）')
+  // d) 样式：wbh-toggle 在 official-picker.css 有官方对齐基础值；app.css 只补按钮可用性
+  const pickerCss = readFileSync(new URL('./src/official-picker.css', import.meta.url), 'utf8')
+  assert.ok(pickerCss.includes('.wbh-toggle{'), 'wbh-toggle 基础样式仍在 official-picker.css')
+  const appCss = readFileSync(new URL('./src/app.css', import.meta.url), 'utf8')
+  assert.ok(appCss.includes('.wbh-flyoutRow .wbh-toggle:focus-visible'), 'app.css 要补开关的焦点可见性（它是真按钮了）')
+  // e) 产物同步：client.js 必须带上新行为（esbuild 会把中文转义成 \uXXXX，按转义后断言）
+  const built = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
+  assert.ok(built.includes('"\\u505C\\u7528" : "\\u542F\\u7528"') || built.includes('"\\u505C\\u7528":"\\u542F\\u7528"'),
+    '构建产物必须携带新开关行为（启用/停用 aria-label）')
+  // f) attach 失败必须撤掉乐观 chip（真机缺陷：rail 显示「已加载」但宿主没挂上）
+  //    真机证据（隔离实例）：点击连接器行 → POST /connectors/enable 502（缺凭据）→
+  //    hub.mount 根本没发出 → 宿主 mounts.json / GET /mounted 皆空，而 chip 仍在。
+  const composerCatch = composerSrc.slice(composerSrc.indexOf('} catch (error) {'), composerSrc.indexOf('} finally { setBusy('))
+  assert.ok(composerCatch.includes('if (!mounted.has(key))'), 'attach 失败要按宿主挂载真相决定是否回滚 chip')
+  assert.ok(composerCatch.includes('removeSelection(sessionId, entry.kind, entry.name)'), 'attach 失败必须撤掉这次的乐观 chip')
+  assert.ok(composerCatch.includes('addSelection(replacedOnAdd[0], sessionId)'), '专家单槽位：失败要把被替换的专家 chip 还原')
+  assert.match(composerSrc, /import \{[^}]*\bremoveSelection\b[^}]*\} from '\.\/hub\.js'/, 'removeSelection 必须从 hub.js 导入')
+  assert.ok(built.includes('removeSelection(sessionId, entry.kind, entry.name)'), '构建产物必须携带 chip 回滚行为')
+}
+console.log('picker connector row: click == Enter (attach) + explicit toggle + failed attach rolls the chip back: OK')

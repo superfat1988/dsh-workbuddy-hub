@@ -148,7 +148,7 @@ PY
 
 | ID | 步骤 | 预期 | 证据 |
 |---|---|---|---|
-| **A1** | `set -o pipefail && npm test` | exit 0；**16 个套件**全部 `OK`/`PASSED`（联网版 `npm run test:live` 单独跑，离线会 SKIP）| 尾部输出 |
+| **A1** | `set -o pipefail && npm test` | exit 0；**17 个套件**全部 `OK`/`PASSED`（联网版 `npm run test:live` 单独跑，离线会 SKIP）| 尾部输出 |
 | **A2** | `npm run build:client` 后 `git status --short` | `client.js` 无变化（证明 src 与产物同步） | 命令输出 |
 | **A3** | `node test-package.mjs` | 通过；且其中「真打包→解压→import」一步成功 | 输出里 `import('./index.js') 成功` |
 | **A4** | `npm pack --dry-run --json`，检查产物清单 | 含 `index.js expert-persona.js mcp-manager.js wb-market.js wb-experts.js wb-cats.js wb-unzip.js scan.js wb-inspect.js client.js client.css cordis.patch.yml` 与 `skills/*` | 文件清单 |
@@ -171,6 +171,19 @@ PY
 | **I9** | 同上但在审批里点**拒绝** | 工具返回「用户未批准…未安装」；注册表无记录；审计行 `approval=rejected` | 工具返回 + registry + 日志 |
 | **I10** | 用工具装一个连接器（批准后） | 记录 `enabled:false`；未调用 `/connectors/enable` 前无 MCP 传输（loader 无 mcp-client 行）；mcp.json 里凭据只有 `${WORKBUDDY_TOKEN}` 引用 | registry + loader + 文件 |
 | **I11** | 一致性：同一 storeRoot 下分别经工具与 `POST /install` 装同名条目，比对两条 registry 记录 | 除时间戳外字段一致（kind/name/dest/source/files/bytes/flags）——证明路由与工具复用同一 `installEntry` | registry 对比 |
+
+## I2. workbuddy_uninstall 审批工具 + update-check 脚本（与 I 组同环境）
+
+| ID | 步骤 | 预期 | 证据 |
+|---|---|---|---|
+| **I2-1** | 隔离实例会话里让模型调 `workbuddy_uninstall`（无审批通道实例） | 返回 fail-closed 文案「当前没有可用的审批通道，出于安全未卸载（fail-closed）」；注册表/文件/挂载**全部原样**；控制台有 `[wbh] uninstall … approval=unavailable` 审计行 | 工具返回 + registry + 目录对比 + 日志 |
+| **I2-2** | 有审批通道的会话移除一个技能：先说明将移除什么 → 用户同意 → 调工具 | 弹出 DSH 原生审批卡（reason 含文件数/体量/安装时间/不可撤销）；批准后注册表无记录、目录被删、`prunedSessions` 如实报数 | UI 截图 + registry + 工具返回 |
+| **I2-3** | 审批里点**拒绝** | 工具返回「用户未批准…未卸载」；零副作用（注册表/文件/挂载原样）；审计行 `approval=rejected` | 工具返回 + 日志 |
+| **I2-4** | 卸载一个**已启用**的连接器 | MCP 行先被 dispose（loader 无该 mcp-client 行）再删文件；`connectors/<name>/` 不留残骸 | registry + loader 状态 |
+| **I2-5** | 一致性：同一 storeRoot 下分别经工具与 `POST /uninstall` 卸载同一种条目 | 「删除后」状态一致（注册表无该 key、挂载被摘、目录消失）——证明路由与工具复用同一 `uninstallEntry` | registry + mounts 对比 |
+| **I2-6** | `node <插件目录>/scripts/hub-find.mjs update-check`（宿主仓库内执行即可） | 每行一条 `kind/name \| 状态 \| 本地→远端` + 末尾汇总 `# 共 N 项：…`；历史遗留安装（无 `officialMeta`）输出「无法检查」并注明缺什么，**绝不**显示「已是最新」 | 命令输出 |
+| **I2-7** | `update-check --json` | 一行合法 JSON 数组，元素带 `status` 与中文 `label` | 命令输出 |
+| **I2-8** | 跑完 update-check / inspect 后对比 storeRoot 的 md5/mtime | **零变化**（两个子命令都只读） | 前后对比 |
 
 ## L. 未登录态（0.2 实例）
 
@@ -211,6 +224,8 @@ PY
 | **P5** | 在 picker 里选一位专家，观察 composer | **不新建会话**（`window.__wbh.composerSession()` 不变） | 前后 sessionId |
 | **P6** | 反复选不同专家后再打开面板 | 最近选过的专家排在（非置顶的）最前面；置顶项仍在最前 | 面板行序 |
 | **P7** | picker 里再选一个**技能**和一个**连接器**，再选另一位专家 | 技能/连接器叠加为多个 chip；专家仍只有 1 个 | chip 列表 |
+| **P8** | 连接器面板里**点击**（不是回车）一行未连接的连接器 | 与回车一致：连接器被 attach 到当前会话 → 输入框下方出现带图标的 chip；停用状态先被启用（`GET /mounted` 可见该 key） | chip DOM/截图 + mounted 响应 |
+| **P9** | 连接器行尾的**开关**（行内小 switch） | 点击开关 = 启用/停用（显式控件，不承担 attach）；整行点击/回车只走 attach，不重复弹窗 | 行为对比 + mounted 响应 |
 
 ## M. 市场页
 
