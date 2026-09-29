@@ -7,6 +7,7 @@ import SummonModal from './SummonModal.jsx'
 import ConnectorAuthModal from './ConnectorAuthModal.jsx'
 import WbAuthCard from './WbAuthCard.jsx'
 import AttachedRail from './AttachedRail.jsx'
+import ExpertMarketModal from './ExpertMarketModal.jsx'
 import { insertPromptIntoComposer } from './insert-prompt.js'
 import './official-picker.css'
 
@@ -35,6 +36,7 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
   const [busy, setBusy] = useState('')
   const [notice, setNotice] = useState('')
   const [summoning, setSummoning] = useState(null)
+  const [marketOpen, setMarketOpen] = useState(false)   // picker「召唤更多专家」弹出的小窗口
   const [authorising, setAuthorising] = useState(null)
   const [recent, setRecent] = useState([])
   const [auth, setAuth] = useState(() => authState())
@@ -214,6 +216,7 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
       }
       setRecent(prev => [entry, ...prev.filter(e => e.key !== key)].slice(0, 5))
       await refresh()
+      return true
     } catch (error) {
       // 失败 → 撤掉这次先出的乐观 chip：rail 上的条目必须代表「宿主真的挂上了」。
       // 真机复现（隔离实例）：连接器 enable 因缺凭据 502 → 下面的 hub.mount 根本没执行
@@ -228,6 +231,7 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
       const refs = error.body?.credentialRefs ?? []
       if (refs.length > 0) setAuthorising({ entry, refs, error: error.message })
       else setNotice(`失败：${error.message}`)
+      return false
     } finally { setBusy('') }
   }, [installed, mounted, refresh, runCommand, sessionId])
 
@@ -317,6 +321,7 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
                   query={query} onQuery={setQuery} onDetail={onDetail} onAction={onAction}
                   installed={installed} mounted={mounted} busy={busy}
                   footerExtra={authFooter}
+                  onMore={() => { setMenuOpen(false); setPickerOpen(false); setMarketOpen(true) }}
                   onSettled={() => setSettled(true)}
                 />
               </div>
@@ -325,6 +330,17 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
           </div>
           {notice && <div className="wbh-flyoutNotice">{notice}</div>}
         </>
+      )}
+
+      {marketOpen && (
+        /* 「召唤更多专家」小窗口：内容 = 市场页目录；这里的动作**直接作用于当前对话**
+           （attach 已经包含：没装先装 → 挂到 sessionId → 出 chip），成功后关窗露出 chip。 */
+        <ExpertMarketModal
+          sessionId={sessionId} kind="expert" installed={installed} mounted={mounted}
+          busy={busy} notice={notice} onRefresh={refresh}
+          onClose={() => setMarketOpen(false)}
+          onAction={async entry => { const ok = await attach(entry); if (ok) setMarketOpen(false) }}
+        />
       )}
 
       {summoning && (

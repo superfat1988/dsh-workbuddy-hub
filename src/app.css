@@ -309,3 +309,14 @@
 .wbh-flyoutRow.is-mcp .wbh-flyoutName{flex:0 0 auto}
 .wbh-mcpMeta{flex:0 1 auto;min-width:0;text-align:right;padding-right:8px;font-size:11px;line-height:16px;color:var(--wb-color-text-tertiary,#999);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wbh-mcpBadge{flex:0 0 auto;padding:0 6px;border:1px solid var(--wb-border-default,rgba(0,0,0,.12));border-radius:4px;font-size:10px;line-height:18px;color:var(--wb-color-text-tertiary,#999)}
+
+/* --- picker「召唤更多专家」弹出的小窗口（内容 = 市场页目录）---------------------
+   复用官方 .ec-modal-overlay / .ec-modal-card 外壳（z-index 6300，盖在 picker 之上），
+   这里只把它放大到市场尺寸，并做成「头部 + 可滚动主体」两段。 */
+.wbh-marketModal{width:min(1080px,94vw);height:min(720px,88vh);max-width:min(1080px,94vw);max-height:min(720px,88vh);padding:0;display:flex;flex-direction:column;overflow:hidden}
+.wbh-marketModalHead{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--wb-border-subtle,rgba(0,0,0,.06))}
+.wbh-marketModalTitle{font-size:15px;font-weight:600;line-height:22px;color:var(--wb-color-text-primary)}
+.wbh-marketModalHint{flex:1 1 auto;font-size:12px;line-height:18px;color:var(--wb-color-text-tertiary,#999)}
+.wbh-marketModalClose{padding:0}
+.wbh-marketModalNotice{flex:0 0 auto;margin:10px 16px 0;padding:6px 10px;border-radius:8px;background:var(--wb-bg-tertiary,#f4f4f4);font-size:12px;line-height:18px;color:var(--wb-color-text-secondary)}
+.wbh-marketModalBody{flex:1 1 auto;min-height:0;overflow-y:auto;padding:0 16px 16px}

@@ -189,7 +189,7 @@ function ConnectorCard({ entry, busy, onDetail, onAction, onConnectorAction, bou
 export default function Catalogue({
   sessionId, kind, onKind, query, onQuery, onDetail, onAction,
   installed = {}, mounted = new Set(), busy = '', variant = 'page', onRefresh, footerExtra = null,
-  topbarRight = null, onSettled = null,
+  topbarRight = null, onSettled = null, onMore = null,
 }) {
   const [rows, setRows] = useState([])
   const [hasMore, setHasMore] = useState(false)
@@ -938,8 +938,14 @@ export default function Catalogue({
         <span className="wbh-flyoutFooterLabel">管理连接器</span>
       </div>
     ) : kind === 'expert' ? (
+      /* 「召唤更多专家」在 picker 里**弹小窗口**（内容 = 市场页目录），弹窗里的召唤直接
+         加载到打开它的那个对话 —— 由父组件注入 onMore；没有注入时退回旧行为（跳市场页）。 */
       <div className="wbh-flyoutFooterItem" role="menuitem" tabIndex={0}
-        onClick={() => openMarket({ kind: 'expert', view: 'market' })}>
+        onClick={e => {
+          e.stopPropagation()
+          if (onMore) onMore('expert')
+          else openMarket({ kind: 'expert', view: 'market' })
+        }}>
         <span className="wbh-flyoutFooterIcon"><PickIcon name="summonMore" size={16} /></span>
         <span className="wbh-flyoutFooterLabel">召唤更多专家</span>
       </div>
@@ -975,7 +981,12 @@ export default function Catalogue({
       : kind === 'skill'
         ? localSkills
         : visible
-    const pinnedOfKind = pinnedEntries.filter(x => x.kind === kind)
+    // 图钉项**不能绕过搜索**：置顶只影响顺序，不该让「搜什么都还有对象、永远看不到没找到」。
+    // 真机反馈：图钉过的条目在任何关键词下都留在列表里 → 用户以为搜索没生效。
+    const activeQuery = String(query ?? '').trim().toLowerCase()
+    const matchesQuery = x => activeQuery === ''
+      || [x.name, x.displayName, x.description].some(v => String(v || '').toLowerCase().includes(activeQuery))
+    const pinnedOfKind = pinnedEntries.filter(x => x.kind === kind && matchesQuery(x))
     const merged = [...pinnedOfKind, ...baseRows.filter(b => !pinnedOfKind.some(p => p.name === b.name && p.kind === b.kind))]
     // 官方实测排序：**已打开**的连接器置顶（带开关）→ 已授权未打开 → 图钉置顶项 → 其余。
     // 注意「已打开」必须看本地启用态（installed[].enabled），不是官方账号绑定态：绑定态会让

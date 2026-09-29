@@ -485,3 +485,49 @@ console.log('picker connector row: click == Enter (attach) + explicit toggle + f
   assert.ok(builtRail.includes('wbh-chipLabel'), '构建产物必须携带新 chip 结构')
 }
 console.log('loaded chips: official .cr-chip-* metrics + TDesign switch animation: OK')
+
+// ---- 「召唤更多专家」弹窗 + 图钉不绕过搜索 ------------------------------------
+{
+  const catalogue = readFileSync(new URL('./src/Catalogue.jsx', import.meta.url), 'utf8')
+  const composer = readFileSync(new URL('./src/ComposerAdd.jsx', import.meta.url), 'utf8')
+  const modal = readFileSync(new URL('./src/ExpertMarketModal.jsx', import.meta.url), 'utf8')
+  const css = readFileSync(new URL('./src/app.css', import.meta.url), 'utf8')
+  const built = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
+
+  // a) 图钉项必须参与搜索过滤（真机反馈：图钉过的条目在任何关键词下都留着 → 以为搜索没生效）
+  assert.ok(catalogue.includes('matchesQuery(x)') && catalogue.includes('const activeQuery'),
+    '图钉项要按当前搜索词过滤，不能绕过搜索')
+  assert.match(catalogue, /pinnedEntries\.filter\(x => x\.kind === kind && matchesQuery\(x\)\)/,
+    'pinnedOfKind 必须叠加 matchesQuery 过滤')
+
+  // b) picker 底栏「召唤更多专家」走注入的 onMore（弹窗），没有注入时退回跳市场页
+  const footer = catalogue.slice(catalogue.indexOf("kind === 'expert' ? ("), catalogue.indexOf("</>\n    )"))
+  assert.ok(footer.includes('if (onMore) onMore('), '「召唤更多专家」优先走 onMore（弹窗）')
+  assert.ok(footer.includes("openMarket({ kind: 'expert', view: 'market' })"), '未注入 onMore 时保留旧的跳转兜底')
+  assert.match(catalogue, /onSettled = null, onMore = null,/, 'Catalogue 要暴露 onMore 注入点')
+
+  // c) ComposerAdd：onMore 打开弹窗；弹窗动作 = attach（作用于当前会话）
+  assert.ok(composer.includes('const [marketOpen, setMarketOpen] = useState(false)'), '要有弹窗开关状态')
+  assert.ok(composer.includes('onMore={() => { setMenuOpen(false); setPickerOpen(false); setMarketOpen(true) }}'),
+    'picker 的 onMore 要关掉 picker 并打开弹窗')
+  const modalUsage = composer.slice(composer.indexOf('<ExpertMarketModal'), composer.indexOf('{summoning && ('))
+  assert.ok(modalUsage.includes('sessionId={sessionId}'), '弹窗必须拿到当前会话 id（动作落在本对话）')
+  assert.ok(modalUsage.includes('onAction={async entry => { const ok = await attach(entry); if (ok) setMarketOpen(false) }}'),
+    '弹窗里的动作走 attach（没装先装 → 挂到本会话 → 出 chip），成功才关窗')
+  assert.ok(composer.includes('      return true\n    } catch (error) {'), 'attach 成功要返回 true（供弹窗判断）')
+  assert.ok(composer.includes('      return false\n    } finally { setBusy('), 'attach 失败要返回 false')
+
+  // d) 弹窗内容 = 市场页同一个 Catalogue（variant=page），不自己新建会话
+  assert.ok(modal.includes('variant="page"'), '弹窗内用市场页那种 page 变体（内容与市场页一致）')
+  assert.ok(modal.includes('onAction={onAction}') && modal.includes('onDetail={onAction}'),
+    '弹窗的卡片动作/详情都交给注入的 onAction（直接作用于当前对话）')
+  assert.ok(!modal.includes('summonExpertInNewSession') && !modal.includes('openSessionById'),
+    '弹窗不得自己新建会话（那是市场页的语义）')
+  assert.ok(modal.includes('wbh-marketModalBody') && css.includes('.wbh-marketModal{'),
+    '弹窗要有自己的外壳样式（放大到市场尺寸 + 可滚动主体）')
+
+  // e) 产物同步
+  assert.ok(built.includes('wbh-marketModal'), '构建产物必须携带弹窗外壳')
+  assert.ok(built.includes('matchesQuery'), '构建产物必须携带图钉过滤')
+}
+console.log('picker "more experts" modal + pinned rows respect search: OK')
