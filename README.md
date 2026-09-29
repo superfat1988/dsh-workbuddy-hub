@@ -39,6 +39,7 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 | `skillPrefix` | `workbuddy-` | `~/.dsh/skills/` 下的挂载前缀 |
 | `keepalive` | `true` | 后台每 30 分钟巡检并主动刷新凭证 |
 | `localMcp` | **`false`** | 本地 MCP 服务器管理总开关（默认关闭）。打开后设置区才出现「本地 MCP 服务器」节，允许注册/启停本机 MCP 服务器（仅 loopback，v1 只支持 streamable-http，stdio 一律拒绝） |
+| `localMcpRestoreBackoffMs` | `[0, 3000, 7000, 15000, 30000]` | 启动恢复的重试退避（毫秒，逐次尝试前的等待）。DSH 起来时被恢复的目标常常还没就绪（本地 MCP 多半是 Docker 容器、凭据服务也可能未可用），**只试一次会把这种瞬时故障变成永久停用**，因此默认合计约 55s 内重试 5 次；序列用尽仍失败才记 `lastError` 并复位 `enabled`。测试用短序列注入 |
 
 ## HTTP 路由（Host 侧 `/workbuddy-hub`，全部先过 `ctx.connection.requestRejection`）
 

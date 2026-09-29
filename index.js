@@ -3302,6 +3302,43 @@ export function apply(ctx, config = {}) {
     return true
   }
 
+  /**
+   * 启动恢复的重试退避（毫秒，逐次尝试前的等待）。
+   *
+   * 为什么需要：DSH 起来时，被恢复的目标往往**还没就绪** —— 本地 MCP 服务器多半是
+   * Docker 容器（在本机启动流程里晚于 DSH），凭据服务也可能尚未可用。只试一次会让
+   * 这种**瞬时**故障把条目永久置为停用：
+   *   2026-09-26 实测 —— 开机后 1 分钟恢复 scrapling 失败（容器未就绪），
+   *   entry.enabled 被写成 false 且此后不再重试，用户只能在 UI 里人工重开。
+   * 默认序列合计约 55s，足以覆盖容器冷启动，又不会无限占用启动路径。
+   * 可用 `localMcpRestoreBackoffMs` 覆盖（测试传短序列）。
+   */
+  const restoreBackoffMs = Array.isArray(cfg.localMcpRestoreBackoffMs) && cfg.localMcpRestoreBackoffMs.length > 0
+    ? cfg.localMcpRestoreBackoffMs.map(n => (Number.isFinite(n) && n >= 0 ? n : 0))
+    : [0, 3_000, 7_000, 15_000, 30_000]
+
+  /**
+   * 按退避序列重试一次恢复动作。
+   * @returns `{ value, attempts }` 成功；`{ cancelled: true }` 被卸载取消；
+   *          序列用尽仍失败则抛最后一次错误（此时实际尝试次数等于序列长度）。
+   */
+  const retryRestore = async (action, isCancelled) => {
+    let lastError
+    let attempts = 0
+    for (const wait of restoreBackoffMs) {
+      if (isCancelled()) return { cancelled: true, attempts }
+      if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait))
+      if (isCancelled()) return { cancelled: true, attempts }
+      attempts += 1
+      try {
+        return { value: await action(), attempts }
+      } catch (error) {
+        lastError = error
+      }
+    }
+    throw lastError
+  }
+
   // 启动时恢复用户已启用的连接器：enable 只作用于当前运行时的 MCP 挂载，
   // 所以重启后必须按 registry 记录重新挂载，否则「已启用」的连接器会静默失效。
   ctx.effect(() => {
@@ -3316,7 +3353,9 @@ export function apply(ctx, config = {}) {
             const mcpPath = join(record.dest, 'mcp.json')
             if (!existsSync(mcpPath)) continue
             const raw = JSON.parse(readFileSync(mcpPath, 'utf8'))
-            const result = await connectors.enable(key, raw, record.name)
+            const outcome = await retryRestore(() => connectors.enable(key, raw, record.name), () => cancelled)
+            if (outcome.cancelled) return
+            const result = outcome.value
             noteConnectorStatus(key, { enabled: true, status: 'enabled', lastError: '', serverName: result.serverName, credentialRefs: result.refs, transport: result.summary.transport })
           } catch (error) {
             noteConnectorStatus(key, { enabled: false, status: 'failed', lastError: String(error?.message || error).slice(0, 300) })
@@ -3339,7 +3378,9 @@ export function apply(ctx, config = {}) {
           if (cancelled) return
           if (entry.enabled !== true) continue
           try {
-            const result = await enableLocalMcp(entry)
+            const outcome = await retryRestore(() => enableLocalMcp(entry), () => cancelled)
+            if (outcome.cancelled) return
+            const result = outcome.value
             const now = new Date().toISOString()
             entry.serverName = result.serverName
             entry.lastEnabledAt = now
@@ -3347,7 +3388,7 @@ export function apply(ctx, config = {}) {
             entry.lastError = ''
             entry.authMode = result.authMode
             saveLocalMcp(entry)
-            auditLog('restore', entry.name, `serverName=${result.serverName} auth=${result.authMode} at=${now}`)
+            auditLog('restore', entry.name, `serverName=${result.serverName} auth=${result.authMode} attempts=${outcome.attempts} at=${now}`)
           } catch (error) {
             const message = String(error?.message || error).slice(0, 300)
             try {
@@ -3357,7 +3398,7 @@ export function apply(ctx, config = {}) {
               entry.updatedAt = now
               saveLocalMcp(entry)
             } catch { /* 落盘失败也只影响可见性 */ }
-            auditLog('restore-failed', entry.name, `error=${message}`)
+            auditLog('restore-failed', entry.name, `error=${message} attempts=${restoreBackoffMs.length}`)
           }
         }
       } catch { /* 列表读不出来 → 没有可恢复的记录 */ }

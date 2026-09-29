@@ -30,6 +30,8 @@ function makeCtx(root, opts = {}) {
   }
   const fibers = new Map()
   let nextId = 1
+  /** fiber.await 的累计次数：`fiberRejectsFirstN` 用它模拟「服务端稍后才就绪」。 */
+  let fiberAwaits = 0
   const handler = { current: null }
   const ctx = {
     get: name => (name === 'tools' ? { schemas: () => [
@@ -61,7 +63,14 @@ function makeCtx(root, opts = {}) {
         const id = `row-${nextId++}`
         calls.created.push({ name, config })
         fibers.set(id, {
-          await: async () => (opts.fiberRejects ? Promise.reject(new Error(opts.fiberRejects)) : Promise.resolve()),
+          await: async () => {
+            fiberAwaits += 1
+            if (opts.fiberRejects !== undefined) return Promise.reject(new Error(opts.fiberRejects))
+            if (fiberAwaits <= (opts.fiberRejectsFirstN ?? 0)) {
+              return Promise.reject(new Error(opts.fiberRejectMessage ?? 'ECONNREFUSED'))
+            }
+            return Promise.resolve()
+          },
           dispose: () => { calls.disposed.push(id) },
         })
         ctx.loader.store[id] = { fiber: fibers.get(id) }
@@ -261,6 +270,7 @@ console.log('4. 启动恢复（成功 + 失败都不影响插件启动）…')
   assert.equal(calls.created[0].config.headers.Authorization, `Bearer ${SECRET}`)
 
   // 失败路径：create 后 fiber 拒绝 → lastError 落盘、enabled 复位、进程不崩
+  // 退避序列由配置注入；测试用短序列（默认合计约 55s，见 index.js 的说明）。
   const root2 = makeRoot('restore-fail')
   mkdirSync(join(root2, 'mcp-servers'), { recursive: true })
   writeFileSync(join(root2, 'mcp-servers', 'down.json'), JSON.stringify({
@@ -268,11 +278,31 @@ console.log('4. 启动恢复（成功 + 失败都不影响插件启动）…')
     tokenRef: 'DOWN_MCP_TOKEN', enabled: true, serverName: 'down',
   }))
   const failCtx = makeCtx(root2, { fiberRejects: 'ECONNREFUSED' })
-  apply(failCtx.ctx, { storeRoot: root2, keepalive: false, localMcp: true, skillsMount: join(root2, 'skills-mount') })
+  apply(failCtx.ctx, { storeRoot: root2, keepalive: false, localMcp: true, skillsMount: join(root2, 'skills-mount'), localMcpRestoreBackoffMs: [0, 10, 10] })
   await new Promise(resolve => setTimeout(resolve, 1900))
   const entry2 = JSON.parse(readFileSync(join(root2, 'mcp-servers', 'down.json'), 'utf8'))
   assert.equal(entry2.enabled, false)
   assert.ok(String(entry2.lastError).includes('ECONNREFUSED'), 'restore failure must land in lastError')
+  assert.equal(failCtx.calls.created.length, 3, 'a persistently failing restore must exhaust the whole retry schedule')
+
+  // 回归（2026-09-26）：容器/凭据服务在 DSH 之后才就绪 —— 首次失败、重试成功时，条目
+  // 必须**保持 enabled 且清空 lastError**。旧实现只试一次就把 enabled 写成 false，
+  // 此后不再重试，用户只能在 UI 里人工重开（scrapling 就是这样被永久停用的）。
+  const root4 = makeRoot('restore-transient')
+  mkdirSync(join(root4, 'mcp-servers'), { recursive: true })
+  writeFileSync(join(root4, 'mcp-servers', 'slow.json'), JSON.stringify({
+    name: 'slow', transport: 'streamable-http', url: 'http://127.0.0.1:8002/mcp',
+    tokenRef: 'SCRAPLING_MCP_TOKEN', enabled: true, serverName: 'slow', lastError: 'stale from an earlier boot',
+  }))
+  const slowCtx = makeCtx(root4, { token: SECRET, fiberRejectsFirstN: 2 })
+  apply(slowCtx.ctx, { storeRoot: root4, keepalive: false, localMcp: true, skillsMount: join(root4, 'skills-mount'), localMcpRestoreBackoffMs: [0, 10, 10, 10] })
+  await new Promise(resolve => setTimeout(resolve, 1900))
+  const entry4 = JSON.parse(readFileSync(join(root4, 'mcp-servers', 'slow.json'), 'utf8'))
+  assert.equal(entry4.enabled, true, 'a transient restore failure must not permanently disable the entry')
+  assert.equal(entry4.lastError, '', 'a successful retry must clear lastError')
+  assert.equal(slowCtx.calls.created.length, 3, 'restore must retry until the server is ready')
+  assert.equal(slowCtx.calls.created.at(-1).config.headers.Authorization, `Bearer ${SECRET}`)
+
   // 功能关闭时恢复逻辑完全不动作
   const root3 = makeRoot('restore-off')
   mkdirSync(join(root3, 'mcp-servers'), { recursive: true })
