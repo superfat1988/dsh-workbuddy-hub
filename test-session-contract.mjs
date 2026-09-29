@@ -270,6 +270,11 @@ assert.ok(catalogueSource.includes(": kind === 'expert'"), 'the category strip i
 // /local-skills 必须包含 hub 装的软链技能（带官方 icon），不再按 skillPrefix 一律跳过
 assert.ok(hostSource.includes('dirent.isSymbolicLink()'), 'local-skills must accept hub symlinks')
 assert.ok(hostSource.includes('hub: Boolean(record)'), 'local-skills must mark hub-installed rows')
+// picker 技能栏的真源是 **DSH 技能服务**：只扫 ~/.dsh/skills 会漏掉插件包自带的
+// skills/（如 dsh-archify 的 bundledSkillDir）等 provider，系统装新技能也不会出现。
+assert.ok(hostSource.includes('collectDshSkills'), 'local-skills 必须先问 DSH 技能服务')
+assert.ok(hostSource.includes("source: 'dsh-skills'"), 'local-skills 要标注数据来源')
+assert.ok(hostSource.includes("ctx?.get?.('skills', false)"), '通过 ctx.get(\'skills\') 取服务（不写进 inject，保持 0.1.6 可加载）')
 assert.ok(hostSource.includes('record?.icon && record.icon !== \'letter:auto\''), 'letter:auto is not a usable icon URL')
 // /installed 必须回填官方图标（专家按 name/displayName，技能按 officialId）
 assert.ok(hostSource.includes('byLabel'), 'expert icon backfill must fall back to displayName')

@@ -853,6 +853,59 @@ export async function ensureExpertPreset(ctx, paths, expertName) {
  * HTTP routes
  * ------------------------------------------------------------------ */
 
+/**
+ * 从 DSH 自己的**技能服务**取全量技能清单（picker 技能栏的真源）。
+ *
+ * 为什么不能只扫 `~/.dsh/skills`：技能由**任意 provider** 提供，那个目录只是其中一个
+ * provider 的根。插件包内自带的 `skills/`（例如 `dsh-archify` 用
+ * `@deepseek-ai/dsh-skill-filesystem` 的 `bundledSkillDir` 挂自己的 skills）、虚拟技能
+ * 等都不在 `~/.dsh/skills` 下 —— 只扫目录必然漏，且系统装了新技能/插件后不会自己出现。
+ * 问服务则天然同步：它汇总所有已注册 provider，按 scope 现算。
+ *
+ * @param ctx 插件上下文
+ * @param registry hub 自己的安装注册表（把 hub 装的技能标成 hub 行、带上官方展示名）
+ * @param skillPrefix hub 技能软链前缀（`workbuddy-`），用于回退匹配
+ * @returns rows；`null` 表示当前组合没有 skills 服务（调用方退回目录扫描）
+ */
+export async function collectDshSkills(ctx, registry = {}, skillPrefix = '') {
+  const skills = ctx?.get?.('skills', false)
+  if (!skills || typeof skills.list !== 'function') return null
+  let list
+  try { list = await skills.list() } catch { return null }
+  if (!Array.isArray(list)) return null
+  const installed = registry?.installed ?? {}
+  const skillRecords = Object.values(installed).filter(record => record?.kind === 'skill')
+  const rows = []
+  for (const skill of list) {
+    const name = typeof skill?.name === 'string' ? skill.name.trim() : ''
+    if (name === '') continue
+    const file = typeof skill.path === 'string' ? skill.path : ''
+    const dir = file === '' ? '' : dirname(file)
+    // hub 装的技能：先按技能名查，再按「去掉前缀」，最后按落地目录反查（软链/改名都能对上）
+    const bare = skillPrefix && name.startsWith(skillPrefix) ? name.slice(skillPrefix.length) : name
+    const record = installed[`skill/${name}`]
+      ?? installed[`skill/${bare}`]
+      ?? skillRecords.find(candidate => candidate.dest && dir !== '' && resolve(candidate.dest) === resolve(dir))
+      ?? null
+    rows.push({
+      kind: 'skill',
+      name,
+      displayName: record?.displayName || name,
+      description: skill.description || record?.description || '',
+      icon: record?.icon && record.icon !== 'letter:auto' ? record.icon : '',
+      local: !record,
+      hub: Boolean(record),
+      provider: String(skill.provider || ''),
+      // 供 UI / 排查：技能是否允许模型自动调用、指令文件在哪
+      modelInvocable: skill.invocation?.modelInvocable !== false,
+      path: file,
+      dir,
+    })
+  }
+  rows.sort((a, b) => (a.hub === b.hub ? a.name.localeCompare(b.name) : (a.hub ? -1 : 1)))
+  return rows
+}
+
 let pluginCtx = null
 export function apply(ctx, config = {}) {
   pluginCtx = ctx
@@ -2659,9 +2712,18 @@ export function apply(ctx, config = {}) {
     // Local DSH skills (~/.dsh/skills): for the composer skill picker's
     // "installed" section. One row per directory holding a SKILL.md.
     if (route === 'GET /local-skills') {
+      const registry = loadJson(P.registry, { version: 1, installed: {} })
+      // ① 首选：问 DSH 的技能服务（汇总所有 provider：~/.dsh/skills、插件包内 skills/、
+      //    虚拟技能…）。这样系统里新装/更新技能（含第三方插件自带的）会**立刻**出现在
+      //    picker 里，不需要我们枚举目录、也不需要为每个 provider 打补丁。
+      const fromService = await collectDshSkills(ctx, registry, skillPrefix)
+      if (fromService !== null) {
+        json(res, 200, { ok: true, source: 'dsh-skills', rows: fromService })
+        return true
+      }
+      // ② 兜底：组合里没有 skills 服务（老版本 / 极简 profile）→ 退回扫 ~/.dsh/skills
       const rows = []
       try {
-        const registry = loadJson(P.registry, { version: 1, installed: {} })
         const dshSkills = join(homedir(), '.dsh', 'skills')
         for (const dirent of readdirSync(dshSkills, { withFileTypes: true })) {
           // 目录与符号链接都要（hub 装的技能是 workbuddy-* 软链）
