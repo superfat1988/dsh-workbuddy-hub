@@ -16,7 +16,7 @@ dsh plugin --profile web add dsh-workbuddy-hub
 还没发到 npm 时用 git：
 
 ```bash
-dsh plugin --profile web add github:<owner>/dsh-workbuddy-hub
+dsh plugin --profile web add github:superfat1988/dsh-workbuddy-hub
 ```
 
 `dsh plugin` 只把包装进 profile 的 `node_modules`。**是否启用**由 profile 的
