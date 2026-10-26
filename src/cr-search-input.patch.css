@@ -100,3 +100,13 @@
 .wbh-port .cr-skills-submenu__pin-btn { opacity: 0; }
 .wbh-port .cr-skills-submenu__item:hover .cr-skills-submenu__pin-btn,
 .wbh-port .cr-skills-submenu__pin-btn--pinned { opacity: 1; }
+
+/* 官方的 `.cr-connectors-submenu__suffix-connect` 是 div（无 UA 外观）；
+ * Hub 里它是 <button>，会带出 UA 的 border/background —— 暗色下表现为白边框方块。 */
+.cr-connectors-submenu__suffix-connect {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
