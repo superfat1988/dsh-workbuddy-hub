@@ -16,7 +16,7 @@
  * user (install ≠ enable), so a failed connector never leaves a stale child.
  */
 import { homedir } from 'node:os'
-import { join, resolve, dirname } from 'node:path'
+import { join, resolve, dirname, extname } from 'node:path'
 import { loginStart, loginPoll, loadAuth, saveAuth, bearer, marketList, marketCategories, connectorRegistry, connectorBound, connectorAuthStart, connectorRevoke, connectorOauthStatus, refreshIfNeeded, loadAuthHealth, saveAuthHealth, clearAuthHealth, onAuthEvent } from './wb-market.js'
 import { KEEPALIVE_THRESHOLD_MS, reduceHealth, touchCheck, isStale } from './src/keepalive.js'
 import { listExperts, categories as officialCategories, installExpert, registry as officialRegistry } from './wb-experts.js'
@@ -25,8 +25,19 @@ import {
   connectorDefHash, skillProvenance, expertProvenance, connectorProvenance,
 } from './src/updates.js'
 import { skillDetails } from './wb-market.js'
+import {
+  ensureDesktopIndex, handshakeTools, readDesktopIndex, desktopRows, desktopRecord, desktopRow,
+  extractConnectorFiles, buildDesktopMcpJson, desktopProvenance, endpointFor, probeEndpoint,
+  mergeConnectorRows, DESKTOP_CATALOG_URL, DESKTOP_TTL_MS,
+} from './wb-desktop.js'
 import { unzip } from './wb-unzip.js'
+import {
+  discoverMcpOAuth, registerClient, buildAuthorizeUrl, exchangeCode, refreshAccessToken,
+  startCallbackServer, codeVerifier, newState, tokenRefFor, loadClients, saveClient,
+  OAUTH_FLOW_TTL_MS, TOKEN_REFRESH_WINDOW_MS, DEFAULT_CALLBACK_PORT,
+} from './wb-mcp-oauth.js'
 import { inspectExpert, inspectSkill, inspectConnector } from './wb-inspect.js'
+import { scanUsage, computeCandidates, dayOfMs, today as idleToday } from './wb-idle.js'
 import { scanFlags, scanMcpDefinitionFlags, SCAN_EXT } from './scan.js'
 // 兼容导出：老调用方（test-local-mcp 等）直接 import index.js 的 scanFlags ——
 // 实现的唯一真源在 ./scan.js，这里只转发。
@@ -67,7 +78,7 @@ function expandHome(p) {
 /**
  * DSH home（会话目录所在的根）。优先级与 DSH 自己的 `defaultDshHome` 一致：
  * `$DSH_HOME` → `~/.dsh`；**全空白视为未设置**（照抄上游语义，空白覆盖不应生效）。
- * 此前这里硬编码 `/home/kaitzh/.dsh`，换机器/换 home 就静默失效。
+ * 此前这里硬编码 `/home/USER/.dsh`，换机器/换 home 就静默失效。
  */
 export function dshHomeRoot(env = process.env) {
   const raw = String(env?.DSH_HOME ?? '')
@@ -120,10 +131,12 @@ function readSessionLogHead({ file, zstd }) {
 }
 
 /** 从磁盘会话日志头部读 cwd（内存里没有该会话时的兜底；代际无关，见 sessionLogsNewestFirst）。 */
-export function readSessionCwdFromDisk(sessionId, env = process.env) {
+export function readSessionCwdFromDisk(sessionId, env = process.env, rootOverride = '') {
   try {
     if (!/^[-\w]+$/.test(String(sessionId))) return ''
-    const root = join(dshHomeRoot(env), 'sessions')
+    // patch overlay 可能把 sessions root 换到别处；写死 $DSH_HOME/sessions 会在
+    // 隔离环境里读不到自己刚建的会话，导致工作区解析整条链断掉。
+    const root = rootOverride || join(dshHomeRoot(env), 'sessions')
     for (const entry of readdirSync(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
       const dir = join(root, entry.name, sessionId)
@@ -138,6 +151,40 @@ export function readSessionCwdFromDisk(sessionId, env = process.env) {
     }
   } catch { /* 读不到返回空 */ }
   return ''
+}
+
+/** 从落盘产物里读版本号：技能看 SKILL.md frontmatter，专家看插件清单。 */
+function readVersionFromDisk(kind, dest) {
+  try {
+    if (!dest) return ''
+    if (kind === 'skill' || kind === 'connector') {
+      const file = join(dest, 'SKILL.md')
+      if (existsSync(file)) {
+        const head = readFileSync(file, 'utf8').slice(0, 4000)
+        const hit = /^version:\s*["']?([^"'\n\r]+)["']?/m.exec(head)
+        if (hit) return hit[1].trim()
+      }
+    }
+    if (kind === 'expert' || kind === 'connector') {
+      for (const rel of ['.codebuddy-plugin/plugin.json', 'plugin.json']) {
+        const file = join(dest, rel)
+        if (!existsSync(file)) continue
+        const version = JSON.parse(readFileSync(file, 'utf8'))?.version
+        if (version) return String(version)
+      }
+    }
+  } catch { /* 版本号缺失不该影响整条记录 */ }
+  return ''
+}
+
+/** 本进程实际使用的 sessions root：优先取持久化后端的 root（patch overlay 会改它）。 */
+function sessionRootOf(ctx) {
+  try {
+    const backend = readOptionalService(ctx, 'sessionPersistence')
+    const root = backend && backend.root
+    if (typeof root === 'string' && root) return root
+  } catch { /* 后端未加载 → 回落默认 */ }
+  return join(dshHomeRoot(), 'sessions')
 }
 
 /** DSH 凭据引用名：官方 bearer 只以 ${WORKBUDDY_TOKEN} 形式出现在 mcp.json 里。 */
@@ -165,6 +212,8 @@ export function storePaths(config) {
     catalogCache: join(root, '.meta', 'catalog-cache.json'),
     state: join(root, '.meta', 'state'),
     loginState: join(root, '.meta', 'state', 'login-state.json'),
+    // 桌面端公开静态目录（WorkBuddy 客户端自带市场）的缓存：包 + 索引
+    desktop: join(root, '.meta', 'desktop'),
     // 本地 MCP 服务器条目（与官方连接器分开：目录独立，绝不混进 connectors/，
     // 避免污染官方连接器列表与 /updates 的「连接器」判定）
     localMcpDir: join(root, 'mcp-servers'),
@@ -553,14 +602,19 @@ function invalidateExpertCache() {
  *      ③ 该目录从未注册 → 就地注册成工作区。
  */
 async function resolveWorkspaceIdForSession(ctx, nearSessionId) {
-  const reg = ctx.get?.('workspaceRegistry') ?? ctx.workspaceRegistry
+  // workspaceRegistry 同样不在 inject 里（加了会让没加载它的 profile 起不来），必须走 ctx.get()。
+  const reg = readOptionalService(ctx, 'workspaceRegistry')
   const near = nearSessionId ? String(nearSessionId) : ''
+  // 注册表给的是 WorkspaceEntity（`id`/`path`/`title`/`sessionIds`）；
+  // `workspaceId` 只在 API 层的 workspaceView() 里才被映射出来。两种形状都认。
+  const idOf = ws => (ws && (ws.workspaceId || ws.id)) || ''
   // ① sessionIds 成员关系
   if (near) {
     try {
       for (const ws of (typeof reg?.list === 'function' ? reg.list() : [])) {
         if (Array.isArray(ws.sessionIds) && ws.sessionIds.some(i => String(i) === near)) {
-          return ws.workspaceId
+          const id = idOf(ws)
+          if (id) return id
         }
       }
     } catch { /* ignore */ }
@@ -568,19 +622,19 @@ async function resolveWorkspaceIdForSession(ctx, nearSessionId) {
   // ② cwd → resolveByPath
   let cwd = ''
   try {
-    cwd = ctx.sessions?.get?.(near)?.header?.cwd || readSessionCwdFromDisk(near)
+    cwd = ctx.sessions?.get?.(near)?.header?.cwd || readSessionCwdFromDisk(near, process.env, sessionRootOf(ctx))
   } catch { /* ignore */ }
   if (cwd && typeof reg?.resolveByPath === 'function') {
     try {
-      const ws = await reg.resolveByPath(cwd)
-      if (ws?.workspaceId) return ws.workspaceId
+      const id = idOf(await reg.resolveByPath(cwd))
+      if (id) return id
     } catch { /* ignore */ }
   }
   // ③ 注册新工作区
   if (cwd && typeof reg?.create === 'function') {
     try {
-      const ws = await reg.create(cwd)
-      if (ws?.workspaceId) return ws.workspaceId
+      const id = idOf(await reg.create(cwd))
+      if (id) return id
     } catch (error) {
       console.warn('[wbh] workspace create failed:', String(error?.message || error))
     }
@@ -900,10 +954,26 @@ export async function collectDshSkills(ctx, registry = {}, skillPrefix = '') {
       modelInvocable: skill.invocation?.modelInvocable !== false,
       path: file,
       dir,
+      // 技能服务的 list() 不带 version，界面又要显示 → 现读 frontmatter 补上
+      version: String(record?.version || record?.officialMeta?.version || readVersionFromDisk('skill', dir) || ''),
     })
   }
   rows.sort((a, b) => (a.hub === b.hub ? a.name.localeCompare(b.name) : (a.hub ? -1 : 1)))
   return rows
+}
+
+/**
+ * 读**可选**服务：真 Cordis Context 必须走 `ctx.get()`（属性直读对不在 inject 集合里的
+ * 服务会抛 `cannot get property "X" without inject`）；测试用的普通对象没有 get()，
+ * 回落到属性读。两条路都不抛，缺位一律返回 undefined（→ 调用方 fail-closed）。
+ * 参见官方 postmortem docs/postmortem/0001-acp-default-export-drops-inject.md「根因 #2」。
+ */
+function readOptionalService(candidate, name) {
+  try {
+    const viaGet = candidate?.get?.(name)
+    if (viaGet !== undefined) return viaGet
+  } catch { /* 服务未加载 → 当作缺位 */ }
+  try { return candidate?.[name] } catch { return undefined }
 }
 
 let pluginCtx = null
@@ -916,13 +986,28 @@ export function apply(ctx, config = {}) {
   // 为 false 时：官方失败就如实暴露失败（列表空 + 可读原因），绝不静默换成镜像内容。
   // 注意：/updates 永远不用镜像（纯官方元数据比对），与这个开关无关。
   const mirrorFallback = cfg.mirrorFallback === true
+  // 桌面端公开静态目录（WorkBuddy 客户端「自带市场」的同一份源，匿名可取）：
+  // 补上官方注册表在本账号下看不到的连接器（实测官方 29 条 vs 静态 317 条）。
+  // 默认打开；关掉它就退回「只有官方目录」的老行为。
+  // MCP OAuth 回调监听端口（只绑 127.0.0.1；被占用时按 +1 顺延）
+  // 允许显式传 0（由系统分配端口，隔离测试用），未配置则用默认端口
+  // 回调监听地址：默认回环（授权页与 DSH 同机）。用 PC 浏览器操作 GUI 时，把它配成
+  // NAS 的 LAN IP（如 192.168.1.10），扫码后的重定向就能直接回到插件；PKCE 保证
+  // 只有拿到 verifier 的本进程能把这个 code 换成 token。
+  const oauthCallbackHost = String(cfg.oauthCallbackHost || '127.0.0.1').trim() || '127.0.0.1'
+  const rawOauthPort = Number(cfg.oauthCallbackPort)
+  const oauthCallbackPort = Number.isFinite(rawOauthPort) && rawOauthPort >= 0 ? rawOauthPort : DEFAULT_CALLBACK_PORT
+  // 授权作用域：留空 = 用授权服务器声明的全部 scopes
+  const oauthScopes = String(cfg.oauthScopes || '')
+  const desktopCatalog = cfg.desktopCatalog !== false
+  const desktopTtlMs = Number(cfg.desktopCatalogTtlMs) > 0 ? Number(cfg.desktopCatalogTtlMs) : DESKTOP_TTL_MS
   const skillPrefix = cfg.skillPrefix || 'workbuddy-'
   // DSH skills 挂载目录（默认 ~/.dsh/skills）。**参数化是为了隔离测试**：此前它硬编码
   // homedir，导致任何指向临时 storeRoot 的隔离实例装技能时，都会往用户真实 ~/.dsh/skills
   // 里塞软链（实测泄漏过一个指向已删临时目录的断链）。
   const skillsMount = cfg.skillsMount ? resolve(expandHome(cfg.skillsMount)) : skillsMountRoot()
       const P = storePaths(cfg)
-  for (const d of [P.root, P.store, P.skills, P.experts, P.connectors, P.meta, P.icons]) {
+  for (const d of [P.root, P.store, P.skills, P.experts, P.connectors, P.meta, P.icons, P.desktop]) {
     mkdirSync(d, { recursive: true })
   }
 
@@ -1421,6 +1506,32 @@ export function apply(ctx, config = {}) {
     req.on('end', () => resolveBody(Buffer.concat(chunks).toString('utf8')))
     req.on('error', reject)
   })
+  /**
+   * 闲置提醒的本地状态：与 WorkBuddy 的 usage-log.json 同构，但只存「别再烦我」这类
+   * 用户意图，使用统计本身每次都从会话记录重算（那边是落盘累积，我们这边数据源更全，
+   * 没必要再维护一份会过期的副本）。
+   */
+  const idleStatePath = () => join(P.meta, 'idle-state.json')
+  const readIdleState = () => {
+    try {
+      const raw = JSON.parse(readFileSync(idleStatePath(), 'utf8'))
+      if (raw && typeof raw === 'object') return { dismissed: {}, ...raw }
+    } catch { /* 没有或坏了 → 当作全新状态 */ }
+    return { version: 1, dismissed: {}, lastShownDate: null }
+  }
+  const saveIdleState = state => {
+    try {
+      mkdirSync(P.meta, { recursive: true })
+      writeFileSync(idleStatePath(), JSON.stringify({ version: 1, ...state }, null, 2))
+    } catch { /* 落盘失败只影响「别再提醒」的记忆 */ }
+  }
+  const readJsonBody = async req => {
+    try {
+      const text = await readBody(req)
+      return text ? JSON.parse(text) : {}
+    } catch { return {} }
+  }
+
   const rejected = (req, res) => {
     const connection = ctx.connection
     if (!connection || typeof connection.requestRejection !== 'function') return false
@@ -1519,6 +1630,278 @@ export function apply(ctx, config = {}) {
     return () => { stopped = true; clearTimeout(first); clearInterval(timer) }
   }, 'workbuddy-hub: auth keepalive timer')
 
+  /* ---------------------------------------------------------------- *
+   * 桌面端公开静态目录（WorkBuddy 客户端自带市场）
+   *
+   * 与官方注册表的关系：官方 registry2c 是**账号视角**（本账号 29 条，且带
+   * 每条可通话的 gateway_url）；静态目录是**市场视角**（317 条，含中文名/描述/
+   * 示例/图标/skills/mcp.json）。两者合并去重后展示，官方条目优先。
+   *
+   * 进程内单飞 + TTL 缓存：并发请求只触发一次刷新；刷新失败时退回旧索引并标 stale，
+   * 绝不让目录读取失败连带把连接器市场整体打挂。
+   * ---------------------------------------------------------------- */
+  let desktopState = { index: null, error: '', flags: [], at: 0, inflight: null }
+  const desktopIndex = async ({ force = false } = {}) => {
+    if (!desktopCatalog) return { index: null, error: '桌面端目录已在配置里关闭（desktopCatalog=false）', flags: [] }
+    const now = Date.now()
+    const fresh = desktopState.index && !force && now - desktopState.at < desktopTtlMs
+    if (fresh) return { index: desktopState.index, error: '', flags: desktopState.flags }
+    if (desktopState.inflight) return desktopState.inflight
+    desktopState.inflight = (async () => {
+      try {
+        const { index, flags } = await ensureDesktopIndex(P.root, { ttlMs: desktopTtlMs, force, log: m => console.log(`[wbh] ${m}`) })
+        desktopState = { index, error: '', flags, at: Date.now(), inflight: null }
+        return { index, error: '', flags }
+      } catch (error) {
+        // 本地已有旧索引 → 用它并如实标注；否则返回错误原因（界面显示「目录暂不可用」）
+        const cached = readDesktopIndex(P.desktop)
+        const message = String(error?.message || error)
+        desktopState = {
+          index: cached, error: message, flags: cached ? [`目录刷新失败，正在使用本地缓存：${message}`] : [],
+          at: cached ? Date.now() : 0, inflight: null,
+        }
+        return { index: cached, error: message, flags: desktopState.flags }
+      }
+    })()
+    return desktopState.inflight
+  }
+
+  /** 桌面目录包里的图标字节（缓存到 P.icons；不存在返回 null）。 */
+  const desktopIconFile = async entryName => {
+    const { index } = await desktopIndex()
+    const record = index ? desktopRecord(index, entryName) : null
+    if (!record?.iconFile) return null
+    const ext = extname(record.iconFile) || '.png'
+    const cached = join(P.icons, `desktop-${entryName}${ext}`)
+    if (existsSync(cached) && statSync(cached).size > 0) return cached
+    const zipPath = join(P.desktop, 'connectors-config.zip')
+    if (!existsSync(zipPath)) return null
+    try {
+      for (const file of unzip(readFileSync(zipPath))) {
+        if (file.name !== record.iconFile) continue
+        writeFileSync(cached, file.data)
+        return cached
+      }
+    } catch { /* 包损坏就当作没有图标 */ }
+    return null
+  }
+
+  /**
+   * 根相对的图标路径 → 请求所在站点的绝对 URL。
+   * 桌面目录的图标由插件自己供（第三方 CDN 那条路实测 404），<img> 需要绝对地址。
+   */
+  const absoluteIcon = (req, icon) => {
+    if (!icon || !String(icon).startsWith('/')) return icon || ''
+    const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || 'http'
+    const host = req.headers.host || '127.0.0.1'
+    return `${proto}://${host}${icon}`
+  }
+
+  /** 桌面连接器行的排序键：官方有的排前面（官方视角优先），其余按中文名。 */
+  const mergeRows = (officialRows, deskRows, q) => mergeConnectorRows(officialRows, deskRows, q)
+
+  /* ---------------------------------------------------------------- *
+   * MCP OAuth 2.1（连接器授权接入）
+   *
+   * QQ邮箱这类连接器的 MCP 端点会回 401 + `WWW-Authenticate: resource_metadata=…`，
+   * 客户端要自己做：发现授权服务器 → 动态注册 → PKCE 拉起授权页 → loopback 回调换 token。
+   * 这里把整套放在宿主侧：token 只进 DSH 凭据库，mcp.json 只写 `${REF}` 引用。
+   * ---------------------------------------------------------------- */
+  /** entryName → 进行中的流程 { state, close, verifier, client, redirectUri, discovery } */
+  const mcpOauthPending = new Map()
+  /** entryName → 最近一次流程状态（给界面轮询） */
+  const mcpOauthStatus = new Map()
+
+  /** 已安装连接器 → 它的 MCP server 配置（含 url / headers / 路径）。 */
+  const connectorMcpTarget = entryName => {
+    const registry = loadJson(P.registry, { version: 1, installed: {} })
+    const key = `connector/${entryName}`
+    const record = registry.installed?.[key]
+    if (!record) return { ok: false, status: 404, error: `connector not installed locally: ${entryName}` }
+    const mcpPath = join(record.dest, 'mcp.json')
+    if (!existsSync(mcpPath)) return { ok: false, status: 400, error: 'connector has no mcp.json' }
+    let raw
+    try { raw = JSON.parse(readFileSync(mcpPath, 'utf8')) } catch { return { ok: false, status: 400, error: 'mcp.json is not valid JSON' } }
+    const picked = Object.keys(raw.mcpServers ?? {})[0]
+    const server = raw.mcpServers?.[picked]
+    if (!server?.url) return { ok: false, status: 400, error: 'connector has no http url' }
+    return { ok: true, key, record, mcpPath, raw, picked, server, registry }
+  }
+
+  /** 把 `${REF}` 引用解析成真实头（供探测/授权使用；没登录就只带不需要的）。 */
+  const resolveServerHeaders = async server => {
+    let token = ''
+    try { token = await bearer(P.state) } catch { token = '' }
+    const credentials = ctx.get?.('credentials')
+    const refs = [...new Set([...JSON.stringify(server).matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map(m => m[1]))]
+    const resolved = {}
+    for (const ref of refs) {
+      if (ref === WB_TOKEN_REF) { if (token) resolved[ref] = token; continue }
+      try {
+        const value = credentials === undefined ? undefined : (await credentials.resolve(ref))?.value
+        if (value !== undefined) resolved[ref] = String(value)
+      } catch { /* 缺就缺，探测会如实失败 */ }
+    }
+    const fill = text => String(text).replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, ref) => resolved[ref] ?? '')
+    const headers = {}
+    for (const [k, v] of Object.entries(server.headers ?? {})) headers[k] = fill(v)
+    return { url: fill(server.url), headers }
+  }
+
+  /** 用已存端点刷新 access token（不重新 discovery）。 */
+  const refreshMcpOauthToken = async (record, entryName) => {
+    const meta = record?.mcpOauth
+    if (!meta?.ref || !meta?.endpoints?.tokenEndpoint) return { ok: false, reason: '本地记录缺少 OAuth 端点（重连一次即可记录）' }
+    const credentials = ctx.get?.('credentials')
+    const refresh = await credentials?.resolve?.(`${meta.ref}_REFRESH`).catch?.(() => undefined)
+    const refreshValue = refresh?.value
+    if (!refreshValue) return { ok: false, reason: '没有 refresh token（该连接器可能只发了短期 token，需要重新授权）' }
+    const discovery = { metadata: { ...meta.endpoints }, resource: meta.resource || '' }
+    const tok = await refreshAccessToken(discovery, {
+      refreshToken: String(refreshValue), clientId: meta.clientId || '', clientSecret: '', scope: meta.scope || '', resource: meta.resource || '',
+    })
+    if (!tok.ok) return { ok: false, reason: tok.reason || '刷新失败', detail: tok.detail }
+    try {
+      await ctx.credentials?.set?.(meta.ref, tok.accessToken)
+      if (tok.refreshToken) await ctx.credentials?.set?.(`${meta.ref}_REFRESH`, tok.refreshToken)
+    } catch (error) {
+      return { ok: false, reason: `凭据写入失败：${String(error?.message || error)}` }
+    }
+    const registry = loadJson(P.registry, { version: 1, installed: {} })
+    const rec = registry.installed?.[`connector/${entryName}`]
+    if (rec?.mcpOauth) {
+      rec.mcpOauth.expiresAt = tok.expiresIn ? Date.now() + tok.expiresIn * 1000 : 0
+      rec.mcpOauth.refreshedAt = new Date().toISOString()
+      saveJson(P.registry, registry)
+    }
+    return { ok: true, expiresAt: rec?.mcpOauth?.expiresAt || 0 }
+  }
+
+  /**
+   * 授权码 → token → 凭据库 → 改写 mcp.json → 记 OAuth 元数据。
+   * 回调服务器与「手动粘贴回调链接」两条路共用，避免两处实现分叉。
+   */
+  const finalizeMcpOauth = async (entryName, flow, code) => {
+    const tok = await exchangeCode(flow.discovery, {
+      code, verifier: flow.verifier, clientId: flow.client.clientId,
+      clientSecret: flow.client.clientSecret, redirectUri: flow.redirectUri, resource: flow.discovery.resource,
+    })
+    if (!tok.ok) return { ok: false, error: tok.reason || '换 token 失败', detail: tok.detail }
+    const ref = tokenRefFor(entryName)
+    try {
+      await ctx.credentials?.set?.(ref, tok.accessToken)
+      if (tok.refreshToken) await ctx.credentials?.set?.(`${ref}_REFRESH`, tok.refreshToken)
+    } catch (error) {
+      return { ok: false, error: `凭据写入失败：${String(error?.message || error)}` }
+    }
+    const expiresAt = tok.expiresIn ? Date.now() + tok.expiresIn * 1000 : 0
+    try {
+      writeOauthHeader(flow.target, ref, flow.targetUrl || '')
+      const registry = loadJson(P.registry, { version: 1, installed: {} })
+      const rec = registry.installed?.[`connector/${entryName}`]
+      if (rec) {
+        rec.mcpOauth = {
+          ref, scope: tok.scope || flow.scope || '', expiresAt, at: new Date().toISOString(),
+          authorizationServer: flow.discovery.authorizationServer, resource: flow.discovery.resource,
+          clientId: flow.client.clientId, redirectUri: flow.redirectUri, endpoints: flow.discovery.metadata,
+        }
+        saveJson(P.registry, registry)
+      }
+    } catch (error) {
+      return { ok: false, error: `本地写入失败：${String(error?.message || error)}` }
+    }
+    console.info(`[wbh] mcp-oauth ${entryName}: authorized → token stored as ${ref}`)
+    return { ok: true, ref, expiresAt, scope: tok.scope || flow.scope || '' }
+  }
+
+  /** 把某个连接器的 mcp.json 改成「带 OAuth Bearer 引用」。 */
+  const writeOauthHeader = (target, ref, targetUrl = '') => {
+    const picked = target.picked
+    const server = { ...target.server }
+    // 授权型端点可能是**上游**（网关不认这条时）——url 与 header 必须一起改，
+    // 否则 token 会被发到不认它的网关地址上（QQ邮箱实测的坑）。
+    if (targetUrl && targetUrl !== server.url) server.url = targetUrl
+    server.headers = { ...(server.headers ?? {}), Authorization: `Bearer \${${ref}}` }
+    const next = { ...target.raw, mcpServers: { ...target.raw.mcpServers, [picked]: server } }
+    writeFileSync(target.mcpPath, JSON.stringify(next, null, 2))
+    return server
+  }
+
+  /**
+   * 桌面连接器落地：静态目录包里的文件 → storeRoot/connectors/<name>/，
+   * 并把 mcp.json **重写成可通话形态**（网关 + bearer 引用，或直连上游 + 用户凭据引用）。
+   * 关键点：端点不是纯静态猜测 —— 安装时实测 tools/list，网关「未注册（17008）」的
+   * 连接器会自动回落到直连上游（实测 qq-mail：网关 401 → 直连 200/12 个工具）。
+   */
+  const landDesktopConnector = async entryName => {
+    const { index, error } = await desktopIndex()
+    if (!index) return { ok: false, status: 502, error: `桌面端目录不可用：${error || '未知原因'}` }
+    const record = desktopRecord(index, entryName)
+    if (!record) return { ok: false, status: 404, error: `桌面端目录没有这个连接器：${entryName}` }
+    if (!record.supported) {
+      return {
+        ok: false, status: 400,
+        error: `「${record.displayName || entryName}」不可自动接入：${record.unsupportedReason}`,
+      }
+    }
+    const flags = []
+    let token = ''
+    try { token = await bearer(P.state) } catch { token = '' }
+    if (token) {
+      try { await ctx.credentials?.set?.(WB_TOKEN_REF, token) }
+      catch (err) { flags.push(`credential store failed: ${String(err?.message || err)}`) }
+    } else {
+      flags.push('未登录：网关类连接器会因缺 WorkBuddy 凭据而无法通话（可在本页登录后再试）')
+    }
+
+    // 端点实测（只读 tools/list）；失败不阻断，按静态规则落盘并如实记 probe 结果
+    let probe = null
+    try { probe = await probeEndpoint(record, { token }) }
+    catch (err) { flags.push(`端点探测失败：${String(err?.message || err)}`) }
+    // 端点优先级：① 探测成功的那条 ② **自述 MCP OAuth 的那条**（哪怕握手失败——OAuth 型
+    // 端点在授权前必然 401，token 必须发给会认它的那个端点）③ 静态规则。
+    const hintedAttempt = (probe?.tried || []).find(t => t.oauthHint)
+    const chosen = probe?.ok
+      ? { mode: probe.mode, url: probe.url }
+      : (hintedAttempt ? { mode: hintedAttempt.mode, url: hintedAttempt.url } : endpointFor(record))
+    if (probe && !probe.ok) {
+      // 如实带出实测原因（真实握手 initialize 的结果），不写「似乎可用」这种含糊话：
+      // 例如 qq-mail 实测 `401 Invalid or expired access token`（它要自己的 OAuth token，
+      // 只发 tools/list 会被宽松端点骗成 200 —— 所以探测必须做完整握手）。
+      const why = [probe.http ? `HTTP ${probe.http}` : '', probe.code ? `code=${probe.code}` : '', probe.error || '']
+        .filter(Boolean).join(' ')
+      flags.push(`端点未测通（${why || '无响应'}）——已按静态规则写入 ${chosen.mode} 端点；连接前可能需要先在 WorkBuddy 侧授权，或该连接器需要自备凭据`)
+    }
+
+    // 1) 落文件（跳过包里的 mcp.json：它要被重写成可通话形态）
+    let files = []
+    try { files = extractConnectorFiles(P.desktop, entryName) }
+    catch (err) { return { ok: false, status: 502, error: `目录包读取失败：${String(err?.message || err)}` } }
+    const dest = join(P.connectors, entryName)
+    mkdirSync(dest, { recursive: true })
+    let count = 0, bytes = 0
+    for (const file of files) {
+      if (file.rel === 'mcp.json') continue
+      const target = join(dest, file.rel)
+      if (!target.startsWith(dest)) continue
+      mkdirSync(dirname(target), { recursive: true })
+      writeFileSync(target, file.data)
+      count++; bytes += file.data.length
+    }
+    // 2) 重写 mcp.json（唯一真源：插件生成，不信任包内声明）
+    const mcp = buildDesktopMcpJson(record, { endpoint: chosen })
+    const mcpText = JSON.stringify(mcp, null, 2)
+    writeFileSync(join(dest, 'mcp.json'), mcpText)
+    count++; bytes += Buffer.byteLength(mcpText)
+
+    return {
+      ok: true, dest, record, flags, probe, endpoint: chosen,
+      files: count, bytes,
+      row: desktopRow(record),
+      provenance: desktopProvenance(index, record),
+    }
+  }
+
   /**
    * 官方连接器落地（连接器安装的唯一真源）：官方注册表该行 → 本地 mcp.json。
    * 密钥只以 `${WORKBUDDY_TOKEN}` 引用落盘，绝不写明文。
@@ -1594,6 +1977,16 @@ export function apply(ctx, config = {}) {
     // 供 /updates 做纯官方元数据比对（技能 version / 专家 updatedAt / 连接器 defHash）。
     let provenance = null
     let officialFailure = ''
+    // 「官方档案缺口」：官方注册表**列了**这位专家，但官方 CDN 上没有他的人设文件
+    // （实测 personal-knowledge-architect 等条目 persona 404，429 位里约四分之一如此）。
+    // 这和「官方服务不可用」是两回事：mirrorFallback 管的是后者，前者按条目回落镜像。
+    let expertArchiveGap = false
+    // 桌面静态目录装下来的连接器（区别于官方注册表条目）：记录端点探测结果，
+    // 让界面/排障能看出「这条是走网关还是直连上游、实测通没通」。
+    let desktopLanded = null
+    // 缺口回落到镜像时，官方注册表里的**展示标签**（名字/简介/图标）还是要用的：
+    // 否则 chip/列表只能显示原始目录名（如 personal-knowledge-architect）。
+    let expertGapLabel = null
     if (kind === 'skill' && source !== 'mirror') {
       // Official skill: the install request carries the human name, so resolve
       // name → skill_id first, then fetch the record with its download_url.
@@ -1659,26 +2052,51 @@ export function apply(ctx, config = {}) {
         invalidateExpertCache() // 人设文件更新过，缓存作废
       } catch (error) {
         officialFailure = String(error?.message || error)
-        if (source === 'official') throw error
-        if (!mirrorFallback) {
+        // 官方**自己缺这份人设文件**（注册表里有、CDN 上 404）→ 允许按条目回落镜像：
+        // 官方永远装不上它，而镜像仓里有完整副本。此判断必须先于 source==='official'
+        // 的严格抛错 —— 客户端从官方目录点「召唤」时传的正是 source='official'，
+        // 若在这里直接抛，用户拿到的只会是一句失败（真机缺陷）。
+        if (error?.assetMissing === true) {
+          expertArchiveGap = true
+          expertGapLabel = error.officialRow || null
+          console.warn(`[wbh] expert ${entryName}: official archive gap (${officialFailure}) → mirror fallback`)
+        } else if (source === 'official') throw error
+        else if (!mirrorFallback) {
           fail(502, `官方专家安装失败，且镜像兜底已关闭（mirrorFallback=false）：${officialFailure}`)
         }
         officialMeta = null // 灾备：回落到镜像内容
       }
     } else if (kind === 'connector') {
-      // 连接器只认官方注册表（与 POST /connectors/install 同一条链路）：
-      // 镜像里的 connectors 数据不参与安装；官方拿不到时才回落到镜像灾备。
-      const landed = await landOfficialConnector(entryName)
+      // 连接器来源：source==='desktop' → 桌面端公开静态目录；否则官方注册表优先，
+      // 官方查无此条（404）且桌面目录开着 → 回落桌面目录；镜像里的 connectors 数据
+      // 不参与安装（官方拿不到时才按 mirrorFallback 回落镜像灾备）。
+      let landed = source === 'desktop' ? await landDesktopConnector(entryName) : await landOfficialConnector(entryName)
+      if (!landed.ok && source !== 'desktop' && source !== 'mirror' && landed.status === 404 && desktopCatalog) {
+        const alt = await landDesktopConnector(entryName)
+        if (alt.ok) landed = alt
+      }
       if (landed.ok) {
         dest = landed.dest
-        report = { files: 1, bytes: landed.bytes, flags: landed.flags }
-        provenance = connectorProvenance(landed.row)
-        officialMeta = {
-          kind: 'connector', name: entryName, dest,
-          displayName: landed.row.displayName || entryName,
-          description: landed.row.description || '',
-          icon: landed.row.icon || '',
-          source: 'official', officialId: null,
+        report = { files: Number(landed.files) || 1, bytes: landed.bytes, flags: landed.flags }
+        if (landed.provenance) {
+          desktopLanded = landed
+          provenance = landed.provenance
+          officialMeta = {
+            kind: 'connector', name: entryName, dest,
+            displayName: landed.row.displayName || entryName,
+            description: landed.row.description || '',
+            icon: landed.row.icon || '',
+            source: 'desktop', officialId: null,
+          }
+        } else {
+          provenance = connectorProvenance(landed.row)
+          officialMeta = {
+            kind: 'connector', name: entryName, dest,
+            displayName: landed.row.displayName || entryName,
+            description: landed.row.description || '',
+            icon: landed.row.icon || '',
+            source: 'official', officialId: null,
+          }
         }
       } else if (!mirrorFallback) {
         // 官方拿不到（未登录 / 上游失败）且灾备关闭 → 如实失败，不静默装镜像内容。
@@ -1690,7 +2108,16 @@ export function apply(ctx, config = {}) {
       }
     }
     if (!officialMeta) {
-      files = await downloadEntry(mirrorRepo, mirrorBranch, `${kind}s`, entryName)
+      try {
+        files = await downloadEntry(mirrorRepo, mirrorBranch, `${kind}s`, entryName)
+      } catch (error) {
+        // 官方档案缺口 + 镜像也没有 → 说清「为什么装不上」，不要只抛 GitHub 的
+        // `entry not found: experts/<name>/`（用户/日志都读不出这是官方缺文件）。
+        if (expertArchiveGap) {
+          fail(502, `官方缺「${entryName}」的人设文件（${officialFailure}），镜像仓也没有该条目（${String(error?.message || error)}）—— 该专家当前无法安装。`)
+        }
+        throw error
+      }
       const landed = landEntry(P, kind, entryName, files)
       dest = landed.dest; report = landed.report
     }
@@ -1702,7 +2129,8 @@ export function apply(ctx, config = {}) {
     const cache = loadJson(P.catalogCache, null)
     const meta = officialMeta
       ? { displayName: officialMeta.displayName, description: officialMeta.description, tags: officialMeta.tags, icon: officialMeta.icon }
-      : cache?.index?.[`${kind}s`]?.find(e => e.name === entryName)
+      // 官方档案缺口 → 镜像内容 + 官方注册表的展示标签（没有标签时再退回目录缓存）
+      : (expertGapLabel || cache?.index?.[`${kind}s`]?.find(e => e.name === entryName))
     const record = {
       kind, name: officialMeta?.name ?? entryName, dest,
       displayName: meta?.displayName || entryName,
@@ -1731,16 +2159,44 @@ export function apply(ctx, config = {}) {
       record.mcp = existsSync(join(dest, 'mcp.json'))
     }
     if (officialMeta) {
-      record.source = 'official'
-      record.officialId = officialMeta.officialId ?? null
-      if (officialMeta.icon) record.icon = officialMeta.icon
-      record.official = true
-      // 官方溯源（可能为 null：官方记录本身缺字段时如实留空，/updates 会报 unknown）
-      record.officialMeta = provenance
+      if (officialMeta.source === 'desktop') {
+        // 桌面静态目录：官方**没有**列它，所以 official 必须为 false
+        // （否则界面会按官方来源去重装/比较更新）。
+        record.source = 'desktop'
+        record.official = false
+        record.officialId = null
+        if (officialMeta.icon) record.icon = officialMeta.icon
+        record.officialMeta = provenance
+        if (desktopLanded) {
+          record.desktopEndpoint = desktopLanded.endpoint
+          record.probe = desktopLanded.probe
+            ? {
+              ok: desktopLanded.probe.ok, mode: desktopLanded.probe.mode,
+              http: desktopLanded.probe.http, tools: desktopLanded.probe.tools,
+              // 端点自述 MCP OAuth 时带上（界面据此给「去授权·扫码」）
+              oauthHint: desktopLanded.probe.oauthHint || null,
+            }
+            : null
+        }
+      } else {
+        record.source = 'official'
+        record.officialId = officialMeta.officialId ?? null
+        if (officialMeta.icon) record.icon = officialMeta.icon
+        record.official = true
+        // 官方溯源（可能为 null：官方记录本身缺字段时如实留空，/updates 会报 unknown）
+        record.officialMeta = provenance
+      }
     }
+    // 官方档案缺口下的镜像安装：如实记下「为什么不是官方内容」，供界面/排障展示
+    // （不带 officialMeta，所以 /updates 对这类记录照旧如实报 unknown）。
+    if (expertArchiveGap) record.mirrorFallback = { reason: 'official-asset-missing', detail: officialFailure }
     registry.installed[key] = record
     saveJson(P.registry, registry)
-    return { key, report, linked: record.linked, dest }
+    return {
+      key, report, linked: record.linked, dest,
+      source: record.source === 'desktop' ? 'desktop' : (officialMeta ? 'official' : 'mirror'),
+      mirrorReason: expertArchiveGap ? 'official-asset-missing' : '',
+    }
   }
 
   /* ---------------------------------------------------------------- *
@@ -1776,7 +2232,7 @@ export function apply(ctx, config = {}) {
       properties: {
         kind: { type: 'string', enum: ['expert', 'skill', 'connector'], description: '条目类型。' },
         name: { type: 'string', description: '条目名（目录名 / 官方 name 字段）。' },
-        source: { type: 'string', enum: ['official', 'mirror'], description: '可选；默认官方优先（官方失败且 mirrorFallback 开启时才回落镜像）。' },
+        source: { type: 'string', enum: ['official', 'mirror', 'desktop'], description: '可选；默认官方优先（官方失败且 mirrorFallback 开启时才回落镜像）。连接器若来自桌面端公开目录（WorkBuddy 客户端自带市场），传 desktop。' },
       },
       required: ['kind', 'name'],
       additionalProperties: false,
@@ -1792,7 +2248,7 @@ export function apply(ctx, config = {}) {
         const text = typeof v.text === 'string'
           ? v.text
           : [
-            `已安装 ${v.kind}/${v.name}（来源：${v.source === 'official' ? '官方' : '镜像'}）`,
+            `已安装 ${v.kind}/${v.name}（来源：${v.source === 'official' ? '官方' : (v.source === 'desktop' ? '桌面端公开目录' : '镜像')}）`,
             `落盘: ${v.dest || ''}`,
             `体量: ${v.files ?? '?'} 文件 / ${(Number(v.bytes ?? 0) / 1024).toFixed(1)} KB`,
             `安全标记: ${(Array.isArray(v.flags) && v.flags.length > 0) ? v.flags.join('; ') : '无'}`,
@@ -1808,15 +2264,31 @@ export function apply(ctx, config = {}) {
       // ---- 1) 只读预检（与 hub-find.mjs inspect 同一实现，不落盘）----
       let card = null
       try {
-        card = kind === 'expert' ? await inspectExpert(entryName)
-          : kind === 'skill' ? await inspectSkill(entryName, { stateDir: P.state })
-          : await inspectConnector(entryName, { stateDir: P.state })
+        if (kind === 'connector' && String(args.source || '') === 'desktop') {
+          // 桌面端公开目录的连接器不在官方注册表里：预检改用目录记录本身
+          // （仍是只读卡片：目标 URL / 是否命令执行 / 凭据相关头），不联网不落盘。
+          const d = await desktopIndex()
+          const record = d.index ? desktopRecord(d.index, entryName) : null
+          if (!record) throw new Error(d.error ? `桌面端目录不可用：${d.error}` : `桌面端目录没有这个连接器：${entryName}`)
+          // 预检要把目录包里**实际会落盘的文件**（skills/scripts/token-schema）一起算进
+          // 体量/脚本数/风险标记 —— 只报 mcp 定义会让审批卡低估这次安装。
+          let bundleFiles = []
+          try { bundleFiles = extractConnectorFiles(P.desktop, entryName) } catch { bundleFiles = [] }
+          card = await inspectConnector(entryName, { connectorRows: async () => [desktopRow(record)], bundleFiles })
+        } else {
+          card = kind === 'expert' ? await inspectExpert(entryName)
+            : kind === 'skill' ? await inspectSkill(entryName, { stateDir: P.state })
+              : await inspectConnector(entryName, { stateDir: P.state })
+        }
       } catch (error) {
         return { text: `预检失败，未安装 ${kind}/${entryName}：${String(error?.message || error)}` }
       }
       const riskText = card.riskFlags.length > 0 ? card.riskFlags.join('; ') : '无'
       // ---- 2) DSH 原生审批（fail-closed：没有服务 / 没有 agent / 非 allowed-once 一律不装）----
-      const approval = pluginCtx?.approval ?? ctx.approval ?? undefined
+      // ⚠️ `approval` 不在 inject 集合里（也不能加 —— 加了会让没加载该服务的 profile 整个插件起不来），
+      // 所以必须走 readOptionalService（内部用 ctx.get()）：属性直读会抛 Cordis 的 inject 守卫错，
+      // 那样下面这条 fail-closed 文案永远到不了。
+      const approval = readOptionalService(pluginCtx, 'approval') ?? readOptionalService(ctx, 'approval') ?? undefined
       if (approval === undefined) {
         console.info(`[wbh] install ${kind}/${entryName}: approval=unavailable (no approval service) flags=${riskText} source=${args.source || 'official'}`)
         return { text: `该环境无法完成用户确认（没有可用的审批服务），出于安全未安装 ${kind}/${entryName}。请改用插件的 Web 设置页安装，或让用户在会话里直接确认后重试。` }
@@ -1862,12 +2334,14 @@ export function apply(ctx, config = {}) {
       const note = kind === 'skill'
         ? '技能已符号链接进挂载目录，下一轮对话生效。'
         : kind === 'expert'
-          ? '专家已落地并记录官方溯源；可用 /expert 或既有语义召唤。'
+          ? (result.mirrorReason === 'official-asset-missing'
+            ? '专家已落地，但**不是官方内容**：官方缺这位专家的人设文件（HTTP 404），本次用镜像仓副本安装；「检查更新」对它只会报 unknown。'
+            : '专家已落地并记录官方溯源；可用 /expert 或既有语义召唤。')
           : '连接器已落地但保持停用（enabled=false）：带凭据的 MCP 传输要用户显式启用（/connector 或设置页开关）才会建立。'
       return {
         text: note,
         kind, name: registryRecord?.name ?? entryName,
-        source: registryRecord?.source === 'official' ? 'official' : 'mirror',
+        source: result.source || 'official',
         dest: result.dest,
         files: result.report?.files ?? 0,
         bytes: result.report?.bytes ?? 0,
@@ -1987,7 +2461,8 @@ export function apply(ctx, config = {}) {
         return { text: `${kind}/${entryName} 本机没有安装（或注册表里没有这条记录），无需卸载。` }
       }
       // ---- 2) DSH 原生审批（fail-closed：没有服务 / 没有 agent / 非 allowed-once 一律不卸）----
-      const approval = pluginCtx?.approval ?? ctx.approval ?? undefined
+      // 同 install：可选服务走 readOptionalService（ctx.get()），属性直读会抛 inject 守卫错。
+      const approval = readOptionalService(pluginCtx, 'approval') ?? readOptionalService(ctx, 'approval') ?? undefined
       if (approval === undefined) {
         console.info(`[wbh] uninstall ${kind}/${entryName}: approval=unavailable (no approval service) remote=unknown at=${new Date().toISOString()}`)
         return { text: `该环境无法完成用户确认（没有可用的审批服务），出于安全未卸载 ${kind}/${entryName}。请改用插件 Web 设置页的「移除」按钮，或让用户在会话里直接确认后重试。` }
@@ -2059,6 +2534,103 @@ export function apply(ctx, config = {}) {
         // 本地 MCP 管理门（默认 false；true 时才允许注册/启停本地 MCP 服务器）
         localMcp: localMcpEnabled,
       })
+      return true
+    }
+
+    // ---- idle capability: 与 WorkBuddy 同款的「闲置能力」提醒 ----
+    // 数据来自 DSH 自己的会话记录（tool/call 事件），不额外维护使用账本 —— 那边落盘累积
+    // 是因为它的数据源只有 UI 点击，我们这里会话记录本身就是全量真源。
+    // 关闭动作都可逆：技能 = 摘掉 ~/.dsh/skills 下的软链，MCP = 停运行时 + 置 enabled=false。
+    if (route === 'GET /idle') {
+      let usage = { skills: {}, mcp: {}, activeDays: [] }
+      try { usage = await scanUsage({ days: 30, root: sessionRootOf(ctx) }) } catch { /* 扫不动就当没有记录 */ }
+
+      const prefix = cfg.skillPrefix || 'workbuddy-'
+      const skills = []
+      try {
+        for (const f of readdirSync(skillsMount)) {
+          if (!f.startsWith(prefix)) continue
+          let st
+          try { st = lstatSync(join(skillsMount, f)) } catch { continue }
+          if (!st.isSymbolicLink()) continue
+          skills.push({ id: f.slice(prefix.length), name: f, installedDay: dayOfMs(st.mtimeMs) })
+        }
+      } catch { /* 没有挂载目录 → 空 */ }
+
+      const mcps = []
+      try {
+        for (const entry of listLocalMcp()) {
+          if (entry.enabled !== true) continue
+          const at = Date.parse(entry.lastEnabledAt || entry.updatedAt || '')
+          mcps.push({ id: entry.name, name: entry.name, installedDay: Number.isFinite(at) ? dayOfMs(at) : undefined })
+        }
+      } catch { /* 列表读不出来 → 空 */ }
+
+      const result = computeCandidates({
+        usage, skills, mcps,
+        state: readIdleState(),
+        idleThreshold: cfg.idleThreshold ?? 14,
+      })
+      json(res, 200, {
+        ok: true,
+        usage: { skills: Object.keys(usage.skills).length, mcp: Object.keys(usage.mcp).length, activeDays: usage.activeDays.length },
+        ...result,
+      })
+      return true
+    }
+
+    if (route === 'POST /idle/shown') {
+      const state = readIdleState()
+      state.lastShownDate = idleToday()
+      saveIdleState(state)
+      json(res, 200, { ok: true })
+      return true
+    }
+
+    if (route === 'POST /idle/dismiss' || route === 'POST /idle/dismiss-global') {
+      const body = await readJsonBody(req)
+      const state = readIdleState()
+      if (route === 'POST /idle/dismiss-global') {
+        state.globalDismissed = true
+        state.globalDismissedVersion = (state.globalDismissedVersion ?? 0) + 1
+      } else if (body?.key) {
+        state.dismissed[body.key] = Date.now()
+      }
+      saveIdleState(state)
+      json(res, 200, { ok: true })
+      return true
+    }
+
+    if (route === 'POST /idle/close') {
+      const body = await readJsonBody(req)
+      const items = Array.isArray(body?.items) ? body.items : []
+      const prefix = cfg.skillPrefix || 'workbuddy-'
+      const succeeded = []
+      const failed = []
+      // 逐条独立结算：一条失败不该拖垮其余条目（官方走 Promise.allSettled，同口径）
+      await Promise.all(items.map(async item => {
+        const type = String(item?.type ?? '')
+        const id = String(item?.id ?? '')
+        if (!type || !id) return
+        try {
+          if (type === 'skill') {
+            unlinkSkill(prefix, id)
+            succeeded.push(`${type}:${id}`)
+            return
+          }
+          if (type === 'mcp') {
+            await disableLocalMcp(id)
+            const entry = readLocalMcp(id)
+            if (entry) { entry.enabled = false; entry.updatedAt = new Date().toISOString(); saveLocalMcp(entry) }
+            succeeded.push(`${type}:${id}`)
+            return
+          }
+          failed.push({ key: `${type}:${id}`, error: 'unsupported type' })
+        } catch (error) {
+          failed.push({ key: `${type}:${id}`, error: String(error?.message || error).slice(0, 200) })
+        }
+      }))
+      json(res, 200, { ok: true, succeeded, failed })
       return true
     }
 
@@ -2192,23 +2764,49 @@ export function apply(ctx, config = {}) {
         return Object.values(cache.index?.[bucket] ?? {}).filter(matcher)
       }
       if (kindQ === 'connector') {
-        // 官方连接器注册表需要登录。未登录时前端显示就地登录卡（不显示镜像目录）。
-        // mirrorFallback 打开时才用镜像 catalog 的 connectors 兜底（灾备），并如实标 source=mirror。
-        let rows = []
+        // 三个来源的优先级：
+        //   ① 官方注册表（登录态，账号视角，含可通话 gateway_url）
+        //   ② 桌面端公开静态目录（匿名，市场视角，317 条）
+        //   ③ 镜像 catalog（只有 mirrorFallback 打开时的灾备）
+        // 行级带 source 字段：official / desktop / mirror。官方已有的同名条目不再重复出
+        // 桌面行（官方视角优先，避免同一连接器两个来源互相打脸）。
+        let officialRows = []
         let officialError = ''
-        try { rows = await connectorRegistry(P.state) } catch (error) { officialError = String(error?.message || error) }
-        if (rows.length > 0) {
-          // 修 bug：官方注册表接口没有关键词参数，此前直接把 24 条全量原样返回，
-          // **完全忽略 q**（实测：搜「地图」和不搜都是 24 条）。官方不支持就得本地过滤：
-          // 与 scripts/hub-find.mjs filterRows 同一口径 —— name / displayName /
-          // description / authType 的**大小写不敏感** includes；空关键词不过滤；
-          // 无命中给空列表（客户端走既有「暂无连接器」空态，不报错）。
-          const q1 = q0.toLowerCase()
-          if (q1) {
-            rows = rows.filter(e => [e.name, e.displayName, e.description, e.authType]
-              .some(v => String(v || '').toLowerCase().includes(q1)))
+        try { officialRows = await connectorRegistry(P.state) } catch (error) { officialError = String(error?.message || error) }
+
+        let deskRows = []
+        let deskError = ''
+        let deskMeta = null
+        if (desktopCatalog) {
+          const d = await desktopIndex()
+          deskError = d.error || ''
+          if (d.index) {
+            deskRows = desktopRows(d.index)
+            deskMeta = {
+              entries: d.index.connectors?.length ?? 0,
+              fetchedAt: d.index.fetchedAtIso || '',
+              etag: d.index.catalogEtag || '',
+              stale: Boolean(d.index.stale),
+            }
           }
-          json(res, 200, { ok: true, source: 'official', total: rows.length, rows })
+        }
+        const merged = mergeRows(officialRows, deskRows, q0)
+        if (merged.rows.length > 0) {
+          json(res, 200, {
+            ok: true,
+            source: officialRows.length > 0 ? 'official' : (merged.rows.some(r => r.source === 'desktop') ? 'desktop' : 'official'),
+            total: merged.rows.length,
+            officialTotal: merged.official,
+            desktopTotal: merged.desktop,
+            // 被隐藏的桌面重复行（同 id 或同「展示名+描述」而官方已有）：如实带出，便于排障
+            desktopDuplicates: merged.desktopDuplicates,
+            desktop: deskMeta,
+            // 桌面目录的 icon 是插件自己的根相对路径 → 补成同源绝对 URL（<img> 才能加载）
+            rows: merged.rows.map(row => (row.icon && String(row.icon).startsWith('/') ? { ...row, icon: absoluteIcon(req, row.icon) } : row)),
+            // 官方侧不可用但有桌面目录时，把官方失败原因如实带出（界面据此提示「登录后可见账号授权项」）
+            error: officialError && !configured ? '需要登录才能看到账号已授权的官方连接器' : (officialError || undefined),
+            desktopError: deskError || undefined,
+          })
           return true
         }
         const q2 = q0.toLowerCase()
@@ -2224,7 +2822,7 @@ export function apply(ctx, config = {}) {
           source: mirrorRows.length ? 'mirror' : 'official',
           total: mirrorRows.length,
           rows: mirrorRows,
-          error: mirrorRows.length ? (officialError || undefined) : reason,
+          error: mirrorRows.length ? (officialError || undefined) : (deskError || reason),
         })
         return true
       }
@@ -2271,6 +2869,49 @@ export function apply(ctx, config = {}) {
       } catch (error) {
         json(res, 200, { ok: true, source: 'official', items: [], error: error.message })
       }
+      return true
+    }
+
+    // 桌面端公开目录状态（只读）：条目数、etag、抓取时间、包是否就绪。
+    // 供设置页/排障看「市场到底吃的是哪份源」，也供 UI 手动刷新。
+    if (route === 'GET /desktop-catalog') {
+      const d = await desktopIndex()
+      const index = d.index
+      const counts = { total: 0, supported: 0, gateway: 0, direct: 0, unsupported: 0 }
+      if (index) {
+        for (const record of index.connectors ?? []) {
+          counts.total++
+          if (!record.supported) { counts.unsupported++; continue }
+          counts.supported++
+          if (endpointFor(record).mode === 'gateway') counts.gateway++
+          else counts.direct++
+        }
+      }
+      json(res, 200, {
+        ok: Boolean(index) || !desktopCatalog,
+        enabled: desktopCatalog,
+        source: DESKTOP_CATALOG_URL,
+        entries: counts.total,
+        supported: counts.supported,
+        gateway: counts.gateway,
+        direct: counts.direct,
+        unsupported: counts.unsupported,
+        fetchedAt: index?.fetchedAtIso || '',
+        etag: index?.catalogEtag || '',
+        sha256: index?.catalogSha256 || '',
+        stale: Boolean(index?.stale),
+        ttlMs: desktopTtlMs,
+        error: d.error || '',
+        flags: d.flags || [],
+      })
+      return true
+    }
+
+    // 强制刷新桌面端目录（etag 变了才重新下载；force 时无条件重下）
+    if (route === 'POST /desktop-catalog/refresh') {
+      const body = JSON.parse((await readBody(req)) || '{}')
+      const d = await desktopIndex({ force: body.force === true })
+      json(res, 200, { ok: Boolean(d.index), entries: d.index?.connectors?.length ?? 0, error: d.error || '', flags: d.flags || [] })
       return true
     }
 
@@ -2376,7 +3017,21 @@ export function apply(ctx, config = {}) {
       if (backfilled.length > 0) {
         try { saveJson(P.registry, registry) } catch { /* 只读场景也能返回 */ }
       }
-      json(res, 200, registry)
+      // 记录里的 icon 可能是插件自己的根相对路径（桌面目录来源）→ 补成同源绝对 URL；
+      // version 提到顶层：客户端不该为了显示一个版本号去理解 officialMeta 的内部结构。
+      const absoluteRegistry = {
+        ...registry,
+        installed: Object.fromEntries(Object.entries(registry.installed ?? {}).map(([key, record]) => {
+          const out = record?.icon && String(record.icon).startsWith('/')
+            ? { ...record, icon: absoluteIcon(req, record.icon) }
+            : { ...record }
+          if (out.version === undefined) {
+            out.version = String(record?.officialMeta?.version || readVersionFromDisk(record?.kind, record?.dest) || '')
+          }
+          return [key, out]
+        })),
+      }
+      json(res, 200, absoluteRegistry)
       return true
     }
 
@@ -2462,6 +3117,17 @@ export function apply(ctx, config = {}) {
         }
       }
 
+      // 桌面端静态目录：装过桌面来源的连接器时，比较「安装时记的包 sha256/版本」
+      // 与当前目录索引（同一份公开包，etag 变了就是有新条目/新定义）。
+      let desktopIdx = null
+      let desktopIndexError = ''
+      if (needs.connector && records.some(([, record]) => record?.source === 'desktop')) {
+        const d = await desktopIndex()
+        desktopIdx = d.index
+        desktopIndexError = d.error || ''
+        if (!desktopIdx) failures.push(`桌面端目录不可用：${desktopIndexError || '未知原因'}`)
+      }
+
       const entries = records.map(([key, record]) => {
         const slash = key.indexOf('/')
         const kind = record?.kind || (slash > 0 ? key.slice(0, slash) : '')
@@ -2508,6 +3174,35 @@ export function apply(ctx, config = {}) {
           return { ...base, status: cmp.status, remoteVersion: cmp.remoteVersion, localVersion: cmp.localVersion, reason: cmp.reason }
         }
         if (kind === 'connector') {
+          // 桌面静态来源：与桌面端目录比对（不看官方注册表 —— 官方本来就没列它）。
+          if (record?.source === 'desktop') {
+            if (!desktopIdx) {
+              return { ...base, status: 'unknown', reason: `桌面端目录不可用：${desktopIndexError || '未知原因'}` }
+            }
+            const rec = desktopRecord(desktopIdx, entryName)
+            if (!rec) {
+              return { ...base, status: 'unknown', reason: '桌面端目录里已没有这个连接器（可能已下线）' }
+            }
+            const installedSha = record?.officialMeta?.bundle?.sha256 || ''
+            const currentSha = desktopIdx.catalogSha256 || ''
+            const remoteVersion = rec.version || ''
+            const localVersion = record?.officialMeta?.version || ''
+            if (!installedSha) {
+              return {
+                ...base, status: 'unknown', remoteVersion, localVersion,
+                reason: '本地记录缺少安装时的目录 sha256，无法比对；重装一次即可记录',
+              }
+            }
+            const versionChanged = Boolean(remoteVersion && localVersion && remoteVersion !== localVersion)
+            if (installedSha !== currentSha || versionChanged) {
+              return {
+                ...base, status: 'update', remoteVersion, localVersion,
+                remoteHash: currentSha.slice(0, 12), localHash: installedSha.slice(0, 12),
+                reason: versionChanged ? '桌面端目录里该连接器版本已变化' : '桌面端目录包已更新',
+              }
+            }
+            return { ...base, status: 'current', remoteVersion, localVersion, reason: '' }
+          }
           if (!loggedIn) {
             return { ...base, status: 'unknown', reason: '需要登录才能检查官方连接器' }
           }
@@ -2596,30 +3291,52 @@ export function apply(ctx, config = {}) {
         const raw = JSON.parse(readFileSync(mcpPath, 'utf8'))
         const server = Object.values(raw.mcpServers ?? {})[0] ?? {}
         if (!server.url) { json(res, 400, { error: 'connector has no http url' }); return true }
+        // 凭据按引用解析：`${WORKBUDDY_TOKEN}` → 官方 bearer；其它 `${VAR}` → DSH 凭据库。
+        // 这里**不再**把任意占位符都替换成 bearer —— 那会把账号 token 当成第三方的
+        // API Key 发出去（桌面静态目录里有 68 条带 ${VAR} 的连接器）。缺凭据就如实报
+        // 缺哪些 ref，让界面弹凭据卡，而不是静默发错凭据。
         let token = ''
         try { token = await bearer(P.state) } catch { token = '' }
-        const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }
-        for (const [key, value] of Object.entries(server.headers ?? {})) {
-          headers[key] = String(value).replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, () => token)
+        const credentials = ctx.get?.('credentials')
+        const refs = [...new Set([
+          ...JSON.stringify(server).matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g),
+        ].map(m => m[1]))]
+        const resolved = {}
+        const missingRefs = []
+        for (const ref of refs) {
+          if (ref === 'WORKBUDDY_TOKEN') { if (token) resolved[ref] = token; else missingRefs.push(ref); continue }
+          let value
+          try { value = credentials === undefined ? undefined : (await credentials.resolve(ref))?.value } catch { value = undefined }
+          if (value === undefined) missingRefs.push(ref)
+          else resolved[ref] = String(value)
         }
-        const upstream = await fetch(server.url, {
-          method: 'POST', headers,
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
-        })
-        const text = await upstream.text()
-        if (upstream.status !== 200) { json(res, 502, { error: `mcp gateway HTTP ${upstream.status}`, detail: text.slice(0, 200) }); return true }
-        // streamable-http 可能回 SSE（data: 行）也可能回纯 JSON，两种都解析。
-        let payload = null
-        try { payload = JSON.parse(text) } catch {
-          const line = text.split('\n').filter(l => l.startsWith('data:')).pop()
-          if (line) { try { payload = JSON.parse(line.slice(5).trim()) } catch { payload = null } }
+        if (missingRefs.length > 0) {
+          json(res, 400, {
+            error: `缺少凭据：${missingRefs.join(', ')}（请先在 DSH 凭据库配置后重试）`,
+            credentialRefs: missingRefs,
+          })
+          return true
         }
-        const tools = payload?.result?.tools ?? []
+        const fill = text => String(text).replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, ref) => resolved[ref] ?? '')
+        const headers = {}
+        for (const [key, value] of Object.entries(server.headers ?? {})) headers[key] = fill(value)
+        // **真实 MCP 握手**（initialize → initialized → tools/list），与 mcp-client 建连同语义。
+        // 只发 tools/list 会被宽松端点骗过：实测 api.mail.qq.com/mcp 对未初始化请求回 200 +
+        // 12 个工具名，但 initialize 回 401 —— 界面会显示「暴露 12 个工具」却根本挂不上。
+        const result = await handshakeTools(fill(server.url), headers)
+        if (!result.ok) {
+          json(res, 502, {
+            error: `连接器握手失败：${[result.http ? `HTTP ${result.http}` : '', result.code ? `code=${result.code}` : '', result.error || ''].filter(Boolean).join(' ')}`,
+            credentialRefs: missingRefs.length > 0 ? missingRefs : undefined,
+          })
+          return true
+        }
         json(res, 200, {
           ok: true, connector: entryName,
-          count: tools.length,
-          names: tools.map(t => t.name),
-          labelled: tools.map(t => ({ name: t.name, description: String(t.description || '').slice(0, 120) })),
+          count: result.tools.length,
+          names: result.tools,
+          labelled: result.labelled ?? [],
+          protocolVersion: result.protocolVersion || '',
           namespace: `mcp__${record.serverName || entryName}__`,
           // 宿主 registry 侧同一份数据的实测视图（证明这些工具真的注册进了本进程，
           // 而不只是上游网关能枚举出来）。零模型轮次：tools 服务每次调用现算。
@@ -2709,6 +3426,152 @@ export function apply(ctx, config = {}) {
       return true
     }
 
+    // MCP OAuth 2.1：给「端点自述需要 OAuth」的连接器（如 QQ邮箱）拉起授权页并自动换 token。
+    // 探测 401（WWW-Authenticate: resource_metadata）→ 发现授权服务器 → 动态注册（loopback
+    // 回调）→ 返回授权 URL（用户扫码/登录）→ 回调收 code → 换 token → 存 DSH 凭据库 →
+    // 改写 mcp.json 的 Bearer 引用。**token 永远只进凭据库，mcp.json 只写 `${REF}`。**
+    if (route === 'POST /connectors/mcp-oauth/start') {
+      const body = JSON.parse((await readBody(req)) || '{}')
+      const entryName = String(body.name || '')
+      if (!/^[\w.-]+$/.test(entryName)) { json(res, 400, { error: 'invalid name' }); return true }
+      const target = connectorMcpTarget(entryName)
+      if (!target.ok) { json(res, target.status || 400, { error: target.error }); return true }
+      const resolved = await resolveServerHeaders(target.server)
+      const probe = await handshakeTools(resolved.url, resolved.headers)
+      if (probe.ok) { json(res, 200, { ok: false, code: 'already-usable', error: '该连接器无需 OAuth，直接握手即可用' }); return true }
+      let hint = probe.oauthHint || null
+      let probeUrl = resolved.url
+      if (!hint) {
+        // 网关不认这条（17008）时，自述 OAuth 的往往是**上游**端点（QQ邮箱实测如此：
+        // mcp.json 指向 agent-gateway，而 401+resource_metadata 来自 api.mail.qq.com/mcp）。
+        // 上游只接受 https（或 loopback http，供隔离验收/本地调试）；其余一律不碰。
+        const upstream = String(target.record?.officialMeta?.upstreamUrl || '')
+        const upstreamAllowed = /^https:\/\//i.test(upstream) || /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\//i.test(upstream)
+        if (upstream && upstream !== resolved.url && upstreamAllowed) {
+          const upstreamProbe = await handshakeTools(upstream, {})
+          if (upstreamProbe.oauthHint) { hint = upstreamProbe.oauthHint; probeUrl = upstream }
+          else if (upstreamProbe.ok) { json(res, 200, { ok: false, code: 'already-usable', error: '上游端点无需 OAuth，直接握手即可用（可点「连接」直连）' }); return true }
+        }
+      }
+      if (!hint) {
+        json(res, 200, { ok: false, code: 'not-mcp-oauth', error: probe.error || '该端点没有声明 MCP OAuth（缺少 WWW-Authenticate resource_metadata）' })
+        return true
+      }
+      const discovery = await discoverMcpOAuth(probeUrl, { wwwAuthenticate: hint.wwwAuthenticate || '' })
+      if (!discovery.ok) {
+        json(res, 200, { ok: false, code: 'no-authorization-server', error: discovery.reason, detail: discovery.detail })
+        return true
+      }
+      const state = newState()
+      const verifier = codeVerifier()
+      const cb = await startCallbackServer({ preferredPort: oauthCallbackPort, host: oauthCallbackHost, state })
+      if (!cb.ok) { json(res, 502, { ok: false, error: cb.reason }); return true }
+      const { redirectUri } = cb
+      const scope = oauthScopes || discovery.metadata.scopesSupported.join(' ')
+      const cacheKey = `${discovery.authorizationServer}|${redirectUri}`
+      let client = loadClients(P.root)[cacheKey]
+      if (!client?.clientId) {
+        const reg = await registerClient(discovery, { redirectUri, scope })
+        if (!reg.ok) { cb.close(); json(res, 502, { ok: false, code: 'register-failed', error: reg.reason, detail: reg.detail }); return true }
+        client = { clientId: reg.clientId, clientSecret: reg.clientSecret, redirectUri, scope: reg.scope || scope, registeredAt: new Date().toISOString() }
+        try { saveClient(P.root, cacheKey, client) } catch { /* 存不下也能继续（本次流程仍可用） */ }
+      }
+      const url2 = buildAuthorizeUrl(discovery, {
+        clientId: client.clientId, redirectUri, state, verifier,
+        scope: client.scope || scope, resource: discovery.resource,
+      })
+      const previous = mcpOauthPending.get(entryName)
+      if (previous) { try { previous.close() } catch { /* 忽略 */ } }
+      mcpOauthPending.set(entryName, { state, close: cb.close, verifier, client, redirectUri, discovery, target, targetUrl: probeUrl, scope: client.scope || scope, startedAt: Date.now() })
+      mcpOauthStatus.set(entryName, { state: 'pending', at: Date.now(), authorizationServer: discovery.authorizationServer, scope: client.scope || scope })
+      void cb.wait.then(async outcome => {
+        const flow = mcpOauthPending.get(entryName)
+        if (!flow || flow.state !== state) return // 已被更新的流程取代
+        mcpOauthPending.delete(entryName)
+        if (!outcome.ok) { mcpOauthStatus.set(entryName, { state: 'error', error: outcome.error, at: Date.now() }); return }
+        const done = await finalizeMcpOauth(entryName, flow, outcome.code)
+        mcpOauthStatus.set(entryName, done.ok
+          ? { state: 'done', ref: done.ref, expiresAt: done.expiresAt, scope: done.scope, at: Date.now() }
+          : { state: 'error', error: done.error, at: Date.now() })
+      })
+      json(res, 200, {
+        ok: true, url: url2, state, redirectUri,
+        authorizationServer: discovery.authorizationServer, resource: discovery.resource,
+        scope: client.scope || scope, expiresInMs: OAUTH_FLOW_TTL_MS,
+      })
+      return true
+    }
+    // 跨机兜底：若打开授权页的浏览器不在 DSH 同一台机器（loopback 回调收不到），
+    // 或弹窗被拦，用户可以把浏览器地址栏里的回调链接整段粘回来，由宿主完成换 token。
+    if (route === 'POST /connectors/mcp-oauth/complete') {
+      const body = JSON.parse((await readBody(req)) || '{}')
+      const entryName = String(body.name || '')
+      if (!/^[\w.-]+$/.test(entryName)) { json(res, 400, { error: 'invalid name' }); return true }
+      const flow = mcpOauthPending.get(entryName)
+      if (!flow) { json(res, 400, { ok: false, error: '没有进行中的授权流程（先点「连接」发起授权）' }); return true }
+      let code = String(body.code || '')
+      let state = String(body.state || '')
+      const raw = String(body.url || '').trim()
+      if (raw) {
+        try {
+          const u = new URL(raw)
+          code = u.searchParams.get('code') || code
+          state = u.searchParams.get('state') || state
+        } catch { /* 也允许直接粘贴 code */ }
+      }
+      if (!code) { json(res, 400, { ok: false, error: '回调链接里没有 code（请粘贴浏览器地址栏里那一整条 URL）' }); return true }
+      if (state && state !== flow.state) {
+        json(res, 400, { ok: false, error: 'state 不匹配：这条回调链接不是当前这次授权产生的（重新点「连接」再授权一次）' })
+        return true
+      }
+      try { flow.close() } catch { /* 忽略 */ }
+      mcpOauthPending.delete(entryName)
+      const done = await finalizeMcpOauth(entryName, flow, code)
+      mcpOauthStatus.set(entryName, done.ok
+        ? { state: 'done', ref: done.ref, expiresAt: done.expiresAt, scope: done.scope, at: Date.now() }
+        : { state: 'error', error: done.error, at: Date.now() })
+      json(res, done.ok ? 200 : 502, done.ok
+        ? { ok: true, ref: done.ref, expiresAt: done.expiresAt }
+        : { ok: false, error: done.error, detail: done.detail })
+      return true
+    }
+
+    if (route === 'GET /connectors/mcp-oauth/status') {
+      const entryName = url.searchParams.get('name') || ''
+      if (!/^[\w.-]+$/.test(entryName)) { json(res, 400, { error: 'invalid name' }); return true }
+      const registry = loadJson(P.registry, { version: 1, installed: {} })
+      const rec = registry.installed?.[`connector/${entryName}`]
+      json(res, 200, {
+        ok: true,
+        status: mcpOauthStatus.get(entryName) || { state: 'idle' },
+        pending: mcpOauthPending.has(entryName),
+        record: rec?.mcpOauth
+          ? { ref: rec.mcpOauth.ref, expiresAt: rec.mcpOauth.expiresAt, scope: rec.mcpOauth.scope, authorizationServer: rec.mcpOauth.authorizationServer }
+          : null,
+      })
+      return true
+    }
+    if (route === 'POST /connectors/mcp-oauth/refresh') {
+      const body = JSON.parse((await readBody(req)) || '{}')
+      const entryName = String(body.name || '')
+      if (!/^[\w.-]+$/.test(entryName)) { json(res, 400, { error: 'invalid name' }); return true }
+      const registry = loadJson(P.registry, { version: 1, installed: {} })
+      const rec = registry.installed?.[`connector/${entryName}`]
+      if (!rec?.mcpOauth) { json(res, 404, { error: '该连接器没有 MCP OAuth 记录（先走一次授权）' }); return true }
+      const out = await refreshMcpOauthToken(rec, entryName)
+      json(res, out.ok ? 200 : 502, out.ok ? { ok: true, expiresAt: out.expiresAt } : { ok: false, error: out.reason, detail: out.detail })
+      return true
+    }
+    if (route === 'POST /connectors/mcp-oauth/cancel') {
+      const body = JSON.parse((await readBody(req)) || '{}')
+      const entryName = String(body.name || '')
+      const flow = mcpOauthPending.get(entryName)
+      if (flow) { try { flow.close() } catch { /* 忽略 */ } mcpOauthPending.delete(entryName) }
+      mcpOauthStatus.set(entryName, { state: 'idle', at: Date.now() })
+      json(res, 200, { ok: true })
+      return true
+    }
+
     // Local DSH skills (~/.dsh/skills): for the composer skill picker's
     // "installed" section. One row per directory holding a SKILL.md.
     if (route === 'GET /local-skills') {
@@ -2768,10 +3631,18 @@ export function apply(ctx, config = {}) {
     if (route === 'POST /connectors/install') {
       const body = JSON.parse((await readBody(req)) || '{}')
       const entryName = String(body.name || '')
+      const wanted = String(body.source || '')
       if (!/^[\w.-]+$/.test(entryName)) { json(res, 400, { error: 'invalid name' }); return true }
-      const landed = await landOfficialConnector(entryName)
+      // 来源：显式 source=desktop → 桌面静态目录；否则官方注册表优先，
+      // 官方查无此条（404）且桌面目录开着 → 自动回落到桌面目录（同一次点击不失败）。
+      let landed = wanted === 'desktop' ? await landDesktopConnector(entryName) : await landOfficialConnector(entryName)
+      if (!landed.ok && !wanted && landed.status === 404 && desktopCatalog) {
+        const alt = await landDesktopConnector(entryName)
+        if (alt.ok) landed = alt
+      }
       if (!landed.ok) { json(res, landed.status, { error: landed.error }); return true }
-      const { dest, row, flags, bytes, defHash } = landed
+      const isDesktop = Boolean(landed.provenance)
+      const { dest, row, flags, bytes } = landed
       const registry = loadJson(P.registry, { version: 1, installed: {} })
       if (!registry.installed) registry.installed = {}
       const key = `connector/${entryName}`
@@ -2782,18 +3653,26 @@ export function apply(ctx, config = {}) {
         description: row.description || '',
         icon: row.icon || '',
         installedAt: new Date().toISOString(),
-        files: 1, bytes, flags,
+        files: Number(landed.files) || 1, bytes, flags,
         linked: false,
         enabled: Boolean(previous?.enabled),
-        // 官方溯源：连接器没有 version/updatedAt，只有「安装时官方那行 MCP 定义」的哈希，
-        // 供 /updates 纯元数据比对（不碰 GitHub、不算文件 sha）。
-        source: 'official',
+        // 来源与溯源：官方连接器只有「安装时那行 MCP 定义」的哈希；
+        // 桌面静态源记整包 etag/sha256 + 连接器 id/version + 实际落盘端点。
+        source: isDesktop ? 'desktop' : 'official',
         officialId: null,
-        official: true,
-        officialMeta: defHash ? { defHash } : null,
+        official: !isDesktop,
+        officialMeta: isDesktop ? landed.provenance : (landed.defHash ? { defHash: landed.defHash } : null),
+        ...(isDesktop
+          ? {
+            desktopEndpoint: landed.endpoint,
+            probe: landed.probe
+              ? { ok: landed.probe.ok, mode: landed.probe.mode, http: landed.probe.http, tools: landed.probe.tools, oauthHint: landed.probe.oauthHint || null }
+              : null,
+          }
+          : {}),
       }
       saveJson(P.registry, registry)
-      json(res, 200, { ok: true, key, dest, flags })
+      json(res, 200, { ok: true, key, dest, flags, source: registry.installed[key].source, endpoint: landed.endpoint || null, probe: landed.probe || null })
       return true
     }
 
@@ -2824,6 +3703,12 @@ export function apply(ctx, config = {}) {
       } catch {
         json(res, 400, { error: 'mcp.json is not valid JSON' })
         return true
+      }
+      // MCP OAuth：token 剩余寿命不足时先用 refresh_token 续一次（失败不阻断，
+      // 挂载会因凭据缺失/过期如实失败；这里只记日志，不伪造状态）。
+      if (record?.mcpOauth?.ref && record.mcpOauth.expiresAt && (record.mcpOauth.expiresAt - Date.now()) < TOKEN_REFRESH_WINDOW_MS) {
+        const refreshed = await refreshMcpOauthToken(record, entryName)
+        console.info(`[wbh] mcp-oauth ${entryName}: pre-enable refresh ${refreshed.ok ? 'ok' : `failed: ${refreshed.reason}`}`)
       }
       // Static admission runs first so a refusal can still report the transport
       // and the credential refs the UI must ask the user to configure. No
@@ -3067,12 +3952,12 @@ export function apply(ctx, config = {}) {
         let wsId = ''
         if (cwd) {
           try {
-            const reg = ctx.get?.('workspaceRegistry') ?? ctx.workspaceRegistry
+            const reg = readOptionalService(ctx, 'workspaceRegistry')
             const ws = typeof reg?.resolveByPath === 'function' ? await reg.resolveByPath(cwd) : null
             wsId = ws?.workspaceId || ''
           } catch { /* ignore */ }
         }
-        json(res, 200, { ok: true, sessionId, cwd: cwd || '', workspaceId: wsId, hasWorkspaceRegistry: Boolean(ctx.get?.('workspaceRegistry') ?? ctx.workspaceRegistry) })
+        json(res, 200, { ok: true, sessionId, cwd: cwd || '', workspaceId: wsId, hasWorkspaceRegistry: Boolean(readOptionalService(ctx, 'workspaceRegistry')) })
       } catch (error) { json(res, 500, { ok: false, error: String(error?.message || error) }) }
       return true
     }
@@ -3246,8 +4131,8 @@ export function apply(ctx, config = {}) {
       // 与工具 handler（workbuddy_install）共用同一条安装实现 —— 逻辑只有一份，
       // 差异只在失败时如何呈现（路由回 JSON 状态码，工具抛带可读信息的错误）。
       try {
-        const { key, report, linked } = await installEntry(ctx, P, cfg, { kind, name: entryName, source: body.source })
-        json(res, 200, { ok: true, key, report, linked })
+        const { key, report, linked, source: landedSource, mirrorReason } = await installEntry(ctx, P, cfg, { kind, name: entryName, source: body.source })
+        json(res, 200, { ok: true, key, report, linked, source: landedSource, mirrorReason })
       } catch (error) {
         // installFailure 把内部失败翻译回**原有的** HTTP 语义（400/404/502），
         // 状态码与抽取前保持一致（现有测试必须继续绿）。
@@ -3277,6 +4162,19 @@ export function apply(ctx, config = {}) {
       const entryName = url.searchParams.get('name') || ''
       if (!['expert', 'skill', 'connector'].includes(kind) || !/^[\w.-]+$/.test(entryName)) {
         json(res, 400, { error: 'invalid kind or name' }); return true
+      }
+      // 桌面端公开目录的图标：字节就在我们缓存的 connectors-config.zip 里（公网没有该路径，
+      // 实测 static.workbuddy.cn/connectors-config-v2/icons/… 是 404）。
+      if (url.searchParams.get('source') === 'desktop') {
+        try {
+          const cachedDesktop = await desktopIconFile(entryName)
+          if (!cachedDesktop) { json(res, 404, { error: 'no desktop icon' }); return true }
+          res.statusCode = 200
+          res.setHeader('content-type', mimeOf(cachedDesktop))
+          res.setHeader('cache-control', 'public, max-age=86400')
+          res.end(readFileSync(cachedDesktop))
+        } catch (error) { json(res, 404, { error: `desktop icon unavailable: ${String(error?.message || error)}` }) }
+        return true
       }
       const cache = loadIndex()
       const entry = cache?.index?.[`${kind}s`]?.find(e => e.name === entryName)

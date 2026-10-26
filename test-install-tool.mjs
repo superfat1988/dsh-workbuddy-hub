@@ -125,7 +125,9 @@ const run = async () => {
     assert.equal(params.type, 'object', 'parameters 必须是 object 根')
     assert.deepEqual(params.required, ['kind', 'name'], 'required 必须是顶层数组')
     assert.deepEqual(params.properties.kind.enum, ['expert', 'skill', 'connector'])
-    assert.deepEqual(params.properties.source.enum, ['official', 'mirror'])
+    // 连接器来源现在有三档：official（官方注册表）/ mirror（灾备）/
+    // desktop（WorkBuddy 客户端自带市场那份公开静态目录）。
+    assert.deepEqual(params.properties.source.enum, ['official', 'mirror', 'desktop'])
     // uninstall 工具同样是投影后的 JSON Schema，且只收 kind/name
     const uparams = calls.registered[1].parameters
     assert.equal(uparams.type, 'object', 'uninstall parameters 必须是 object 根')

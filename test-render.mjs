@@ -322,8 +322,12 @@ assert.ok(builtClient.includes('wbh-badgeUpdate'), 'the built client must carry 
 // 技能目录与技能包下载都需要账号；此前只有连接器页有就地登录卡，技能页只会显示
 // 「暂无技能」，用户看不出该去登录。
 const catalogueSrc = readFileSync(new URL('./src/Catalogue.jsx', import.meta.url), 'utf8')
-assert.ok(catalogueSrc.includes("const pageLoginGate = (variant === 'page' && (kind === 'connector' || kind === 'skill'))"),
-  '技能页与连接器页必须共用就地登录卡（page 变体）')
+assert.ok(catalogueSrc.includes("const pageLoginGate = (variant === 'page' && kind === 'skill')"),
+  '技能页仍必须用就地登录卡挡住列表（技能数据全部需要账号）')
+assert.ok(catalogueSrc.includes('connectorLoginBanner'),
+  '连接器页未登录时应显示说明卡而不是把列表整块挡掉（桌面公开目录不需要登录）')
+assert.ok(catalogueSrc.includes('{connectorLoginBanner}') && catalogueSrc.includes("kind === 'connector' && auth !== null"),
+  '连接器未登录说明卡必须真的渲染进列表分支（不是死代码）')
 assert.ok(catalogueSrc.includes('技能目录与技能包下载需要 WorkBuddy 账号'),
   '技能页登录卡要说清为什么需要登录')
 assert.ok(catalogueSrc.includes('pageLoginGate || skillDetailView'),
@@ -332,6 +336,64 @@ assert.ok(!catalogueSrc.includes('connectorLoginGate'),
   '旧的「仅连接器」登录卡不得残留（否则技能页会漏掉引导）')
 assert.ok(catalogueSrc.includes('STALE_LOGIN_REASON'),
   '已登录但凭证失效（stale）时必须与连接器页同样处理')
+
+// ---- 桌面端公开目录来源必须可见、且不可自动接入的行不能给「连接」按钮 ----
+// 连接器目录现在是「官方注册表 ∪ 桌面公开目录」双来源：来源不标出来，用户会把
+// 桌面目录条目当成账号已授权的官方条目；stdio/CLI 行若还能点「连接」，就会走到
+// 宿主侧 400 才失败（甚至误以为可用）。
+assert.ok(catalogueSrc.includes('connector-card-badge') && catalogueSrc.includes("entry.source === 'desktop'"),
+  '桌面目录来源必须在卡片上标出来')
+assert.ok(catalogueSrc.includes('unsupportedReason') && catalogueSrc.includes('disabled={busy === key || Boolean(unsupported)}'),
+  '不可自动接入（stdio/CLI）的连接器必须禁用连接按钮并显示原因')
+assert.ok(catalogueSrc.includes('desktop.supported === false'),
+  '不可自动接入的判定必须读宿主给的 desktop.supported（不自行猜测）')
+// 真机缺陷（2026-10-07）：来源说明里的「已去重 N 条」渲染条件写好了，但 setSourceCounts
+// 没有把 duplicates 接进去 → 条件永远 false，界面上看不到去重数量。渲染与接线必须成对断言。
+assert.ok(catalogueSrc.includes('duplicates: r.desktopDuplicates ?? 0'),
+  '「已去重条数」必须真的接进 setSourceCounts（只留渲染条件 = 永远不显示）')
+// 真机缺陷（2026-10-07，生产实测）：未绑定的连接器一律先走官方账号绑定，
+// 桌面目录里的连接器大多不在官方注册表（点 QQ邮箱 报 `connector not found: qq-mail`），
+// 于是永远到不了安装/启用。桌面行必须「装 → 启用 →（需要授权才）发起 OAuth」。
+assert.ok(catalogueSrc.includes("hub.connectorInstall(entry.name, 'desktop')"),
+  '桌面目录来源的连接器必须带 source=desktop 安装')
+// 用户预期（2026-10-07）：点「连接」应当**先弹授权/登录窗**，授权完成后再建连。
+// 桌面目录有三种鉴权家族，必须按家族分派，不能一律「先装再启用」：
+//   ① 声明了 ${VAR} → 先要凭据  ② 网关/账号侧鉴权 → 先发起官方 OAuth
+//   ③ 官方账号侧不认这条（17008）→ 才回落本地装+启用并如实报错
+assert.ok(catalogueSrc.includes('customRefs.length > 0'),
+  '用户凭据家族（${VAR}）必须先要凭据，不能直接尝试建连')
+// 生产实测：await 之后再 window.open 会被浏览器拦（授权页没弹出来，只剩链接）。
+// 必须在用户手势的同步阶段预开空窗，拿到 URL 再写地址。
+assert.ok(catalogueSrc.includes("window.open('about:blank', '_blank')") && catalogueSrc.includes('closeAuthWindow'),
+  'MCP/官方 OAuth 都要同步预开窗并在失败路径关掉（否则弹窗被拦）')
+assert.ok(catalogueSrc.includes('hub.connectorAuthStart(entry.name)'),
+  '网关/账号侧鉴权家族必须先发起官方授权（登录窗），授权完成后再连接')
+assert.ok(catalogueSrc.includes('官方账号侧不认这条连接器'),
+  '官方不认这条连接器时要如实说明为什么跳过了授权窗')
+// MCP OAuth 的跨机兜底：授权页开在别的机器时 loopback 回调收不到，必须能手动粘贴回调链接
+assert.ok(catalogueSrc.includes('mcpOauthPaste') && catalogueSrc.includes('hub.mcpOauthComplete'),
+  'MCP OAuth 必须有「粘贴回调链接」兜底（渲染与 API 都要接线）')
+assert.ok(readFileSync(new URL('./client.js', import.meta.url), 'utf8').includes('mcpOauthComplete'),
+  '构建产物必须包含 MCP OAuth 兜底接线（改完 src 记得 npm run build:client）')
+// 生产实测（2026-10-08）：先授权后安装 → `mcp-oauth/start` 读不到本地 mcp.json 一律 404，
+// 「任意连接」都起不来；预开的 about:blank 也没在失败路径关掉（用户看到空白页）。
+assert.ok(catalogueSrc.includes("await hub.connectorInstall(entry.name, 'desktop')") &&
+  catalogueSrc.indexOf("await hub.connectorInstall(entry.name, 'desktop')") < catalogueSrc.indexOf('hub.mcpOauthStart(entry.name)'),
+  '桌面来源必须先安装、再发起授权（mcp-oauth/start 需要本地 mcp.json）')
+assert.ok(catalogueSrc.includes('const enableOnly') && catalogueSrc.includes('closeAuthWindow()'),
+  '安装/授权分离：enableOnly 独立，且失败路径必须关掉预开的空窗')
+assert.ok(catalogueSrc.includes('desktopDirect'),
+  '桌面目录里的直连型连接器不应被 WorkBuddy 登录门拦住（它们不需要账号凭据）')
+const hubSrc = readFileSync(new URL('./src/hub.js', import.meta.url), 'utf8')
+assert.ok(hubSrc.includes('x.source ?? r.source'),
+  '连接器来源必须按行判定（整表 source 一刀切会把桌面行误当官方条目去装）')
+const marketPageSrc = readFileSync(new URL('./src/MarketPage.jsx', import.meta.url), 'utf8')
+assert.ok(marketPageSrc.includes("entry.source === 'desktop' ? 'desktop'"),
+  '安装必须把 desktop 来源透传给宿主（否则官方查无此条只能靠宿主兜底）')
+assert.ok(readFileSync(new URL('./client.js', import.meta.url), 'utf8').includes('duplicates: r.desktopDuplicates'),
+  '构建产物必须包含「已去重条数」接线（改完 src 记得 npm run build:client，否则界面与源码不一致）')
+assert.ok(readFileSync(new URL('./client.js', import.meta.url), 'utf8').includes('connector-card-badge'),
+  '构建产物 client.js 必须包含新的来源徽标（改完 src 记得 npm run build:client）')
 
 // ---- 连接器 chip 的官方 MCP 图标：源码/渲染契约 --------------------------------
 // 官方效果：输入框下方的已加载连接器 chip 显示注册表的 `icon`（远端 URL）。
@@ -389,11 +451,19 @@ console.log('render smoke + hub import completeness: OK')
   const pickerBlock = catalogueSrc.slice(catalogueSrc.indexOf("variant === 'picker'"))
   const rowBlock = pickerBlock.slice(pickerBlock.indexOf('const rowNode'), pickerBlock.indexOf('const listNode'))
   // a) 整行点击/回车：只有 skill 分支与 onAction —— 连接器不再有独立的 connectorAction 分支
-  const rowOnClick = rowBlock.slice(rowBlock.indexOf('onClick={() => {'), rowBlock.indexOf('onKeyDown'))
-  assert.ok(rowOnClick.includes("if (entry.kind === 'skill') handleSkillPick(entry)"), '技能行点击仍是写输入框')
-  assert.ok(rowOnClick.includes('onAction?.(entry)'), '其余条目（含连接器）行点击必须走 onAction（= attach）')
-  assert.ok(!rowOnClick.includes('connectorAction'), '整行点击不得再触发 connectorAction（那是开关的语义）')
-  const rowOnKeyDown = rowBlock.slice(rowBlock.indexOf('onKeyDown'), rowBlock.indexOf('<span className={`wbh-flyoutIcon'))
+  // 三种条目各自走官方行结构（cr-experts/skills/connectors-submenu__item），契约分开断言。
+  const iExpert = rowBlock.indexOf("entry.kind === 'expert'")
+  const iSkill = rowBlock.indexOf("entry.kind === 'skill'", iExpert)
+  const iConn = rowBlock.indexOf("entry.kind === 'connector'", iSkill)
+  const expertBlock = rowBlock.slice(iExpert, iSkill)
+  const skillBlock = rowBlock.slice(iSkill, iConn)
+  const connBlock = rowBlock.slice(iConn)
+  assert.ok(skillBlock.includes('onClick={() => handleSkillPick(entry)}'), '技能行点击仍是写输入框')
+  assert.ok(expertBlock.includes('onClick={() => onAction?.(entry)}'), '专家行点击走 onAction（召唤）')
+  assert.ok(connBlock.includes('onClick={() => onAction?.(entry)}'), '连接器行点击走 onAction（= attach）')
+  const connOnClick = connBlock.slice(connBlock.indexOf('onClick={() =>'), connBlock.indexOf('onKeyDown'))
+  assert.ok(!connOnClick.includes('connectorAction'), '整行点击不得再触发 connectorAction（那是开关的语义）')
+  const rowOnKeyDown = rowBlock.slice(rowBlock.indexOf('onKeyDown'), rowBlock.indexOf('const listNode'))
   assert.ok(rowOnKeyDown.includes("if (e.key === 'Enter') onAction?.(entry)"), '回车 = onAction（attach），与点击一致')
   // b) 行尾显式开关：真 button + role=switch + stopPropagation
   const toggleBlock = rowBlock.slice(rowBlock.indexOf("entry.kind === 'connector' && ("))
@@ -413,7 +483,11 @@ console.log('render smoke + hub import completeness: OK')
   //    不再承担「已启用时再点 = 断开」（那是开关的职责）
   const attachConnector = composerSrc.slice(composerSrc.indexOf("if (entry.kind === 'connector') {"), composerSrc.indexOf("} else if (entry.kind === 'expert') {"))
   assert.ok(attachConnector.includes('hub.enableConnector(entry.name)'), 'attach：未启用的连接器要先启用')
-  assert.ok(attachConnector.includes('hub.mount(sessionId'), 'attach：连接器必须挂到当前会话（chip 链路）')
+  assert.ok(attachConnector.includes('mountForSession(sessionId'), 'attach：连接器必须挂到当前会话（chip 链路）')
+  // 挂载必须走 mountForSession：它先标「挂载在途」再 POST /mount，否则安装成功触发的那次
+  // 对账（快照早于 mount）会把乐观 chip 当幽灵删掉 —— 真机缺陷：宿主挂着、界面没有。
+  assert.ok(composerSrc.includes('markMountPending(sessionId, key)'), 'attach 挂载前必须标「在途」')
+  assert.ok(composerSrc.includes('clearMountPending(sessionId, key)'), '挂载落定后必须清「在途」')
   assert.ok(!attachConnector.includes('hub.disableConnector'), 'attach 不再承担断开语义（断开在行尾开关 / AttachedRail 的 X）')
   // d) 样式：wbh-toggle 在 official-picker.css 有官方对齐基础值；app.css 只补按钮可用性
   const pickerCss = readFileSync(new URL('./src/official-picker.css', import.meta.url), 'utf8')

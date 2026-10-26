@@ -4,6 +4,7 @@ import MarketPage from './MarketPage.jsx'
 import ComposerAdd from './ComposerAdd.jsx'
 import AttachedRail from './AttachedRail.jsx'
 import SettingsPage from './SettingsPage.jsx'
+import IdleSlot from './IdleSlot.jsx'
 import {
   setMarketNavigator, setSessionOpener, setSessionStarter, setPresetSelector, openMarket,
   openSessionById, startNewSession, composerSession, summonExpertInNewSession,
@@ -223,6 +224,10 @@ const plugin = {
     }, ComposerSlot))
     // 已选专家/技能/连接器的 chip 由 input.left 内的 AttachedRail 渲染，
     // 与官方一致地紧挨「+」按钮显示在输入卡左下角（不再单独注册 dock 槽）。
+    // 闲置能力提醒：挂输入框 dock，每个会话都在；卡片自身 fixed 定位，不占布局。
+    ctx.slots.inject('conversation.composer.dock', () => reg('conversation.composer.dock', {
+      name: 'conversation.composer.dock', id: 'workbuddy-hub-idle', order: 60,
+    }, IdleSlot))
     ctx.slots.inject('settings.section', () => reg('settings.section', {
       name: 'settings.section', id: 'workbuddy-hub', order: 85,
       label: () => '专家·技能·连接器',

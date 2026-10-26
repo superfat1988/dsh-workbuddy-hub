@@ -1,0 +1,100 @@
+/* 官方设计变量 · 明亮 · 裁剪版
+ * 只保留 official-picker.css 引用到的变量及其依赖（86 条）
+ */
+.wbh-port {
+  --cr-avatar-fallback-bg: var(--cr-internal-avatar-fallback-bg);
+  --cr-avatar-fallback-fg: var(--cr-internal-avatar-fallback-fg);
+  --cr-badge-bg: var(--cr-internal-badge-bg);
+  --cr-badge-text: var(--cr-internal-badge-text);
+  --cr-bg-elevated: var(--cr-internal-bg-elevated);
+  --cr-bg-hover: var(--wb-bg-hover);
+  --cr-bg-input-inset: var(--cr-internal-bg-input-inset);
+  --cr-bg-primary: var(--cr-internal-bg-primary);
+  --cr-bg-secondary: var(--cr-internal-bg-secondary);
+  --cr-border-default: var(--cr-internal-border-default);
+  --cr-border-elevated: var(--cr-internal-border-elevated);
+  --cr-brand-primary: var(--cr-internal-brand-primary);
+  --cr-chip-hover-bg: var(--cr-internal-chip-hover-bg);
+  --cr-color-on-accent: var(--cr-internal-color-on-accent);
+  --cr-font-family: var(--cr-internal-font-family);
+  --cr-icon-check-selected: var(--cr-brand-primary);
+  --cr-internal-avatar-fallback-bg: #ebebeb;
+  --cr-internal-avatar-fallback-fg: #00000080;
+  --cr-internal-badge-bg: #0000000f;
+  --cr-internal-badge-text: #00000080;
+  --cr-internal-bg-elevated: #fff;
+  --cr-internal-bg-input-inset: #f7f7f7;
+  --cr-internal-bg-primary: #fff;
+  --cr-internal-bg-secondary: #f7f7f7;
+  --cr-internal-border-default: #ebebeb;
+  --cr-internal-border-elevated: #e5e5e5;
+  --cr-internal-brand-primary: #00c29a;
+  --cr-internal-chip-hover-bg: #0000000f;
+  --cr-internal-color-on-accent: #fff;
+  --cr-internal-font-family: "PingFang SC", -apple-system, "Helvetica Neue", Arial, "Microsoft Yahei", sans-serif;
+  --cr-internal-item-hover-bg: #f2f2f2;
+  --cr-internal-item-selected-bg: #f7f7f7;
+  --cr-internal-popover-bg: #fff;
+  --cr-internal-popover-border: #dedede;
+  --cr-internal-popover-divider: #f2f2f2;
+  --cr-internal-shadow-panel-light: 0 4px 16px 0 #00000014, 0 1px 4px 0 #0000000a;
+  --cr-internal-shadow-popover: 0 6px 24px 0 #0000000a, 0 4px 6px 0 #0000000a;
+  --cr-internal-status-error: #f64041;
+  --cr-internal-text-disabled: #0000004d;
+  --cr-internal-text-link: #1470b4;
+  --cr-internal-text-link-hover: #0e58a0;
+  --cr-internal-text-secondary: #000000b3;
+  --cr-internal-text-tertiary: #00000080;
+  --cr-item-hover-bg: var(--cr-internal-item-hover-bg);
+  --cr-item-selected-bg: var(--cr-internal-item-selected-bg);
+  --cr-popover-bg: var(--cr-internal-popover-bg);
+  --cr-popover-border: var(--cr-internal-popover-border);
+  --cr-popover-divider: var(--cr-internal-popover-divider);
+  --cr-scrollbar-thumb: var(--wb-scrollbar-thumb);
+  --cr-scrollbar-thumb-hover: var(--wb-scrollbar-thumb-hover);
+  --cr-shadow-panel-light: var(--cr-internal-shadow-panel-light);
+  --cr-shadow-popover: var(--cr-internal-shadow-popover);
+  --cr-status-error: var(--cr-internal-status-error);
+  --cr-text-disabled: var(--cr-internal-text-disabled);
+  --cr-text-link: var(--cr-internal-text-link);
+  --cr-text-link-hover: var(--cr-internal-text-link-hover);
+  --cr-text-primary: var(--wb-color-text-primary);
+  --cr-text-secondary: var(--cr-internal-text-secondary);
+  --cr-text-tertiary: var(--cr-internal-text-tertiary);
+  --wb-bg-hover: color-mix(in srgb, var(--wb-palette-black-100) 5%, transparent);
+  --wb-bg-popover: var(--wb-palette-white-100);
+  --wb-bg-primary: var(--wb-palette-white-100);
+  --wb-color-border-primary: var(--wb-palette-gray-5);
+  --wb-color-border-solid: #dedede;
+  --wb-color-text-primary: var(--wb-palette-black-100);
+  --wb-dropdown-bg-color: var(--wb-bg-popover);
+  --wb-motion-duration-fast: .15s;
+  --wb-motion-easing-decelerate: cubic-bezier(0, 0, .2, 1);
+  --wb-palette-black-100: #000;
+  --wb-palette-black-20: #0003;
+  --wb-palette-black-30: #0000004d;
+  --wb-palette-gray-2: #f7f7f7;
+  --wb-palette-gray-3: #f2f2f2;
+  --wb-palette-gray-5: #e6e6e6;
+  --wb-palette-white-100: #fff;
+  --wb-popover-border-color: var(--wb-color-border-solid);
+  --wb-popover-expand-duration-in: var(--wb-motion-duration-fast);
+  --wb-popover-expand-easing-in: var(--wb-motion-easing-decelerate);
+  --wb-popover-shadow: 0px 6px 24px 0px #0000000a, 0px 4px 6px 0px #0000000a;
+  --wb-radius-xl: 12px;
+  --wb-scrollbar-thumb: var(--wb-palette-black-20);
+  --wb-scrollbar-thumb-hover: var(--wb-palette-black-30);
+  --wb-shadow-popover: 0 4px 12px -4px color-mix(in srgb, var(--wb-palette-black-100) 4%, transparent), 0 3px 6px -8px color-mix(in srgb, var(--wb-palette-black-100) 4%, transparent);
+}
+
+/* 文本族兜底（明亮侧与暗色显式成对，避免只有一边生效）。 */
+.wbh-port {
+  --wb-text-strong: #000000e6;
+  --wb-text-medium: #000000a6;
+  --wb-text-weak: #00000080;
+  --wb-text-muted: #0000004d;
+  --wb-text-disable: #0000004d;
+  --cr-internal-text-primary: #000000e6;
+  --cr-internal-text-secondary: #000000a6;
+  --cr-internal-text-tertiary: #00000080;
+}

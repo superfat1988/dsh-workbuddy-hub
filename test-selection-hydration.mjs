@@ -9,6 +9,8 @@
 import assert from 'node:assert/strict'
 import {
   addSelection, removeSelection, selectedItems, reconcileSelections,
+  markMountPending, clearMountPending, pendingMounts,
+  beginReconcile, isCurrentReconcile,
 } from './src/hub.js'
 
 const SID = 'session-hydration-1'
@@ -92,6 +94,63 @@ const registry = {
   reconcileSelections(SID, ['connector/tdocs-app', 'connector/unknown-app'], registry)
   removeSelection(SID, 'connector', 'unknown-app')
   assert.deepEqual(selectedItems(SID).map(x => x.key), ['connector/tdocs-app'])
+}
+
+/* ------------------------------------------------------------------ *
+ * 11-13) 挂载在途（pending mount）—— 真机缺陷：召唤后 chip 永久消失
+ *
+ * 场景：attach 先乐观出 chip，然后 POST /mount。安装成功会触发一次 refresh，
+ * 那次 GET /mounted 的快照**早于** mount，宿主里自然没有这条 —— 若把在途
+ * 条目按幽灵删掉，且这次对账的响应后到，最终 chip 就没了（宿主其实挂着）。
+ * ------------------------------------------------------------------ */
+
+// 11) 在途的挂载不被当做幽灵 chip 删掉
+{
+  const sid = 'session-pending-1'
+  addSelection({ kind: 'expert', name: 'gap-expert', displayName: '缺口专家' }, sid)
+  markMountPending(sid, 'expert/gap-expert')
+  assert.deepEqual(pendingMounts(sid), ['expert/gap-expert'], '在途标记要能查到')
+  const list = reconcileSelections(sid, [], registry)   // 早于 mount 的空快照
+  assert.deepEqual(list.map(x => x.key), ['expert/gap-expert'], '在途条目不得被当幽灵删掉')
+  assert.deepEqual(selectedItems(sid).map(x => x.key), ['expert/gap-expert'], 'chip 必须还在')
+  assert.equal(list, selectedItems(sid), '内容没变时应返回同一引用，不触发无谓重渲染')
+}
+
+// 12) mount 落定后（清除在途）同样的空快照要照旧清空 —— 不能变成「永不删除」
+{
+  const sid = 'session-pending-1'
+  clearMountPending(sid, 'expert/gap-expert')
+  assert.deepEqual(pendingMounts(sid), [], '落定后在途标记要清掉')
+  const list = reconcileSelections(sid, [], registry)
+  assert.deepEqual(list, [], '落定后宿主没有的条目照旧按幽灵清掉')
+}
+
+// 13) 专家单槽位：在途专家要把快照里的旧专家顶掉（不能同时留两位）
+{
+  const sid = 'session-pending-2'
+  addSelection({ kind: 'expert', name: 'old-expert', displayName: '旧专家' }, sid)
+  reconcileSelections(sid, ['expert/old-expert'], registry)
+  assert.deepEqual(selectedItems(sid).map(x => x.name), ['old-expert'])
+  addSelection({ kind: 'expert', name: 'new-expert', displayName: '新专家' }, sid)
+  markMountPending(sid, 'expert/new-expert')
+  const list = reconcileSelections(sid, ['expert/old-expert'], registry)  // 早于 mount 的快照
+  assert.deepEqual(list.map(x => x.name), ['new-expert'], '在途专家必须顶掉快照里的旧专家')
+  clearMountPending(sid, 'expert/new-expert')
+}
+
+// 14) 对账序号：过期的快照必须被丢弃（先发后到的响应不许覆盖新状态）
+{
+  const sid = 'session-epoch-1'
+  const older = beginReconcile(sid)
+  const newer = beginReconcile(sid)
+  assert.ok(newer > older, '序号必须单调递增')
+  assert.equal(isCurrentReconcile(sid, newer), true, '最新一次快照允许落地')
+  assert.equal(isCurrentReconcile(sid, older), false, '过期快照必须被丢弃')
+  const fresh = beginReconcile(sid)
+  assert.equal(isCurrentReconcile(sid, fresh), true, '再领新号后旧号继续被丢弃')
+  assert.equal(isCurrentReconcile(sid, newer), false)
+  // 未领号（undefined）的调用方（老测试/直连调用）保持可用
+  assert.equal(isCurrentReconcile('session-epoch-never', undefined), true)
 }
 
 console.log('selection hydration (host mounts → chips) contract tests: OK')

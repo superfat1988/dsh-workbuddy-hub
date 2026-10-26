@@ -320,3 +320,15 @@
 .wbh-marketModalClose{padding:0}
 .wbh-marketModalNotice{flex:0 0 auto;margin:10px 16px 0;padding:6px 10px;border-radius:8px;background:var(--wb-bg-tertiary,#f4f4f4);font-size:12px;line-height:18px;color:var(--wb-color-text-secondary)}
 .wbh-marketModalBody{flex:1 1 auto;min-height:0;overflow-y:auto;padding:0 16px 16px}
+
+/* 暗色：已附加 chip / 提示条同样写死深色，在暗色会话栏里发灰不可读。 */
+[data-ds-dark-theme] .wbh-chipLabel,
+[data-ds-dark-theme] .cr-chip-label { color: #ffffff99; }
+[data-ds-dark-theme] .wbh-chipClose,
+[data-ds-dark-theme] .cr-chip-icon { color: #ffffff80; }
+[data-ds-dark-theme] .wbh-railChip:hover .wbh-chipLabel,
+[data-ds-dark-theme] .wbh-railChip:hover .wbh-chipClose,
+[data-ds-dark-theme] .wbh-railChip:focus-within .wbh-chipLabel { color: #ffffffe6; }
+[data-ds-dark-theme] .wbh-removeNotice { border-color: #2e4a2e; background: #12210f; color: #8fd48f; }
+[data-ds-dark-theme] .wbh-badgeCurrent { border-color: #2e4a2e; background: #12210f; color: #8fd48f; }
+[data-ds-dark-theme] .wbh-authLink { background: #ffffff14; color: #7ea6ff; }

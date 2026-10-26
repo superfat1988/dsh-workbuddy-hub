@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react'
-import { hub, addSelection, removeSelection, reconcileSelections, markExpertRecent, peekPendingExpert, clearPendingExpert, onCatalogChange, onMarketRequest, setComposerSession, authState, onAuthChange, refreshAuth, onAuthRequired, claimAuthGate, settleAuthGate, STALE_LOGIN_REASON } from './hub.js'
+import { hub, addSelection, removeSelection, reconcileSelections, markExpertRecent, peekPendingExpert, clearPendingExpert, onCatalogChange, onMarketRequest, setComposerSession, authState, onAuthChange, refreshAuth, onAuthRequired, claimAuthGate, settleAuthGate, STALE_LOGIN_REASON, markMountPending, clearMountPending, beginReconcile, isCurrentReconcile } from './hub.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
 import Catalogue from './Catalogue.jsx'
@@ -13,6 +13,22 @@ import './official-picker.css'
 
 // 官方二级面板的自然宽度（与 official-picker.css 的 .is-* 规则同源）
 const PANEL_WIDTH = { expert: 200, skill: 320, connector: 240 }
+
+/**
+ * 把条目挂到会话：**先标「挂载在途」再落定**。
+ *
+ * 为什么必须标：chip 是乐观的（addSelection 先出），而 hub.install 成功会触发
+ * onCatalogChange → refresh() → GET /mounted（快照早于这次 mount）→ 对账会把
+ * 还没有挂载记录的 chip 当幽灵删掉。正常情况下紧接着那次 refresh 会补回来，
+ * 但两次快照一旦乱序（先发的后到），chip 就永久消失 —— 宿主挂着、界面没有，
+ * 用户看到的是「点了召唤，专家没挂进这个对话」。在途标记让对账放它一马。
+ */
+async function mountForSession(sessionId, kind, name) {
+  if (!sessionId) return
+  const key = `${kind}/${name}`
+  markMountPending(sessionId, key)
+  try { await hub.mount(sessionId, kind, name) } finally { clearMountPending(sessionId, key) }
+}
 
 // 图标名取自官方一级菜单 _itemIcon_1h7yd_144 的 SVG 原文
 const KINDS = [
@@ -56,8 +72,13 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
   const layerRef = useRef(null)
 
   const refresh = useCallback(async () => {
+    // 同一会话可能同时在飞多次对账（安装成功触发一次、mount 结束后再触发一次）。
+    // 先领号、落地前比一次：过期快照整块丢弃，否则「先发后到」的旧快照会把刚
+    // 挂上的条目擦掉（chip 消失、专家像没挂进这个对话）。
+    const token = beginReconcile(sessionId)
     try {
       const [inst, mnt] = await Promise.all([hub.installed(), hub.mounted(sessionId)])
+      if (!isCurrentReconcile(sessionId, token)) return
       setInstalled(inst)
       setMounted(new Set(mnt))
       // 宿主才是「这个会话挂了什么」的真源：刷新/切会话后据此对账 chip，
@@ -78,7 +99,7 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
     if (!pending) return
     if (sessionBlank === false) { clearPendingExpert(); return }
     addSelection(pending, sessionId)
-    void hub.mount(sessionId, 'expert', pending.name)
+    void mountForSession(sessionId, 'expert', pending.name)
       .then(() => console.info('[wbh] pending expert applied:', pending.name, '-> session', sessionId))
       .catch(error => console.warn('[wbh] pending expert mount failed:', String(error?.message || error)))
   }, [sessionId, sessionBlank])
@@ -171,6 +192,8 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
   const attach = useCallback(async (entry, task = '') => {
     const key = `${entry.kind}/${entry.name}`
     setBusy(key); setNotice('')
+    // 安装结果的来源：官方内容 / 官方缺文件时的镜像副本（只用于如实提示）
+    let installSource = ''
     // 官方逻辑：选中即刻在聊天框出现该项的 chip（按会话隔离）。
     // 专家是**单槽位**，「替换旧专家」就发生在这唯一一次调用里 —— 必须在这里接住被替换的
     // 条目；此前是在下面分支里再调一次 addSelection 取值，那时旧专家已经被挤掉，替换提示
@@ -186,7 +209,10 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
       }
       if (!already) {
         try {
-          await hub.install(entry.kind, entry.name, entry.official ? 'official' : undefined)
+          const ins = await hub.install(entry.kind, entry.name, entry.official ? 'official' : undefined)
+          // 宿主在「官方缺这个专家的人设文件」时按条目回落镜像仓：装了就要如实说
+          // （来源不同，/updates 对它只会报 unknown），不能默默当成官方内容。
+          installSource = ins?.source || ''
         } catch (error) {
           // 已经装过时后端会 400；以注册表再确认一次，避免把「已安装」当失败。
           const fresh = await hub.installed().catch(() => ({}))
@@ -198,20 +224,22 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
         // → chip 出现、工具下一轮可用。「停用」改由行尾开关显式承担（Catalogue 里），
         // 这里不再承担「已启用时再点 = 断开」的开关语义。
         if (!installed[key]?.enabled) await hub.enableConnector(entry.name)
-        if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
+        await mountForSession(sessionId, entry.kind, entry.name)
         setNotice(`已连接「${entry.displayName}」，下一次模型步骤起可在对话中使用。`)
       } else if (entry.kind === 'expert') {
         // picker 在 composer 里 → 用户已在一个会话中：选中即加载到**当前会话**
         // （不新建会话）。「新建会话 + 该专家」的场景走市场页的「召唤」。
         // 专家是**单槽位**：宿主 mountEntry 会摘掉旧专家，chip 已在上面同步替换。
-        if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
+        await mountForSession(sessionId, entry.kind, entry.name)
         // picker 里选中也算「加载过」→ 记入最近专家（用户确认的语义，P6）
         markExpertRecent(entry)
-        setNotice(replacedOnAdd.length
+        // 官方缺该专家人设文件时宿主回落镜像：提示里说清楚，别让用户以为装的是官方内容
+        const mirrorNote = installSource === 'mirror' ? '（官方缺该专家文件，本次用镜像副本安装）' : ''
+        setNotice((replacedOnAdd.length
           ? `已替换「${replacedOnAdd[0].displayName}」→「${entry.displayName}」，下一步起以该专家身份回答`
-          : `已选中「${entry.displayName}」，下一步起以该专家身份回答`)
+          : `已选中「${entry.displayName}」，下一步起以该专家身份回答`) + mirrorNote)
       } else {
-        if (sessionId) await hub.mount(sessionId, entry.kind, entry.name)
+        await mountForSession(sessionId, entry.kind, entry.name)
         setNotice(`已挂载「${entry.displayName}」`)
       }
       setRecent(prev => [entry, ...prev.filter(e => e.key !== key)].slice(0, 5))
@@ -274,7 +302,7 @@ export default function ComposerAdd({ sessionId, runCommand, sessionBlank }) {
   )
 
   return (
-    <div className="wbh-anchor" ref={anchor}>
+    <div className="wbh-anchor wbh-port" ref={anchor}>
       <button type="button" className="wbh-plus" aria-label="专家·技能·连接器"
         aria-expanded={menuOpen || pickerOpen || undefined} title="专家 · 技能 · 连接器"
         data-wbh-session={sessionId || ''}

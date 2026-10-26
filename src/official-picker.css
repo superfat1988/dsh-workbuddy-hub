@@ -232,3 +232,56 @@
 
 /* ---------- 面板内的状态/提示（官方无对应物，保持最小侵入） ---------- */
 .wbh-flyoutState{padding:12px 8px;font-size:13px;line-height:20px;color:#666;text-align:center}
+
+/* 暗色：一级菜单此前写死白底。它的祖先链没有 .wbh-port（picker 挂在自己的层里），
+ * 所以基于 .wbh-port 的暗色覆盖命中不到 —— 这里直接按主题属性覆盖，并为
+ * 子菜单面板补一份，保证同一个弹层里不会一亮一暗。 */
+[data-ds-dark-theme] .wbh-menu {
+  background: #242424;
+  border-color: #ffffff14;
+  box-shadow: 0 4px 12px -4px #0006, 0 3px 6px -8px #0006;
+}
+[data-ds-dark-theme] .wbh-menu-item { color: #ffffffe6; }
+[data-ds-dark-theme] .wbh-menu-item:hover,
+[data-ds-dark-theme] .wbh-menu-item.is-open { background: #ffffff14; }
+[data-ds-dark-theme] .wbh-menu-item.is-empty { color: #ffffff80; }
+[data-ds-dark-theme] .wbh-menu-item.is-empty:hover { background: transparent; }
+
+/* 暗色：picker 内部大量文字写死深色（#333 / #666 / rgba(0,0,0,.x)），
+ * 在 rgb(36,36,36) 面板上对比度只有 1.2~2.7:1，实测「召唤更多专家」「管理连接器」
+ * 等页脚文字直接不可读。这些节点在弹层里，祖先链没有 .wbh-port，故按主题属性统一覆盖。 */
+[data-ds-dark-theme] .wbh-menu-icon { color: #ffffff99; }
+[data-ds-dark-theme] .wbh-menu-chevron { color: #ffffff80; }
+[data-ds-dark-theme] .wbh-flyoutSearch { background: #ffffff14; color: #ffffff99; }
+[data-ds-dark-theme] .wbh-flyoutSearch .wbh-flyoutSearchIcon { color: #ffffff80; }
+[data-ds-dark-theme] .wbh-flyoutSearch input { color: #ffffffe6; }
+[data-ds-dark-theme] .wbh-flyoutSearch input::placeholder { color: #ffffff66; }
+[data-ds-dark-theme] .wbh-flyoutName,
+[data-ds-dark-theme] .wbh-rowTitle { color: #ffffffe6; }
+[data-ds-dark-theme] .wbh-rowDesc { color: #ffffff99; }
+[data-ds-dark-theme] .wbh-pinBtn { color: #ffffff80; }
+[data-ds-dark-theme] .wbh-pinBtn.is-pinned,
+[data-ds-dark-theme] .wbh-pinBtn:hover { color: #ffffffe6; }
+[data-ds-dark-theme] .wbh-linkAction svg,
+[data-ds-dark-theme] .wbh-linkAction span { color: #ffffff99; }
+[data-ds-dark-theme] .wbh-flyoutRow:hover .wbh-linkAction svg,
+[data-ds-dark-theme] .wbh-flyoutRow:hover .wbh-linkAction span { color: #ffffffe6; }
+[data-ds-dark-theme] .wbh-flyoutBusy,
+[data-ds-dark-theme] .wbh-flyoutState,
+[data-ds-dark-theme] .wbh-flyoutFooterIcon,
+[data-ds-dark-theme] .wbh-flyoutFooterLabel { color: #ffffff99; }
+[data-ds-dark-theme] .wbh-flyoutFooterItem:hover { background: #ffffff14; }
+/* 头像兜底：元素自带内联 background/color（`tint.*` 或 `--ec-avatar-fallback-bg-N`），
+ * 普通类规则压不过内联样式，暗色下是深字压深底 1.23:1。这里必须 !important。 */
+[data-ds-dark-theme] .ec-avatar-sq-fallback {
+  background: #ffffff1a !important;
+  color: #ffffffe6 !important;
+}
+/* 「连接」是裸 <button>：cr-picker.css 只给布局、没给背景，暗色下吃到 UA 的
+ * ButtonFace(#6b6b6b)，文字与图标都是 --cr-text-tertiary(#ffffff80) → 2.60:1。
+ * label 自己带 color 不继承父色，所以三条都要点名。 */
+[data-ds-dark-theme] .cr-connectors-submenu__suffix-connect { background: transparent; }
+[data-ds-dark-theme] .cr-connectors-submenu__suffix-connect-label { color: #ffffffe6; }
+[data-ds-dark-theme] .cr-connectors-submenu__suffix-connect-icon { color: #ffffff99; }
+[data-ds-dark-theme] .cr-connectors-submenu__item:hover .cr-connectors-submenu__suffix-connect-label,
+[data-ds-dark-theme] .cr-connectors-submenu__item:hover .cr-connectors-submenu__suffix-connect-icon { color: #ffffffff; }

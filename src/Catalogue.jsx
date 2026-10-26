@@ -4,6 +4,14 @@ import { insertPromptIntoComposer } from './insert-prompt.js'
 import { WbIcon } from './icons.js'
 import { PickIcon } from './picker-icons.js'
 import WbAuthCard from './WbAuthCard.jsx'
+// 官方三个二级面板各自的根类名。DOM 结构与类名照搬 renderer/assets/src-C-yvPLiT.js，
+// 样式来自 out/official-picker.css（不手抄），逻辑仍是 Catalogue 原有的那套。
+const CR_ROOT = { expert: 'cr-experts-submenu', skill: 'cr-skills-submenu', connector: 'cr-connectors-submenu' }
+
+import './cr-vars-light.css'
+import './cr-vars-dark.css'
+import './cr-picker.css'
+import './cr-search-input.patch.css'
 import './official-skill.css'
 import './official-connector.css'
 import './official-skeleton.css'
@@ -161,6 +169,10 @@ function ConnectorCard({ entry, busy, onDetail, onAction, onConnectorAction, bou
   const key = `${entry.kind}/${entry.name}`
   const enabled = bound ? bound.includes(entry.name) : Boolean(entry._enabled || entry.isConnected)
   const dot = busy === key ? 'connecting' : enabled ? 'connected' : ''
+  // 桌面端公开目录（WorkBuddy 客户端自带市场）行：标注来源，并如实标出不可自动接入的原因
+  const unsupported = entry.desktop && entry.desktop.supported === false
+    ? (entry.desktop.unsupportedReason || '该连接器类型不受支持')
+    : ''
   return (
     <div className={`connector-card ${enabled ? 'connector-card--installed' : 'connector-card--available'}`} role="button" tabIndex={0}
       onClick={() => onDetail?.(entry)}
@@ -171,15 +183,18 @@ function ConnectorCard({ entry, busy, onDetail, onAction, onConnectorAction, bou
       <div className="connector-card-main">
         <div className="connector-card-name-row">
           <div className="connector-card-name">{entry.displayName}</div>
+          {entry.source === 'desktop' && <span className="connector-card-badge" title="来自 WorkBuddy 桌面客户端自带的公开目录">桌面目录</span>}
+          {unsupported && <span className="connector-card-badge connector-card-badge--warn" title={unsupported}>不可自动接入</span>}
           {dot && <span className={`connector-card-status-dot connector-card-status-dot--${dot}`} />}
         </div>
-        <div className="connector-card-desc">{entry.description || entry.name}</div>
+        <div className="connector-card-desc">{unsupported || entry.description || entry.name}</div>
       </div>
       <div className="connector-card-action">
         <button type="button" className="wb-button wb-button--secondary wb-button--medium"
-          disabled={busy === key} aria-label={`${enabled ? '解绑' : '连接'} ${entry.displayName}`}
+          disabled={busy === key || Boolean(unsupported)} aria-label={`${enabled ? '解绑' : '连接'} ${entry.displayName}`}
+          title={unsupported || ''}
           onClick={e => { e.stopPropagation(); void onConnectorAction?.(entry) }}>
-          {busy === key ? '…' : enabled ? '解绑' : '连接'}
+          {busy === key ? '…' : unsupported ? '不可用' : enabled ? '解绑' : '连接'}
         </button>
       </div>
     </div>
@@ -197,7 +212,8 @@ export default function Catalogue({
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [failed, setFailed] = useState('')
-  const [source, setSource] = useState('')      // 列表来源：official | mirror（如实标注给用户看）
+  const [source, setSource] = useState('')      // 列表来源：official | desktop | mirror（如实标注给用户看）
+  const [sourceCounts, setSourceCounts] = useState({ official: null, desktop: null, duplicates: 0, desktopMeta: null })
   const [categories, setCategories] = useState([])
   const [category, setCategory] = useState('')
   const [sort, setSort] = useState('reco')
@@ -213,6 +229,7 @@ export default function Catalogue({
   const [notice, setNotice] = useState('')     // 操作结果提示（连接/解绑失败等）
   const [busyLocal, setBusyLocal] = useState('')  // 本组件内发起的连接/解绑进行中态
   const [pendingAuth, setPendingAuth] = useState(null)  // 待完成的授权（含可点链接）
+  const [pasteUrl, setPasteUrl] = useState('')          // MCP OAuth 跨机兜底：手动粘贴回调链接
   const [nativeRow, setNativeRow] = useState(null)      // 只读导出的原生 mcp-client 行
   const [toolInfo, setToolInfo] = useState(null)        // 连接器暴露的工具清单
   const [pinned, setPinned] = useState(() => {
@@ -286,7 +303,20 @@ export default function Catalogue({
     try {
       const r = await hub.list(kind, { query, category, page: targetPage, pageSize: PAGE_SIZE })
       if (replace && kind === 'skill') setFeatured([...r.rows].sort(() => Math.random() - 0.5).slice(0, 5))
-      if (replace) setSource(r.source || '')
+      if (replace) {
+        setSource(r.source || '')
+        // 连接器列表的「双来源」计数：官方（账号视角）+ 桌面端公开目录（市场视角）。
+        // 空关键词时它是目录全貌；搜索时不再刷新计数，避免把过滤结果误当目录规模。
+        if (kind === 'connector' && !String(query || '').trim()) {
+          setSourceCounts({
+            official: r.officialTotal ?? null,
+            desktop: r.desktopTotal ?? null,
+            // 与官方是同一连接器而被隐藏的桌面条目数（宿主如实返回）
+            duplicates: r.desktopDuplicates ?? 0,
+            desktopMeta: r.desktop ?? null,
+          })
+        }
+      }
       setRows(prev => {
         if (replace) return r.rows
         const seen = new Set(prev.map(p => `${p.kind}/${p.name}`))
@@ -427,14 +457,69 @@ export default function Catalogue({
     setNotice(`「${entry.displayName}」授权尚未完成，可稍后重试`)
   }, [onRefresh])
 
+  /** 两条 OAuth 路径（官方连接器 OAuth / MCP OAuth）授权完成后的统一收尾：装 → 启用。 */
+  const connectAfterAuth = useCallback(async (entry, what = '已连接') => {
+    setPendingAuth(null)
+    const source = entry.source === 'desktop' ? 'desktop' : undefined
+    const ins = await hub.connectorInstall(entry.name, source).catch(() => null)
+    const en = ins?.ok ? await hub.enableConnector(entry.name).catch(() => null) : null
+    if (en?.ok) {
+      if (sessionId) await hub.mount(sessionId, entry.kind, entry.name).catch(() => {})
+      addSelection(entry, sessionId)
+    }
+    setNotice(en?.ok
+      ? `「${entry.displayName}」${what}并已启用，可在对话中使用`
+      : `「${entry.displayName}」${what}（本地启用失败：${en?.error || ins?.flags?.[0] || '待重试'}）`)
+    await onRefresh?.()
+  }, [onRefresh, sessionId])
+
+  /** 跨机兜底：把浏览器地址栏里的回调链接粘回来，由宿主完成换 token。 */
+  const completeMcpOauth = useCallback(async () => {
+    const pending = pendingAuth
+    if (!pending?.mcpOauth) return
+    const url = String(pasteUrl || '').trim()
+    if (!url) { setNotice('请把浏览器地址栏里的回调链接粘贴进来'); return }
+    const r = await hub.mcpOauthComplete(pending.name, url).catch(error => ({ ok: false, error: String(error?.message || error) }))
+    if (!r?.ok) { setNotice(`完成授权失败：${r?.error || '未知原因'}`); return }
+    setPasteUrl('')
+    const target = pending.entry || { kind: 'connector', name: pending.name, displayName: pending.displayName, source: 'desktop' }
+    await connectAfterAuth(target, '已授权')
+  }, [pendingAuth, pasteUrl, connectAfterAuth])
+
+  /** 轮询 MCP OAuth 流程：done → 自动装+启用；error → 如实报错。 */
+  const pollMcpOauth = useCallback(async entry => {
+    for (let i = 0; i < 100; i++) {           // 最多约 5 分钟（授权窗口 TTL 10 分钟）
+      await new Promise(r => setTimeout(r, 3000))
+      let st = null
+      try { st = await hub.mcpOauthStatus(entry.name) } catch { continue }
+      const state = st?.status?.state
+      if (state === 'done') { await connectAfterAuth(entry, '已授权'); return }
+      if (state === 'error') {
+        setPendingAuth(null)
+        setNotice(`「${entry.displayName}」授权失败：${st?.status?.error || '未知原因'}`)
+        return
+      }
+    }
+    setNotice(`「${entry.displayName}」授权尚未完成，可重新点「连接」`)
+  }, [connectAfterAuth])
+
   const connectorAction = useCallback(async entry => {
     const key = `${entry.kind}/${entry.name}`
+    // 按钮显示什么就执行什么：行上写「解绑」就必须解绑。
+    // 旧实现在下面先判 isBound 走「启用/停用」并 return，导致：
+    //   · 已绑定但 registry 无记录（绑定只写 bound，不写 installed）→ 落到 install，白跑一遍下载；
+    //   · 真正的 unbind 分支永远不可达。
+    // 启用/停用仍留在详情弹窗与 picker 行内开关里。
+    if (isBound(entry)) { await connectorRevoke(entry); return }
     setBusyLocal(key); setNotice('')
     // 动作级 JIT 登录：连接/绑定/启用都走官方 OAuth，未登录时先就地拉起登录卡，
     // 登录成功后**自动继续**刚才被拦下的动作（requireAuth 的 resolve 语义）。
     // 「已登录但 stale」同样要拦：凭证已彻底失效，继续下去只会静默失败。
     const staleNow = authStale(authState())
-    if (authState()?.configured !== true || staleNow) {
+    // 桌面端公开目录里的**直连型**连接器（上游自带/无需账号凭据，如 QQ邮箱匿名可用）
+    // 不需要 WorkBuddy 账号就能装能跑：不在这里拦登录。
+    const desktopDirect = entry.source === 'desktop' && entry.desktop?.endpoint === 'direct'
+    if (!desktopDirect && (authState()?.configured !== true || staleNow)) {
       setBusyLocal('')
       setNotice(staleNow
         ? `登录已失效，请重新扫码后再连接「${entry.displayName}」`
@@ -451,6 +536,115 @@ export default function Catalogue({
       }
       setBusyLocal(key)
       setNotice('登录成功，正在继续…')
+    }
+    // ── 桌面端公开目录来源：不走「先账号绑定」那条路 ─────────────────────────
+    // 官方连接器的语义是「先 OAuth 绑定账号，再本地启用」；而桌面目录里的连接器
+    // 大多根本不在官方注册表里（生产实测：点 QQ邮箱 报 `connector not found: qq-mail`，
+    // 请求卡在 auth-start，永远到不了安装/启用）。直连型更不需要任何账号绑定。
+    // 所以这里改成：装 → 启用 → **只有启用失败且原因是需要账号授权时**才发起官方 OAuth。
+    if (entry.source === 'desktop') {
+      const rec = installed[`connector/${entry.name}`]
+      // 安装结果要在 catch 里也用得到：enable 失败时它是**抛错**（post 对非 2xx 抛），
+      // 不是返回 ok:false —— 所以「端点实测原因」必须在这里留一份。
+      let installResult = null
+      const probeHint = () => {
+        const p = installResult?.probe
+        if (p && p.ok === false) {
+          return `（端点实测：${[p.http ? `HTTP ${p.http}` : '', p.code ? `code=${p.code}` : '', p.error || ''].filter(Boolean).join(' ')}）`
+        }
+        // 宿主路由的响应里带着安装时的安全/探测标记（flags）；端点没测通那条就是
+        // 最有用的失败原因。没有它时保持原样，不编造原因。
+        const flag = (installResult?.flags || []).find(x => String(x).includes('端点未测通'))
+        return flag ? `（${flag}）` : ''
+      }
+      // 桌面目录里有三种鉴权家族，必须按家族分派（用户预期：**要授权的先弹授权窗**）：
+      //   ① 厂商只发 token（mcp.json 里声明了 ${VAR}，如 TUSHARE_TOKEN）→ **先要凭据**，
+      //      没有 OAuth 可授权，弹授权窗是错的；
+      //   ② 账号侧鉴权（网关型 server-side/oauth）→ **先弹官方授权页**（这就是「点连接 →
+      //      登录窗 → 授权完成 → 再连接」的官方语义，实测通达信返回真实 authorize_url）；
+      //   ③ 官方账号侧也不认这条（17008 / not found，如 qq-mail）→ 没有可授权的对象，
+      //      回落到本地装+启用，失败就如实报（含完整握手探测的原因）。
+      const bound = isBound(entry)
+      // 浏览器只允许在**用户手势的同步阶段**开窗：await 之后再 window.open 会被拦
+      // （生产实测：点连接后授权页没弹出来，只留了链接）。这里先同步开一个空窗，
+      // 拿到授权 URL 后再把地址写进去；失败路径负责关掉它。
+      let authWindow = null
+      if (!bound && (entry.desktop?.credentialRefs || []).filter(r => r !== 'WORKBUDDY_TOKEN').length === 0) {
+        try { authWindow = window.open('about:blank', '_blank') } catch { authWindow = null }
+      }
+      const closeAuthWindow = () => { try { authWindow?.close() } catch { /* 忽略 */ } }
+      const customRefs = (entry.desktop?.credentialRefs || []).filter(r => r !== 'WORKBUDDY_TOKEN')
+      const fields = entry.desktop?.tokenFields || []
+      const credHint = customRefs
+        .map(r => { const f = fields.find(x => x.key === r); return f?.label ? `${r}（${f.label}）` : r })
+        .join('、')
+      /** 只做「启用 + 挂到当前会话」（安装已在前面统一做过）。 */
+      const enableOnly = async authSkipReason => {
+        const en = await hub.enableConnector(entry.name).catch(() => null)
+        if (en?.ok) {
+          if (sessionId) await hub.mount(sessionId, entry.kind, entry.name).catch(() => {})
+          addSelection(entry, sessionId)
+          setNotice(`已连接「${entry.displayName}」（工具命名空间 ${en.serverName || entry.name}），下一次模型步骤起可用`)
+        } else {
+          setNotice(`连接「${entry.displayName}」失败：${en?.error || '未知原因'}${probeHint()}${
+            authSkipReason ? `（官方账号侧不认这条连接器：${authSkipReason}）` : ''}`)
+        }
+      }
+      try {
+        if (rec?.enabled) {
+          await hub.disableConnector(entry.name)
+          await unmountHere(entry.kind, entry.name)
+          removeSelection(sessionId, entry.kind, entry.name)
+          setNotice(`已停用「${entry.displayName}」`)
+        } else {
+          // 桌面来源统一：**先安装**（把包内文件与可通话端点落盘），再按鉴权家族决定下一步。
+          // 之前是先授权后安装 —— 而 `mcp-oauth/start` 要读本地 mcp.json，未安装就 404，
+          // 于是「任意连接」都起不来（生产实测）。安装本身不需要授权。
+          installResult = await hub.connectorInstall(entry.name, 'desktop').catch(() => null)
+          if (!installResult?.ok) {
+            closeAuthWindow()
+            setNotice(`连接「${entry.displayName}」失败：${installResult?.error || '本地登记失败'}`)
+          } else if (customRefs.length > 0) {
+            // ① 厂商只发 token，没有 OAuth 可授权 → 先要凭据（值由用户放进 DSH 凭据库）
+            closeAuthWindow()
+            setNotice(`「${entry.displayName}」需要先配置凭据：${credHint}；在 DSH 凭据管理里配好后点「连接」即可`)
+          } else {
+            // ②③④ 依次尝试：MCP 标准 OAuth → 官方连接器 OAuth → 直接启用并如实报错
+            const m = await hub.mcpOauthStart(entry.name).catch(() => null)
+            if (m?.ok && m.url) {
+              if (authWindow && !authWindow.closed) authWindow.location.href = m.url
+              else { try { window.open(m.url, '_blank') } catch { /* 被拦时下面给链接 */ } }
+              setPendingAuth({ name: entry.name, displayName: entry.displayName, url: m.url, entry, mcpOauth: true })
+              setNotice(`请在打开的页面完成「${entry.displayName}」授权（扫码或登录），完成后会自动连接`)
+              void pollMcpOauth(entry)
+            } else if (m?.code === 'already-usable') {
+              closeAuthWindow()
+              await enableOnly('')          // 端点其实不需要授权（握手就通）
+            } else if (m && m.code !== 'not-mcp-oauth') {
+              // 自述 MCP OAuth 但发现/注册/回调失败（或宿主报错）→ **关窗** + 如实提示
+              closeAuthWindow()
+              setNotice(`「${entry.displayName}」的 MCP OAuth 未就绪：${m.error || '宿主未返回原因'}；正在尝试直接启用…`)
+              await enableOnly(m.error || 'MCP OAuth 未就绪')
+            } else {
+              const r = await hub.connectorAuthStart(entry.name).catch(() => null)
+              if (r?.ok && r.url) {
+                if (authWindow && !authWindow.closed) authWindow.location.href = r.url
+                else { try { window.open(r.url, '_blank') } catch { /* 被拦时下面给链接 */ } }
+                setPendingAuth({ name: entry.name, displayName: entry.displayName, url: r.url })
+                setNotice(`请在打开的页面完成「${entry.displayName}」授权；完成后点「连接」即可建立连接`)
+                void pollOauth(entry)
+              } else {
+                closeAuthWindow()
+                await enableOnly(r?.message || '未收录（无法发起授权）')
+              }
+            }
+          }
+        }
+      } finally {
+        try { await onRefresh?.() } catch { /* 刷新失败不影响结论 */ }
+        setBusyLocal('')
+      }
+      return
     }
     // 浏览器只允许在「用户手势」的同步阶段开窗；await 之后再 window.open 会被拦截。
     // 因此这里先同步开一个空窗，拿到授权链接后再把地址写进去。
@@ -511,7 +705,7 @@ export default function Catalogue({
       // 宿主一旦判 stale，本页立刻切成登录卡，而不是让用户继续撞同一堵墙。
       void refreshAuth()
     } finally { setBusyLocal('') }
-  }, [isBound, onRefresh, installed])
+  }, [isBound, onRefresh, installed, connectorRevoke])
 
   const handleDetail = useCallback(entry => {
     if (entry.kind === 'expert') { onDetail?.(entry); return }
@@ -558,32 +752,71 @@ export default function Catalogue({
 
   const kindMeta = KINDS.find(k => k.id === kind) || KINDS[0]
 
+  // MCP OAuth 的跨机兜底输入框：授权页若开在别的机器上，loopback 回调收不到，
+  // 用户把地址栏那条回调链接粘回来即可（宿主完成换 token）。
+  const mcpOauthPaste = pendingAuth?.mcpOauth ? (
+    <div className="wbh-oauthPaste">
+      <input value={pasteUrl} onChange={e => setPasteUrl(e.target.value)}
+        placeholder="授权后浏览器停在 127.0.0.1 回调页？把地址栏那整条链接粘到这里" aria-label="粘贴回调链接" />
+      <button type="button" className="wb-button wb-button--secondary wb-button--small"
+        disabled={!String(pasteUrl).trim()} onClick={() => void completeMcpOauth()}>
+        完成授权
+      </button>
+    </div>
+  ) : null
+
   const busyAll = busyLocal || busy
 
   // 连接器页 / 技能页未登录（或已登录但凭证失效）：不显示「暂无连接器/技能」空白、
   // 也不显示镜像目录，直接就地嵌登录卡（无遮罩、不可关闭），并在卡上说明原因。
   // 技能与连接器的官方数据都需要账号（技能目录 + 技能包下载、连接器注册表 + 授权）。
   // picker（variant==='picker'）不改：它的 footer 登录行已覆盖三个面板。
-  const pageLoginGate = (variant === 'page' && (kind === 'connector' || kind === 'skill'))
+  // 未登录时的就地登录卡（无遮罩、不可关闭）：
+  //  · 技能页 —— 技能目录与技能包下载都需要账号 → **挡住列表**（列表本来也拉不到）；
+  //  · 连接器页 —— 官方注册表需要账号，但**桌面端公开目录不需要**（317 条匿名可取），
+  //    所以只在列表上方显示一张说明卡，不再把整个列表挡掉：未登录也能先检索/安装
+  //    桌面目录里的连接器（网关型通话仍需登录后授权）。
+  const loginCard = (
+    <WbAuthCard variant="inline" title="登录 WorkBuddy 账号"
+      reason={authStaleNow ? STALE_LOGIN_REASON
+        : (kind === 'connector'
+          ? '连接器目录、账号绑定与授权需要 WorkBuddy 账号'
+          : '技能目录与技能包下载需要 WorkBuddy 账号')} />
+  )
+  const pageLoginGate = (variant === 'page' && kind === 'skill')
     ? (auth === null
       ? <div className="wbh-state"><p>正在读取登录状态…</p></div>
       : (loggedIn && !authStaleNow
         ? null
-        : (
-          <div className="wbh-loginGate">
-            <WbAuthCard variant="inline" title="登录 WorkBuddy 账号"
-              reason={authStaleNow ? STALE_LOGIN_REASON
-                : (kind === 'connector'
-                  ? '连接器目录、账号绑定与授权需要 WorkBuddy 账号'
-                  : '技能目录与技能包下载需要 WorkBuddy 账号')} />
-          </div>
-        )))
+        : <div className="wbh-loginGate">{loginCard}</div>))
+    : null
+  const connectorLoginBanner = (variant === 'page' && kind === 'connector' && auth !== null && !(loggedIn && !authStaleNow))
+    ? (
+      <div className="wbh-loginGate">
+        {loginCard}
+        <div className="wbh-sourceNote">未登录也能浏览「桌面目录」来源的连接器（WorkBuddy 客户端自带市场的公开包）；官方注册表条目与网关型连接器的通话需要登录后授权。</div>
+      </div>
+    )
     : null
 
-  // 已登录但官方接口失败 → 宿主用镜像目录兜底；来源必须如实标注给用户
+  // 已登录但官方接口失败 → 宿主用镜像目录兜底；来源必须如实标注给用户。
+  // 连接器页显示「官方 N 条 + 桌面端公开目录新增 M 条」的双来源口径 —— 桌面目录是
+  // WorkBuddy 客户端自带市场的同一份公开包；其中与官方同一条连接器的（同 id 或同
+  // 「展示名+描述」，如官方 `tdocs-app` ↔ 桌面 `tencent-docs`）已去重，只保留官方行。
   const sourceNote = kind === 'connector' && loggedIn && source === 'mirror'
     ? <div className="wbh-sourceNote">官方连接器接口暂不可用，当前显示镜像目录（source: mirror）</div>
-    : null
+    : (kind === 'connector' && loggedIn && sourceCounts.desktop !== null
+      ? (
+        <div className="wbh-sourceNote">
+          官方注册表 {sourceCounts.official ?? 0} 条
+          {sourceCounts.desktop > 0
+            ? ` · 桌面端公开目录新增 ${sourceCounts.desktop} 条（WorkBuddy 客户端自带市场，标「桌面目录」的行来自它${
+              sourceCounts.duplicates > 0 ? `；另有 ${sourceCounts.duplicates} 条与官方是同一连接器，已去重` : ''}）`
+            : ' · 桌面端公开目录未启用或暂不可用'}
+          {sourceCounts.desktopMeta?.stale ? '（目录为本地缓存）' : ''}
+        </div>
+      )
+      : null)
 
   const skeletonCards = (
     <>{Array.from({ length: 6 }).map((_, i) => (
@@ -825,6 +1058,20 @@ export default function Catalogue({
           </div>
           <h3 className="connector-detail-name">{detail.displayName}</h3>
           <p className="connector-detail-desc">{detail.description || detail.name}</p>
+          {detail.desktop ? (
+            <div className="wbh-sourceNote" style={{ marginTop: 8, textAlign: 'left' }}>
+              来源：WorkBuddy 桌面端公开目录
+              {detail.desktop.endpoint === 'gateway'
+                ? ' · 走 WorkBuddy agent-gateway（凭据由账号侧保存，需先在账号里授权）'
+                : detail.desktop.endpoint === 'direct'
+                  ? ' · 直连上游服务（凭据由你在 DSH 凭据库配置）'
+                  : ''}
+              {detail.desktop.credentialRefs?.length
+                ? ` · 需要凭据：${detail.desktop.credentialRefs.filter(r => r !== 'WORKBUDDY_TOKEN').join('、') || 'WorkBuddy 账号'}`
+                : ''}
+              {detail.desktop.supported === false ? ` · 不可自动接入：${detail.desktop.unsupportedReason}` : ''}
+            </div>
+          ) : null}
           {toolInfo ? (
             <div className="wbh-toolBox">
               <div className="wbh-toolHead">该连接器向模型暴露 <b>{toolInfo.count}</b> 个工具 · 命名空间 <code>{toolInfo.namespace}</code></div>
@@ -1028,6 +1275,99 @@ export default function Catalogue({
       const connectorAuthorised = entry.kind === 'connector' && bound.includes(entry.name)
       const connected = entry.kind === 'connector' ? connectorEnabled : Boolean(entry._enabled || entry.isConnected)
       const isPinned = pinned.has(key)
+      // 专家行：DOM 与类名整体对齐官方 experts-submenu（见 out/dom-inventory.json）。
+      // 逻辑不变——点击整行仍是 onAction（召唤），行尾仍是置顶按钮。
+      if (entry.kind === 'expert') {
+        const pickedRow = Boolean(mounted?.has?.(key))
+        return (
+          <div key={key} role="menuitem" tabIndex={0} aria-checked={pickedRow}
+            className={`cr-experts-submenu__item${pickedRow ? ' cr-experts-submenu__item--selected' : ''}`}
+            onClick={() => onAction?.(entry)}
+            onKeyDown={e => { if (e.key === 'Enter') onAction?.(entry) }}>
+            <span className="cr-experts-submenu__avatar" aria-hidden="true">
+              <EntryIcon entry={entry} size={16} round={false}
+                fallbackTint={PICKER_TINT[entry.kind]} radius="6px" />
+            </span>
+            <span className="cr-experts-submenu__name">{entry.displayName}</span>
+            <button type="button"
+              className={`cr-experts-submenu__pin${isPinned ? ' cr-experts-submenu__pin--active' : ''}`}
+              aria-label={isPinned ? '取消置顶' : '置顶'}
+              onClick={e => { e.preventDefault(); e.stopPropagation(); togglePin(entry) }}>
+              <span className="cr-experts-submenu__pin-icon-rest"><PickIcon name="pinRest" size={14} /></span>
+              <span className="cr-experts-submenu__pin-icon-hover"><PickIcon name="pinHover" size={14} /></span>
+            </button>
+          </div>
+        )
+      }
+      // 技能行：官方 cr-skills-submenu__item（图标 / 标题+描述两行 / 置顶）。
+      if (entry.kind === 'skill') {
+        return (
+          <div key={key} role="menuitem" tabIndex={0}
+            className={`cr-skills-submenu__item${entry.description ? '' : ' cr-skills-submenu__item--single'}`}
+            onClick={() => handleSkillPick(entry)}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSkillPick(entry) } }}>
+            <span className="cr-skills-submenu__item-icon" onDragStart={e => e.preventDefault()}>
+              <EntryIcon entry={entry} size={16} round={false}
+                fallbackTint={PICKER_TINT[entry.kind]} radius="6px" />
+            </span>
+            <div className="cr-skills-submenu__item-body">
+              <div className="cr-skills-submenu__item-title">
+                <span className="cr-skills-submenu__item-name">{entry.displayName}</span>
+              </div>
+              {entry.description ? (
+                <div className="cr-skills-submenu__item-desc">
+                  <span className="cr-skills-submenu__item-desc-text">{entry.description}</span>
+                </div>
+              ) : null}
+            </div>
+            <button type="button"
+              className={`cr-skills-submenu__pin-btn${isPinned ? ' cr-skills-submenu__pin-btn--pinned' : ''}`}
+              aria-pressed={isPinned} aria-label={isPinned ? '取消置顶' : '置顶'}
+              onClick={e => { e.preventDefault(); e.stopPropagation(); togglePin(entry) }}>
+              <span className="cr-skills-submenu__pin-icon-rest" aria-hidden="true"><PickIcon name="pinRest" size={14} /></span>
+              <span className="cr-skills-submenu__pin-icon-hover" aria-hidden="true"><PickIcon name="pinHover" size={14} /></span>
+            </button>
+          </div>
+        )
+      }
+
+      // 连接器行：官方 cr-connectors-submenu__item。行尾控件沿用已对齐过的开关 /
+      // 「连接」按钮实现（它们的视觉本来就是照着官方做的），只把行壳子换成官方类名。
+      if (entry.kind === 'connector') {
+        return (
+          <div key={key} role="menuitem" tabIndex={0}
+            className={`cr-connectors-submenu__item${connectorEnabled || connectorAuthorised ? '' : ' cr-connectors-submenu__item--disabled'}`}
+            onClick={() => onAction?.(entry)}
+            onKeyDown={e => { if (e.key === 'Enter') onAction?.(entry) }}>
+            <span className="cr-connectors-submenu__item-icon">
+              <EntryIcon entry={entry} size={16} round={false}
+                fallbackTint={PICKER_TINT[entry.kind]} radius="3px" />
+            </span>
+            <span className="cr-connectors-submenu__item-name">{entry.displayName}</span>
+            {connectorEnabled || connectorAuthorised ? (
+              <span className="cr-connectors-submenu__row-switch">
+                <button type="button" className={`wbh-toggle${connectorEnabled ? ' is-on' : ''}`}
+                  role="switch" aria-checked={connectorEnabled}
+                  aria-label={`${connectorEnabled ? '停用' : '启用'} ${entry.displayName}`}
+                  disabled={busyLocal === key}
+                  onClick={e => { e.stopPropagation(); void connectorAction(entry) }}>
+                  <i />
+                </button>
+              </span>
+            ) : (
+              <button type="button" className="cr-connectors-submenu__suffix-connect"
+                disabled={busyLocal === key}
+                aria-label={`连接 ${entry.displayName}`}
+                onClick={e => { e.stopPropagation(); void connectorAction(entry) }}>
+                <span className="cr-connectors-submenu__suffix-connect-icon"><PickIcon name="connLink" size={14} /></span>
+                <span className="cr-connectors-submenu__suffix-connect-label">连接</span>
+              </button>
+            )}
+            {busyLocal === key && <span className="cr-connectors-submenu__connecting-spinner">…</span>}
+          </div>
+        )
+      }
+
       return (
         // 点击整行 = attach（与回车一致）：连接器挂到当前会话并出 chip；技能写输入框；
         // 专家走 onAction（召唤）。行内开关只承载「启/停用」这一种语义（见行尾）。
@@ -1050,6 +1390,7 @@ export default function Catalogue({
           ) : (
             <span className="wbh-flyoutName">{entry.displayName}</span>
           )}
+
           {entry.kind !== 'connector' && (
             <button type="button"
               className={`wbh-pinBtn${isPinned ? ' is-pinned' : ''}`}
@@ -1121,36 +1462,38 @@ export default function Catalogue({
     ) : null
 
     const listNode = (
-      <div className="wbh-flyoutList" ref={scrollRef} onScroll={onScroll}>
+      <div className={`${CR_ROOT[kind]}__list`} ref={scrollRef} onScroll={onScroll}>
         {hostMcpSection}
         {loading && <div className="wbh-flyoutState">正在读取…</div>}
         {!loading && !failed && visibleRows.length === 0 && (
-          <div className="wbh-flyoutState">{String(query).trim()
+          <div className={`${CR_ROOT[kind]}__empty`}>{String(query).trim()
             ? `没有找到与「${String(query).trim()}」匹配的${kindMeta.label}`
             : `暂无可用${kindMeta.label}`}</div>
         )}
         {visibleRows.map(rowNode)}
-        {loadingMore && <div className="wbh-flyoutState">加载中…</div>}
+        {loadingMore && <div className={`${CR_ROOT[kind]}__load-more`} role="status">加载中…</div>}
       </div>
     )
 
     return (
-      <div className={`wbh-flyout is-${kind}`} role="dialog" aria-label={`选择${kindMeta.label}`}>
+      <div className={`wbh-flyout wbh-port ${CR_ROOT[kind] || ''} is-${kind}`} role="dialog" aria-label={`选择${kindMeta.label}`}>
         {notice ? <div className="wbh-notice">{notice}</div> : null}
         {pendingAuth ? (
           <a className="wbh-authLink" href={pendingAuth.url} target="_blank" rel="noreferrer">
             打开「{pendingAuth.displayName}」授权页
           </a>
         ) : null}
+        {mcpOauthPaste}
         {/* 三个面板都带搜索框（专家面板此前被误判为「官方没有」而缺失） */}
-        <div className="wbh-flyoutSearch">
-          <span className="wbh-flyoutSearchIcon"><PickIcon name="search" size={16} /></span>
-          <input value={query} placeholder={`搜索${kindMeta.label}`} aria-label={`搜索${kindMeta.label}`}
-            onChange={e => onQuery(e.target.value)} />
+        <div className={`${CR_ROOT[kind]}__search`}>
+          <input className="cr-search-input" value={query}
+            placeholder={`搜索${kindMeta.label}`} aria-label={`搜索${kindMeta.label}`}
+            onChange={e => onQuery(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Escape' && query) { e.stopPropagation(); onQuery('') } }} />
         </div>
         {kind === 'skill' ? <div className="wbh-flyoutBody">{listNode}</div> : listNode}
-        <div className="wbh-flyoutDivider" />
-        <div className="wbh-flyoutFooter">{footerNode}{footerExtra}</div>
+        <div className={`${CR_ROOT[kind]}__divider`} role="separator" />
+        <div className={`${CR_ROOT[kind]}__footer`}>{footerNode}{footerExtra}</div>
       </div>
     )
   }
@@ -1176,6 +1519,7 @@ export default function Catalogue({
           打开「{pendingAuth.displayName}」授权页
         </a>
       ) : null}
+      {mcpOauthPaste}
       <div className="ec-page-layout">
         <div className="ec-main-content">
           {view !== 'market' && (
@@ -1197,6 +1541,7 @@ export default function Catalogue({
             {view === 'installed' ? installedGrid : view === 'local' ? localGrid : (
               pageLoginGate || skillDetailView || (
                 <>
+                  {connectorLoginBanner}
                   {sourceNote}
                   {kind === 'skill' && !query && segment === 0 && featured.length > 0 && featuredSection}
                   {kind === 'skill' && segmentBar}

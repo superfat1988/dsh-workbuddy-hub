@@ -1,0 +1,102 @@
+/* 官方 SearchInput 的补丁层。
+ *
+ * 官方 `.cr-search-input` 在 css 里只有 `flex:0 0 32px` 和一处背景覆盖——
+ * 真正的输入框外观由内部 Input 组件（`variant:filled` / `size:medium`）承担，
+ * 那个组件的类名不通过 x() 生成，没能从 css 侧定位到。
+ * 这里按官方变量还原成同一套视觉，仅此一处属于手写。
+ */
+.wbh-port .cr-search-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 8px;
+  background: var(--wb-palette-gray-2, #f7f7f7);
+  color: var(--cr-text-primary, #1a1a1a);
+  font-family: 'PingFang SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 22px;
+  outline: none;
+}
+
+.wbh-port .cr-search-input::placeholder {
+  color: var(--cr-text-tertiary, #8c8c8c);
+}
+
+.wbh-port .cr-search-input:hover {
+  background: var(--wb-palette-gray-3, #f0f0f0);
+}
+
+.wbh-port .cr-search-input:focus {
+  background: var(--wb-palette-gray-2, #f7f7f7);
+  box-shadow: inset 0 0 0 1px var(--cr-border-focus, #1f7ae0);
+}
+
+[data-ds-dark-theme] .wbh-port .cr-search-input {
+  background: var(--wb-palette-gray-2, #2a2a2a);
+  color: var(--cr-text-primary, #e8e8e8);
+}
+
+[data-ds-dark-theme] .wbh-port .cr-search-input:hover {
+  background: var(--wb-palette-gray-3, #333);
+}
+
+[data-ds-dark-theme] .wbh-port .cr-search-input::placeholder {
+  color: var(--cr-text-tertiary, #8a8a8a);
+}
+
+/* ─────────────────────────────────────────────────────────────
+ * 面板容器：让官方尺寸压过 Hub 早期手抄的 `.wbh-flyout.is-*`。
+ * 两边给的值本来不一致（专家 200 vs 240），specificity 更高的
+ * `.wbh-flyout.is-expert` 会赢，所以这里用三元类把官方值抬上来。
+ * ───────────────────────────────────────────────────────────── */
+.wbh-port.wbh-flyout.cr-experts-submenu {
+  box-sizing: border-box;
+  width: 240px;
+  padding: 8px;
+  border-radius: 16px;
+  background: var(--wb-bg-popover, var(--cr-popover-bg, #fff));
+  border: .5px solid var(--wb-popover-border-color, transparent);
+}
+
+.wbh-port.wbh-flyout.cr-skills-submenu {
+  box-sizing: border-box;
+  width: 320px;
+  padding: 8px 0;
+  border-radius: 16px;
+  background: var(--wb-bg-popover, var(--cr-popover-bg, #fff));
+  border: .5px solid var(--wb-popover-border-color, transparent);
+}
+
+.wbh-port.wbh-flyout.cr-connectors-submenu {
+  box-sizing: border-box;
+  width: 240px;
+  padding: 8px 0;
+  gap: 8px;
+  border-radius: 16px;
+  background: var(--wb-bg-popover, var(--cr-popover-bg, #fff));
+  border: .5px solid var(--wb-popover-border-color, transparent);
+}
+
+/* 三个 __list 的滚动条口径一致 */
+.wbh-port .cr-experts-submenu__list::-webkit-scrollbar,
+.wbh-port .cr-skills-submenu__list::-webkit-scrollbar,
+.wbh-port .cr-connectors-submenu__list::-webkit-scrollbar { width: 4px; }
+
+.wbh-port .cr-experts-submenu__list::-webkit-scrollbar-thumb,
+.wbh-port .cr-skills-submenu__list::-webkit-scrollbar-thumb,
+.wbh-port .cr-connectors-submenu__list::-webkit-scrollbar-thumb {
+  background: var(--cr-scrollbar-thumb, #c1c1c1);
+  border-radius: 2px;
+}
+
+/* 连接器行尾：官方 __row-switch 是 flex:0 0 26px，而 Hub 的开关本体宽 28px，
+   照搬会被压扁。这里放开容器宽度，让开关按自身尺寸排。 */
+.wbh-port .cr-connectors-submenu__row-switch { flex: 0 0 auto; }
+
+/* 技能行的置顶按钮在官方是 hover 才现，Hub 此前的口径是常显；
+   统一按官方：默认透明，行 hover / 已置顶时可见。 */
+.wbh-port .cr-skills-submenu__pin-btn { opacity: 0; }
+.wbh-port .cr-skills-submenu__item:hover .cr-skills-submenu__pin-btn,
+.wbh-port .cr-skills-submenu__pin-btn--pinned { opacity: 1; }

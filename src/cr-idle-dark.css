@@ -1,0 +1,38 @@
+/* 生成物：scripts/build-idle-css.mjs
+   来源 renderer/assets/idle-capability-DFFQZfcJ.css
+   选择器已收敛到 .wbh-port / [data-ds-dark-theme] .wbh-port，变量已按依赖闭包裁剪。 */
+[data-ds-dark-theme] .wbh-port {
+  --cb-bg-color-container: var(--cb-vscode-editor-background,#1e1e1e);
+  --cb-vscode-editor-background: var(--vscode-editor-background,#1e1e1e);
+  --idle-cap-accent-text: #ffffff80;
+  --idle-cap-card-border: #3d3d3d;
+  --vscode-editor-background: #181818;
+  --wb-bg-hover: color-mix(in srgb, var(--wb-palette-white-100) 6%, transparent);
+  --wb-border-default: color-mix(in srgb, var(--wb-palette-white-100) 14%, transparent);
+  --wb-button-primary-fg: var(--wb-palette-black-90);
+  --wb-color-bg-primary-default: var(--wb-palette-gray-3);
+  --wb-color-bg-secondary-hover-active: var(--wb-palette-gray-2);
+  --wb-color-text-primary: #fff;
+  --wb-color-text-tertiary: #ffffff80;
+  --wb-palette-black-90: #000000e6;
+  --wb-palette-brand-blue: #4d80ef;
+  --wb-palette-gray-2: #292929;
+  --wb-palette-gray-3: #1f1f1f;
+  --wb-palette-white-100: #fff;
+  --wb-text-link-brand: var(--wb-palette-brand-blue);
+}
+
+[data-ds-dark-theme] .wbh-port .idle-capability-pill {
+  --idle-cap-card-border:#3d3d3d;
+  --idle-cap-accent-text:#ffffff80;
+  box-shadow:0 24px 48px -4px #0003,0 6px 12px -8px #0003
+}
+
+[data-ds-dark-theme] .wbh-port .idle-capability-pill .idle-capability-pill__list .cb-checkbox--checked .cb-checkbox__box {
+  background:#ffffffe6;
+  border-color:#ffffffe6
+}
+
+[data-ds-dark-theme] .wbh-port .idle-capability-pill .idle-capability-pill__list .cb-checkbox--checked .cb-checkbox__box:after {
+  border-color:#1a1a1a
+}

@@ -30,7 +30,7 @@ json.dump({'unit':{'name':'workspace','version':2},
   'global':{'initialized':True,'workspaceIds':list(ws),'archivedSessionIds':[]},
   'tables':{'workspaces':ws}}, open('/tmp/acc/storages/workspace.json','w'), ensure_ascii=False, indent=2)
 PY
-cd /home/kaitzh/deepseek-harness
+cd ${DSH_CHECKOUT:-/path/to/deepseek-harness}
 DSH_HOME=/tmp/acc nohup node --max-http-header-size=131072 apps/cli/lib/bin.js \
   web --host 127.0.0.1 --port 3999 --no-open > /tmp/acc.log 2>&1 &
 sleep 18
@@ -59,7 +59,7 @@ EOF
 # 启动命令在上面的基础上加 --patch，端口换 3998。
 # ⚠️ --patch 的位置有讲究：必须写成 `web --patch <file> --host … --port …`
 # （紧跟 web 之后、--host 之前）。写到命令末尾会报 unknown option（实测）。
-cd /home/kaitzh/deepseek-harness
+cd ${DSH_CHECKOUT:-/path/to/deepseek-harness}
 DSH_HOME=/tmp/acc nohup node --max-http-header-size=131072 apps/cli/lib/bin.js \
   web --patch /tmp/acc-nologin-patch.yml --host 127.0.0.1 --port 3998 --no-open \
   > /tmp/acc-nologin.log 2>&1 &
@@ -112,7 +112,7 @@ PY
   （DSH 会**热加载**这个 patch，改完不需要重启；实测 web 侧进程立刻与 8002 建立了连接。）
 - 脚本里直接调 MCP 的协议要点：先 `initialize` 并从**响应头**取 `mcp-session-id`，后续请求带该头；
   响应是 SSE，取 `data: ` 那一行再 `JSON.parse`。
-- **寻址**：容器内的 `127.0.0.1` 不是宿主 → 让它抓宿主服务要用 **LAN IP**（`http://192.168.2.185:<port>/`，
+- **寻址**：容器内的 `127.0.0.1` 不是宿主 → 让它抓宿主服务要用 **LAN IP**（`http://192.168.1.10:<port>/`，
   实测通；`127.0.0.1:<port>` 会 `ERR_CONNECTION_REFUSED`；`host.docker.internal` 未配置）。
   验收隔离实例时，实例要绑 `0.0.0.0`，并在 profile 的 `trustedHosts` 里加上对应 authority。
 - **不要在本机 `pip install scrapling`**：那是往技能目录塞一份 469MB 的重复本体（本项目犯过一次，已删）。
@@ -125,7 +125,7 @@ PY
      但没有 `~/.cache/ms-playwright` 浏览器缓存，所以必须用 `executablePath` 指系统 chromium：
      ```js
      import { createRequire } from 'node:module'
-     const require = createRequire('/home/kaitzh/deepseek-harness/packages/experimental/inspector/package.json')
+     const require = createRequire('${DSH_CHECKOUT:-/path/to/deepseek-harness}/packages/experimental/inspector/package.json')
      const { chromium } = require('playwright')
      const page = await (await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] })).newPage()
      ```
@@ -290,7 +290,7 @@ PY
 | ID | 步骤 | 预期 | 证据 |
 |---|---|---|---|
 | **MC1** | `POST /mcp/local {name:"scrapling", url:"http://127.0.0.1:8002/mcp", token:<假值>}` → `GET /mcp/local` | 注册 200；列表可见、`enabled:true`（自动启用）、`tokenRef:"SCRAPLING_MCP_TOKEN"`、`toolCount` 为数字或 null | 响应 JSON |
-| **MC2** | 注册非 loopback（`http://192.168.1.5:8002/mcp`）与 stdio（`transport:"stdio"`） | 都 400，error 分别说明「只允许本机地址」与「stdio 会在本机执行任意命令，本版本不提供」 | 响应 JSON |
+| **MC2** | 注册非 loopback（`http://192.168.1.10:8002/mcp`）与 stdio（`transport:"stdio"`） | 都 400，error 分别说明「只允许本机地址」与「stdio 会在本机执行任意命令，本版本不提供」 | 响应 JSON |
 | **MC3** | 另起一个 `localMcp:false` 实例（或去掉该配置）重试写路由 | 全部 403 + 「localMcp: true」指引；`GET /mcp/local` 返回 `guarded:true` 且 `servers:[]` | 响应 JSON |
 | **MC4** | `grep -r <假token明文> <storeRoot>`；同时检查 `GET /mcp/local` 响应体 | 零命中；条目文件与响应里只有 `SCRAPLING_MCP_TOKEN` 引用名 | grep 输出 |
 | **MC5** | 控制台抽查 `[wbh] localMcp` 日志 | register/enable/disable/remove 各一条，含来源 IP 与时间戳，无 token 明文 | 控制台输出 |
@@ -322,7 +322,7 @@ PY
 | **V4** | disposer 生命周期（0.1.7） | disposer 由本插件持有（`expertPresetDisposers`），在 `ctx.effect` 的 teardown 里全量释放 —— 否则热重载后再声明同一 id 会抛 `Duplicate agent preset`；卸载专家时释放该条 | V1 的「释放后可重新声明」用例 |
 | **V5** | 幂等与竞态（0.1.7） | 先 `resolve(id)` 探活；命中即复用（不再 register）；并发撞 `Duplicate agent preset` 视为既存成功；声明后 `resolve` 报 `broken` 必须**回滚 + 报错**，不留坏预设 | V1 的幂等/竞态/broken 用例 |
 | **V6** | 启动补声明 | 0.1.7 下声明只活在进程里 → 启动后为**已安装专家**补声明（否则已选中该预设的老会话会 `agent-preset/not-found`，与遗留预设目录失效同一类故障）；失败只记日志、不影响启动 | 隔离实例日志 `[wbh] expert presets declared at startup: n/m` |
-| **V7** | 会话 cwd 读取（代际无关） | 匹配 `^session(?:\.v(\d+))?\.jsonl(\.zstd)?$`；**两代同存时取最高代际**（v4 是 v3 的后继，v3 只是天然备份），同代际优先 `.zstd`；最高代际损坏时**退到下一代**而不是返回空；根目录从 `$DSH_HOME`（空白视为未设置）派生，不再硬编码 `/home/kaitzh/.dsh` | V1 的 `sessionLogsNewestFirst` / `readSessionCwdFromDisk` 用例 |
+| **V7** | 会话 cwd 读取（代际无关） | 匹配 `^session(?:\.v(\d+))?\.jsonl(\.zstd)?$`；**两代同存时取最高代际**（v4 是 v3 的后继，v3 只是天然备份），同代际优先 `.zstd`；最高代际损坏时**退到下一代**而不是返回空；根目录从 `$DSH_HOME`（空白视为未设置）派生，不再硬编码 `/home/USER/.dsh` | V1 的 `sessionLogsNewestFirst` / `readSessionCwdFromDisk` 用例 |
 | **V8** | 0.1.6 侧不回归（运行期） | 在 0.1.6 隔离实例上 `POST /expert-preset-ensure {name:<已装专家>}` → `{ok:true,presetId}`，且 `$DSH_HOME/.agent-presets/workbuddy-<name>/` 被创建（磁盘副本路径仍生效） | 隔离实例 + 目录清单 |
 | **V9** | 0.1.7 侧运行期复验 | **升级完成后必做**：在 0.1.7 实例上 `POST /expert-preset-ensure` → `{ok:true}`；`remote.agentPresets.select` 能选中；会话恢复可读 V4；`web_search` 仍选中 tavily | 升级后实测（本项在 0.1.6 上无法验证） |
 | **V10** | 客户端 `select` 链路 | 0.1.7 的 `@Remote('select')` 仍在（与 0.1.6 相同），客户端 `remote.agentPresets.select(sessionId, presetId)` 不需要改 | `git grep "Remote('select')" <tag>` 两版对照 |
@@ -342,3 +342,47 @@ PY
 5. **未覆盖项**：如实列出没做的项与原因。
 
 **纪律**：只读；不使用真实 refresh_token 做实验；不修改生产 3080；不为了「让结果好看」而放宽预期。
+
+---
+
+# 追加验收：桌面端公开目录接入（2026-10-07）
+
+**背景**：用户观察到「电脑上 WorkBuddy 自带的市场」比插件显示的多得多。实测确认差距在**连接器**
+维度：官方注册表（登录态）本账号只有 **29** 条，而桌面客户端吃的是两份**匿名公开静态包**：
+
+- `https://static.workbuddy.cn/connectors-config-v2/connectors-config.zip`（26.2MB，etag `a479f2e4…`）
+- `https://static.workbuddy.cn/connector-agent-plugins/connector-plugins.zip`（25.8MB，etag `38bf3d72…`）
+
+来源与桌面端自记的 `marketplace-meta` 元数据（`sourceKey`/`etag`/`sha256`）一致，非逆向私有接口。
+专家维度**没有差距**：插件用的 `expert_center.json` 与桌面端同一份（429 位）。
+
+| ID | 项 | 预期 | 证据 |
+|---|---|---|---|
+| **D1** | 目录规模 | `GET /desktop-catalog` → 317 条，可挂载 254（网关 186 / 直连 68），不可自动接入 63（stdio 11 / CLI 52） | `node scripts/accept-desktop-live.mjs` 步骤 1 输出 |
+| **D2** | 合并口径 | 官方 ∪ 桌面，**同名官方优先不重复**；行级 `source`；响应带 `officialTotal`/`desktopTotal` | 验收步骤 2（打桩官方 1 条 → 合计 318）；`test-desktop-catalog.mjs` merge 用例 |
+| **D3** | ~~真实可用性~~ **已订正（见 D15）** | 原文写的「`qq-mail` 匿名直连可用、12 个工具」是**假阳性**：当时的探测只发 `tools/list`，而 `api.mail.qq.com/mcp` 对未初始化请求会宽松回 200+12 个工具名；真实 `initialize` 回 401。现改为完整握手探测，`qq-mail` 如实判为不可用 | 2026-10-07 复测：`initialize` → 401 `Bearer token is missing`；接入账号 bearer → 401 `Invalid or expired access token` |
+| **D4** | 端点自适配（已按 D15 加固） | 回落逻辑保留，但「可用」判定改为**完整 MCP 握手成功**才算；握手失败的端点只作为静态落盘值并如实标注 `probe.ok=false` + 原因 | 验收步骤 4/5（qq-mail 如实 502 + 探测原因） |
+| **D5** | 网关型凭据纪律 | 网关型落盘 `Authorization: Bearer ${WORKBUDDY_TOKEN}`（不落明文）；未授权（17009）如实记进 `probe` 与注册表，调用报上游失败（502）而非假装成功 | 验收步骤 6/7 + 注册表断言 |
+| **D6** | 不把账号 token 当第三方 Key | 用户自备凭据型（`tushare` 的 `${TUSHARE_TOKEN}`）直连上游、不注入 bearer；缺凭据时 `/connectors/tools` → 400 + `credentialRefs` | 验收步骤 8 |
+| **D7** | fail-closed | stdio（`weisheng-scrm`）/ CLI（`awesun`）拒绝自动接入，理由随 400 返回；UI 侧同样拦下 | 验收步骤 9 |
+| **D8** | 离线回归 | `npm test` 全绿（新增 `test-desktop-catalog.mjs` 14 项 + hub-find 双来源契约 + install-tool source 枚举） | 命令输出 |
+| **D9** | 隔离纪律 | 验收全程 `storeRoot`/`skillsMount` 指向 mkdtemp；官方接口打桩；结束时生产 `registry.json`/`auth` 哈希未变 | 验收步骤 12 |
+| **D11** | 装前安全卡覆盖目录包文件 | 桌面目录连接的预检把包内**实际会落盘的文件**（skills/scripts/token-schema）算进体量/脚本数/风险标记（与技能预检同一套 `scanFlags` 口径）；官方 NOT_FOUND 时 `hub-find.mjs inspect connector <name>` 自动回落目录记录 | `formatInspectCard` 实测输出（如 `picset-commerce-images`：16 文件 / 2 个可执行脚本 / 4 条凭据与外链标记）+ `test-hub-find.mjs` 7-4 用例 |
+| **D12** | 双来源去重（生产 GUI 实测发现） | 官方注册表用账号侧 id（`tdocs-app`）、桌面目录用市场 id（`tencent-docs`），只按 name 去重会让「腾讯文档」「乐享知识库」「微云」「启信慧眼」「励销CRM」等在同一页各出现两次。改为两级去重（name + 「展示名+描述」大小写不敏感），官方行优先；实测隐藏 22 条（17 条同名 + 5 条异名同实体），合并总数 29+317−22 = **324** | 生产 GUI：修复前看到重复；`mergeConnectorRows` 对生产数据的实测输出 `{total:324, official:29, desktop:295, hiddenDesktopDuplicates:22}` + `test-desktop-catalog.mjs` 新增用例 |
+| **D15** | 端点探测假阳性（生产实测发现，已修） | 只发 `tools/list` 的探测会被宽松端点骗过：`api.mail.qq.com/mcp` 未初始化时回 200+12 个工具名，真实 `initialize` 回 401 → 界面/记录会显示「12 个工具可用」，实际挂载必失败。**修**：`probeEndpoint` 与 `/connectors/tools` 统一改走 `handshakeTools()`（initialize → notifications/initialized → tools/list，带 `mcp-session-id` 续用），失败即如实报错 | 撤回演示：`scripts/accept-desktop-live.mjs` 步骤 4/5（qq-mail 探测 ok=false、`/connectors/tools` 502）+ 步骤 6（本地 stub MCP 服务端走通真实握手：2 个工具）+ `test-desktop-catalog.mjs` 的握手三态用例（宽松端点/完整握手/SSE） |
+| **D16** | 桌面目录连接器无法「连接」（生产 GUI 实测发现，已修） | 卡片对「未绑定」连接器一律先走官方账号绑定 → 桌面目录条目不在官方注册表，报 `connector not found: qq-mail`，永远到不了安装/启用。**修**：桌面来源改走「装 → 启用 →（仅当失败原因是需要授权时）发起 OAuth」；直连型且无需账号的连接器也不再被登录门拦住 | 生产 GUI：修复前 `连接「QQ邮箱」失败：connector not found: qq-mail`；修复后进入安装+启用并如实报握手失败原因 |
+| **D17** | 连接动作必须按「鉴权家族」分派（用户提问驱动的设计订正） | 用户预期「点连接 → 弹登录/授权窗 → 授权后再连接」**对网关型是正确语义**，但我 D16 的改法把桌面条目一律改成「先装再启用」，等于把该弹的授权窗绕过了。订正为三家族分派：① mcp.json 声明了 `${VAR}`（用户凭据型，68 条）→ **先要凭据**（无 OAuth 可弹）；② 无声明凭据（网关/账号侧鉴权，186 条）→ **先发起官方 OAuth**（弹授权页/登录窗），完成后回到「连接」建连；③ 官方账号侧不认这条（17008，如 qq-mail）→ 才回落本地装+启用，失败如实报（含握手原因 + 「官方账号侧不认这条连接器」） | `src/Catalogue.jsx` 家族分派 + `test-render.mjs` 三条断言（凭据家族/OAuth 家族/不认这条要说明）+ 生产实测：通达信点连接弹出真实 `auth.tdx.com.cn` 授权页 |
+| **D18** | MCP OAuth 2.1 接入（本轮新增功能） | 连接器授权按端点自述分派：401 + `resource_metadata` → 发现授权服务器 → **动态注册**（loopback 回调 + PKCE + 公开客户端）→ 授权页（扫码/登录）→ loopback 回调 → 换 token → **进 DSH 凭据库** → `mcp.json` 只写 `${WORKBUDDY_OAUTH_<NAME>_TOKEN>}`；401/到期用 refresh_token 续期（`/connectors/enable` 到期前自动续一次） | ① `test-mcp-oauth.mjs` 13 项（PKCE/发现/DCR/授权 URL/换 token/刷新/客户端登记/回调 state·超时·路径）② `scripts/accept-desktop-live.mjs` 场景 13（假 MCP + 假 AS 真回环）：授权前 502 → 回调 → token 入凭据库 → **授权后 1 个工具** → 刷新后 token 轮换 ③ 生产实测依据：QQ邮箱 401 自述 `resource_metadata`、AS 元数据、DCR 接受 loopback（见 D19） ④ **跨机兜底**：`POST /connectors/mcp-oauth/complete` 支持把浏览器地址栏的回调链接整段粘回来完成换 token（loopback 只绑 DSH 本机；授权页开在别的机器时靠这条），验收场景 ⑧⑨ 覆盖（含 state 校验与「无进行中流程」拒绝） |
+| **D19** | QQ邮箱的授权机制查证（生产/PC 双侧） | PC 端 `.workbuddy/connectors/<uid>/.credentials.v3.json` 的 `mcpClientInfo["qq-mail\|<hash>"]` 给出 `client_id=002e8cd14071aad2` + deep-link 回调；实测 `api.mail.qq.com/mcp` 401 → protected-resource（AS=`wx.mail.qq.com`）→ AS 元数据含 `registration_endpoint`；**DCR 用 loopback 回调实测 HTTP 200 拿到 client_id** | 命令输出 + PC 侧文件（值已掩码） |
+| **D20** | 桌面连接器图标（生产实测发现，已修） | 早期实现把图标 URL 编成 `https://static.workbuddy.cn/connectors-config-v2/icons/<name>.<ext>` —— **实测 404**（图标只在包内）。修为：目录记录只留包内路径 `iconFile`，行映射给出插件自己的 `/icon?kind=connector&source=desktop&name=<n>`，宿主在 `/market-list`、`/installed` 响应里按请求 Host 补成同源绝对 URL（`<img>` 需要绝对地址；DSH 栅栏靠浏览器 cookie，同源图片能过） | 验收场景 3b（桌面行 icon 指向插件路由 + `/icon` 返回 `image/*` 且字节 > 100）；`test-desktop-catalog.mjs` 断言 `iconFile`/行映射 |
+| **D21** | MCP OAuth 适用面全量核对（用户要求） | 对 252 条可挂载连接器逐个 probe（只发 initialize）：**150 条上游自述 MCP OAuth**（401 + `resource_metadata`）、67 条用户凭据、34 条网关型、1 条探测失败。结论：**多数连接器应走 MCP OAuth**，且「网关也 401、上游又自述 OAuth」的（tdx/腾讯文档/GitHub…）应优先走上游 —— 不依赖 WorkBuddy 账号 | `/tmp/scan-auth.json` 逐条明细（150/67/34/1） |
+| **D22** | 端点选择与 token 归属（D21 驱动的修复） | ① 安装时若 OAuth 自述来自**上游**，落盘端点选上游（否则 token 会被发到不认它的网关）；② `/connectors/mcp-oauth/start` 在 mcp.json 那条不自述 OAuth 时**再探目录里的上游**（网关 17008 的 QQ邮箱 正是这种）；③ 授权完成后 `finalizeMcpOauth` **同时改写 mcp.json 的 url 与 Authorization 引用**，`probe` 记录里带 `oauthHint` | 验收场景 ⑩（假网关 17008 → 上游发现 OAuth → 落盘 url 改为上游 → 枚举到工具）；场景 8 的 tdx 断言相应改为「落上游」 |
+| **D10** | 网关型连接的授权入口（生产 GUI 实测） | 在市场页点「连接」一条**未绑定**的桌面目录连接器（通达信 tdx-connector）→ 插件按既有语义调 `/connectors/auth-start`，界面如实提示「请在打开的页面完成「通达信」授权；若没有自动打开，点下面链接」，链接指向真实授权页 `https://auth.tdx.com.cn/tdx-oauth/page_workbuddy_oauth.html?...`。即：**目录内连接器的官方 OAuth 入口在生产的 GUI 里真的能发起** | 生产 GUI 19:06 实测（提示文案 + 授权链接）+ 早前 `/console/as/connector/oauth/<name>/start` 直连返回真实 `authorize_url` |
+| **D10b** | 待用户完成（未验证） | 用户在该页完成通达信账号授权 → 该连接器变为「已绑定」→ 再点「连接」应走 安装 + 启用 + 网关放行。**需要用户自己的第三方账号登录**，我不代做 | 待用户完成后复测 |
+| **D13** | 生产 GUI 端到端核对（重启后） | 来源行 = 「官方注册表 29 条 · 桌面端公开目录新增 295 条（…另有 22 条与官方是同一连接器，已去重）」；「腾讯文档」只出现一次（官方 `tdocs-app`）；CLI 行（腾讯会议/企业微信/飞书）显示「不可自动接入」且按钮禁用；搜索「通达信」精确命中 | 生产 GUI 19:02–19:06 实测 |
+| **D14** | 宿主响应直读（独立于浏览器） | 用隔离 storeRoot（软链生产 desktop 目录 + 复制凭据）跑 `GET /market-list?kind=connector&pageSize=500` → `{total:324, official:29, desktop:295, desktopDuplicates:22}`，`腾讯文档` 行数 = 1 且 `source=official` | 命令输出 |
+
+**已知边界（如实记录）**：
+- 目录内 152 条标 `visible_in: internal/iOA`，公共账号可能不可用 —— 插件如实标注来源与不可用原因，不伪装成功；
+- CLI 型 52 条（`npm install -g …`）与 stdio 11 条一律不自动接入（与既有审计结论一致）；
+- 目录包约 50MB，缓存在 `<storeRoot>/.meta/desktop/`，按 etag 增量刷新（默认 6h）。

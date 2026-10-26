@@ -1,0 +1,132 @@
+/* 补两层官方没给的东西：
+   1. .cb-checkbox / .cb-checkbox__box —— 官方选中态规则在 idle-capability.css 里，
+      但基础尺寸与对勾几何来自通用组件库，抽不出来，这里按实测尺寸补。
+   2. .wbh-idle-btn —— 官方按钮是通用 Button 组件（variant primary/secondary），
+      同类名不落地，按卡片里出现的两个变体各补一套。 */
+
+.wbh-port .cb-checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.wbh-port .cb-checkbox__box {
+  box-sizing: border-box;
+  position: relative;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--wb-border-default, #00000040);
+  border-radius: 5px;
+  background: transparent;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.wbh-port .cb-checkbox__box::after {
+  content: '';
+  position: absolute;
+  top: 47%;
+  left: 50%;
+  width: 4px;
+  height: 8px;
+  border: solid var(--wb-button-primary-fg, #fff);
+  border-width: 0 1.8px 1.8px 0;
+  transform: translate(-50%, -50%) rotate(45deg) scale(0);
+  transform-origin: center;
+  transition: transform 120ms ease;
+}
+
+.wbh-port .cb-checkbox--checked .cb-checkbox__box {
+  background: #000000bf;
+  border-color: #000000bf;
+}
+
+.wbh-port .cb-checkbox--checked .cb-checkbox__box::after {
+  transform: translate(-50%, -50%) rotate(45deg) scale(1);
+}
+
+.wbh-port .cb-checkbox:focus-visible .cb-checkbox__box {
+  outline: 2px solid var(--cr-border-focus, #4d80ef);
+  outline-offset: 1px;
+}
+
+/* 动作区的两个按钮：官方是 medium / secondary + medium / primary。
+   高度 32、左右 12、圆角 8，与 WorkBuddy 其它 medium 按钮一致。 */
+.wbh-port .wbh-idle-btn {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+  white-space: nowrap;
+}
+
+.wbh-port .wbh-idle-btn--secondary {
+  background: transparent;
+  border-color: var(--wb-border-default, #00000014);
+  color: var(--wb-color-text-primary);
+}
+
+.wbh-port .wbh-idle-btn--secondary:hover:not(:disabled) {
+  background: var(--wb-bg-hover);
+}
+
+.wbh-port .wbh-idle-btn--primary {
+  background: var(--wb-color-text-primary);
+  color: var(--cb-bg-color-container, #fff);
+}
+
+.wbh-port .wbh-idle-btn--primary:hover:not(:disabled) {
+  opacity: .82;
+}
+
+.wbh-port .wbh-idle-btn:disabled {
+  opacity: .42;
+  cursor: default;
+}
+
+/* 官方已经给了 width:360px + max-width:calc(100vw - 32px)，这里只补 box-sizing，
+   不再覆盖 width —— 覆盖会让卡片在 flex 父容器里被 min-content 反噬成一条窄条。 */
+.wbh-port .idle-capability-pill {
+  box-sizing: border-box;
+}
+
+/* 成功提示条：官方只有一个 __manage-link 的样式，容器由壳组件自带。
+ * 关闭动作发生在卡片里，提示要活到卡片消失之后，所以挂在 slot 层。 */
+.wbh-port .idle-capability-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 32px;
+  transform: translateX(-50%);
+  z-index: 901;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 16px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #000000e6;
+  background: #fff;
+  border: .5px solid #ebebeb;
+  box-shadow: 0 8px 48px #00000014, 0 6px 12px #0000000a;
+}
+[data-ds-dark-theme] .wbh-port .idle-capability-toast,
+.wbh-port[data-ds-dark-theme] .idle-capability-toast {
+  color: #ffffffe6;
+  background: #181818;
+  border-color: #3d3d3d;
+  box-shadow: 0 24px 48px -4px #0003, 0 6px 12px -8px #0003;
+}

@@ -3,8 +3,9 @@ name: workbuddy-experts
 description: WorkBuddy 专家顾问。当对话中判断任务需要专业判断、行业经验或领域方法论时（如审合同、读财报、写论文、投资分析、法律咨询、内容创作策略），或用户说「找个专家」「有没有懂 XX 的专家」「召唤专家」时，从**官方专家注册表**（约 430 位，随官方注册表变动）检索推荐合适的人设。专家=角色切换机制，不是工具：不自动调用，只能推荐，由用户决定召唤；同一会话建议只挂一个专家。召唤时按需下载该专家文件并以 subagent 人设加载。
 version: 0.3.0
 metadata:
-  author: kaitzh
+  author: superfat1988
   source: dsh-workbuddy-hub
+disable-model-invocation: true
 ---
 
 # workbuddy-experts（专家顾问）

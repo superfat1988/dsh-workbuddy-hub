@@ -3,7 +3,7 @@
 // 两处破坏：
 //   ① 专家预设 —— 0.1.7 删了 `agentPresets.copy()` / `.remove()`，预设只能**声明**
 //      （`register(definition)`，disposer 由声明方持有）。
-//   ② 会话 cwd 读取 —— 旧实现硬编码 `/home/kaitzh/.dsh/sessions` 与 `session.v3.jsonl.zstd`，
+//   ② 会话 cwd 读取 —— 旧实现硬编码 `/home/USER/.dsh/sessions` 与 `session.v3.jsonl.zstd`，
 //      升级后新写入的是 `session.v4.*`，静默读不到。
 //
 // 这里用**0.1.7 形状的假 presets**（只有 register/resolve，**故意不提供 copy/remove**）跑真实

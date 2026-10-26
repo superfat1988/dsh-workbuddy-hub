@@ -206,21 +206,36 @@ export async function inspectConnector(name, deps = {}) {
     .filter(f => /sensitive-header|sensitive-query-param/.test(f))
     .map(f => f.split(': ')[1] ?? f)
   const declaredName = mcp?.ide_server_name || name
+  // 目录包随附文件（桌面端公开目录的连接器会带 skills/scripts/token-schema）：
+  // 与技能预检**同一套扫描口径**，让审批卡如实显示会装下多少可执行脚本与风险标记。
+  let bundle = null
+  if (Array.isArray(deps.bundleFiles) && deps.bundleFiles.length > 0) {
+    const files = deps.bundleFiles
+      .filter(f => f && typeof f.rel === 'string' && f.rel !== 'mcp.json' && !f.rel.includes('..'))
+      .map(f => (BINARY_EXT.test(f.rel) || !isProbablyText(f.data) ? { name: f.rel, bytes: f.data.length } : { name: f.rel, text: f.data.toString('utf8'), bytes: f.data.length }))
+    const sum = summarizeEntries(files)
+    bundle = { files: sum.files, bytes: sum.bytes, scriptCount: sum.scriptCount, riskFlags: sum.riskFlags, external: externalOfFiles(files), head: sum.head }
+  }
+  const mergedFlags = [...new Set([...riskFlags, ...(bundle?.riskFlags ?? [])])]
+  const mergedExternal = {
+    urls: [...new Set([...urls, ...(bundle?.external?.urls ?? [])])],
+    commandExecution: commandExecution || Boolean(bundle?.external?.commandExecution),
+    credentialHeaders: [...new Set([...credentialHeaders, ...(bundle?.external?.credentialHeaders ?? [])])],
+  }
   return {
     kind: 'connector', name, displayName: row.displayName || name,
-    files: mcp ? 1 : 0,
-    bytes: mcp ? Buffer.byteLength(JSON.stringify(mcp)) : 0,
-    scriptCount: 0,
-    riskFlags,
-    external: {
-      urls: [...new Set(urls)],
-      commandExecution,
-      credentialHeaders,
-    },
+    files: (mcp ? 1 : 0) + (bundle?.files ?? 0),
+    bytes: (mcp ? Buffer.byteLength(JSON.stringify(mcp)) : 0) + (bundle?.bytes ?? 0),
+    scriptCount: bundle?.scriptCount ?? 0,
+    riskFlags: mergedFlags,
+    external: mergedExternal,
     head: mcp
       ? `MCP 定义：transport=${mcp.transport || mcp.type || '未知'}，服务名=${declaredName}，鉴权=${row.authType || mcp.auth_mode || '未知'}${mcp.gateway_url ? '，经官方网关中转' : ''}`
-      : `无 mcp.json（${row.authType ? `authType=${row.authType}` : 'CLI/技能型连接器'}）：安装后只登记，不建 MCP 传输。`,
-    note: '连接器落地后保持停用：要显式启用才会建立 MCP 传输（可能带凭据）。',
+      : (bundle?.head
+        ? inspectOneLine(bundle.head.replace(/^---[\s\S]*?---/, ''), INSPECT_HEADER_CHARS)
+        : `无 mcp.json（${row.authType ? `authType=${row.authType}` : 'CLI/技能型连接器'}）：安装后只登记，不建 MCP 传输。`),
+    note: '连接器落地后保持停用：要显式启用才会建立 MCP 传输（可能带凭据）。'
+      + (bundle ? ` 随附文件 ${bundle.files} 个（其中可执行脚本 ${bundle.scriptCount} 个），与技能预检同一套扫描口径。` : ''),
   }
 }
 

@@ -47,6 +47,7 @@ import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { listExperts, registry as officialRegistry } from '../wb-experts.js'
 import { marketList, connectorRegistry, loadAuth, skillDetails } from '../wb-market.js'
+import { readDesktopIndex, desktopRows, desktopRecord, desktopRow, desktopPaths, extractConnectorFiles, mergeConnectorRows } from '../wb-desktop.js'
 import { inspectExpert, inspectSkill, inspectConnector, formatInspectCard, inspectError } from '../wb-inspect.js'
 // 更新判定与宿主 GET /updates 共用同一份纯模块（无 IO、无 DSH 依赖）。
 import {
@@ -100,7 +101,7 @@ export function shapeSkill(row) {
   }
 }
 
-/** 官方连接器行（connectorRegistry 已整形）→ 紧凑记录。 */
+/** 官方/桌面目录连接器行 → 紧凑记录。 */
 export function shapeConnector(row) {
   return {
     kind: 'connector',
@@ -108,7 +109,14 @@ export function shapeConnector(row) {
     displayName: row.displayName || row.name || '',
     note: oneLine(row.description || '', 60),
     version: '',
-    tags: [row.authType || '', row.mcp ? 'mcp' : 'cli'].filter(Boolean),
+    // 来源标进 tags：模型/用户要能一眼看出这条是账号可见的官方连接器，还是桌面端
+    // 公开目录（WorkBuddy 客户端自带市场）里的条目。
+    tags: [
+      row.source === 'desktop' ? '桌面目录' : (row.source === 'mirror' ? '镜像' : '官方'),
+      row.authType || '',
+      row.mcp ? 'mcp' : 'cli',
+      row.desktop?.supported === false ? '不可自动接入' : '',
+    ].filter(Boolean),
   }
 }
 
@@ -307,6 +315,20 @@ export async function run(argv, deps = {}) {
     if (!['expert', 'skill', 'connector'].includes(wanted.kind) || !/^[\w.-]+$/.test(wanted.name)) {
       return { code: 2, lines: ['ERROR 用法：hub-find.mjs inspect <expert|skill|connector> <name> [--json]'] }
     }
+    // 桌面端公开目录里的连接器不在官方注册表里：官方预检失败（NOT_FOUND/NEED_LOGIN）
+    // 时改用目录记录 + 包内真实文件做同一套扫描，避免模型拿不到安全卡就直接安装。
+    const desktopCard = async () => {
+      if (wanted.kind !== 'connector') return null
+      const dir = desktopPaths(paths.root).dir
+      const index = deps.desktopIndex ? await deps.desktopIndex(paths) : readDesktopIndex(dir)
+      const record = index ? desktopRecord(index, wanted.name) : null
+      if (!record) return null
+      let bundleFiles = []
+      try { bundleFiles = extractConnectorFiles(dir, wanted.name) } catch { bundleFiles = [] }
+      return (hooks.inspectDesktopConnector || inspectConnector)(wanted.name, {
+        connectorRows: async () => [desktopRow(record)], bundleFiles, ...hooks,
+      })
+    }
     try {
       const card = wanted.kind === 'expert' ? await (hooks.inspectExpert || inspectExpert)(wanted.name, hooks)
         : wanted.kind === 'skill' ? await (hooks.inspectSkill || inspectSkill)(wanted.name, { stateDir: paths.state, ...hooks })
@@ -314,6 +336,13 @@ export async function run(argv, deps = {}) {
       if (args.json) return { code: 0, lines: [JSON.stringify(card)] }
       return { code: 0, lines: formatInspectCard(card) }
     } catch (error) {
+      try {
+        const card = await desktopCard()
+        if (card) {
+          if (args.json) return { code: 0, lines: [JSON.stringify(card)] }
+          return { code: 0, lines: formatInspectCard(card) }
+        }
+      } catch { /* 目录不可用就回到官方错误语义 */ }
       const fail = inspectError(error)
       if (fail.code === 'NOT_FOUND') return { code: 3, lines: [`NOT_FOUND 官方市场/注册表没有「${wanted.kind}/${wanted.name}」：${oneLine(fail.message, 100)}`] }
       if (fail.code === 'NEED_LOGIN') return { code: 1, lines: [`NEED_LOGIN inspect ${wanted.kind}/${wanted.name} 需要登录（${oneLine(fail.message, 100)}）`] }
@@ -327,7 +356,7 @@ export async function run(argv, deps = {}) {
     const rows = Object.entries(reg.installed || {}).map(([key, rec]) => ({
       kind: rec.kind || key.split('/')[0], name: rec.name || key.split('/')[1],
       displayName: oneLine(rec.displayName || rec.name || '', 24),
-      note: oneLine(rec.source === 'official' ? '官方' : '镜像时代安装', 12), tags: [],
+      note: oneLine(rec.source === 'official' ? '官方' : (rec.source === 'desktop' ? '桌面目录' : '镜像时代安装'), 12), tags: [],
     }))
     return finish(rows, args, rows.length)
   }
@@ -357,13 +386,33 @@ export async function run(argv, deps = {}) {
       rows = (out.rows || []).map(shapeSkill)
       return finish(rows, args, out.total ?? rows.length)
     }
-    const all = await connectors(paths.state)
-    const matched = filterRows(all, args.query)
-    if (!matched.length) {
-      return { code: 0, lines: [`NO_MATCH 官方连接器共 ${all.length} 个，没有匹配「${oneLine(args.query, 20)}」的（换关键词，或用 --limit 列前几个）`] }
+    // 连接器有两个来源：官方注册表（登录态，账号视角）与桌面端公开静态目录
+    // （WorkBuddy 客户端自带市场的同一份公开包，匿名，无需登录 → 未登录也能检索）。
+    // 合并口径与宿主 GET /market-list 完全一致（同一份 mergeConnectorRows）。
+    let officialRows = []
+    let officialError = ''
+    try { officialRows = await connectors(paths.state) } catch (error) { officialError = String(error?.message || error) }
+    let deskRows = []
+    try {
+      // 可注入（测试用来钉「双来源合并」契约）；生产路径读本地已抓取的索引，不联网。
+      const index = deps.desktopIndex
+        ? await deps.desktopIndex(paths)
+        : readDesktopIndex(desktopPaths(paths.root).dir)
+      if (index) deskRows = desktopRows(index)
+    } catch { /* 目录还没抓过：不是错误，官方结果照常返回 */ }
+    const merged = mergeConnectorRows(officialRows, deskRows, args.query)
+    if (!merged.rows.length) {
+      if (!officialRows.length && !deskRows.length && officialError) {
+        const needLogin = /401|403|login|unauthor|需要登录|token/i.test(officialError)
+        return { code: 1, lines: [needLogin ? 'NEED_LOGIN' : 'ERROR ' + oneLine(officialError, 120)] }
+      }
+      return {
+        code: 0,
+        lines: [`NO_MATCH 官方连接器 ${officialRows.length} 个 + 桌面端公开目录 ${deskRows.length} 个，没有匹配「${oneLine(args.query, 20)}」的（换关键词，或用 --limit 列前几个）`],
+      }
     }
-    rows = matched.slice(0, args.limit).map(shapeConnector)
-    return finish(rows, args, matched.length)
+    rows = merged.rows.slice(0, args.limit).map(shapeConnector)
+    return finish(rows, args, merged.rows.length)
   } catch (error) {
     const msg = String(error?.message || error)
     const needLogin = /401|403|login|unauthor|需要登录|token/i.test(msg)

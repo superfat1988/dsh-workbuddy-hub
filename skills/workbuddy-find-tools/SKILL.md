@@ -1,10 +1,11 @@
 ---
 name: workbuddy-find-tools
-description: 在 WorkBuddy **官方市场**（约 300 个技能 / 100+ 个连接器，随官方市场变动）中检索工具能力。当用户需要某种外部工具能力（查数据、连服务、调 API）而当前 DSH 未安装对应工具/连接器时使用；也用于用户说「找一个能 XX 的工具/连接器/技能」「市场里有没有 XX」时。返回候选卡片（名称/用途/前置条件），安装需用户确认后经 hub 插件执行。**技能与连接器走官方市场 API，需要先登录 WorkBuddy 账号**（未登录时接口会明确要求登录，不会静默换源）。
-version: 0.3.0
+description: 在 WorkBuddy 市场（官方市场 + 桌面客户端自带的公开静态目录：约 300 个技能 / 官方注册表 29 个连接器 + 桌面目录 317 个连接器，随市场变动）中检索工具能力。当用户需要某种外部工具能力（查数据、连服务、调 API）而当前 DSH 未安装对应工具/连接器时使用；也用于用户说「找一个能 XX 的工具/连接器/技能」「市场里有没有 XX」时。返回候选卡片（名称/用途/前置条件），安装需用户确认后经 hub 插件执行。**技能走官方市场 API（需登录）；连接器有两个来源：官方注册表（需登录，账号可见）与桌面端公开目录（匿名，317 条）**，未登录时官方部分会明确要求登录，桌面目录照常可检索。
+version: 0.4.0
 metadata:
-  author: kaitzh
+  author: superfat1988
   source: dsh-workbuddy-hub
+disable-model-invocation: true
 ---
 
 # workbuddy-find-tools（工具检索）
@@ -40,13 +41,19 @@ node <插件目录>/scripts/hub-find.mjs installed           # 本机已装清�
 输出每行一条紧凑记录（约 0.1–0.9KB）：
 ```
 skill/xlsx | Excel 表格处理 | 创建、编辑、分析 Excel 表格：公式、图表、透视表与格式设置。 |
-connector/youzan-workbuddy | 有赞 | mcp_oauth,mcp
+connector/youzan-workbuddy | 有赞 | 官方,mcp_oauth,mcp
+connector/qq-mail | QQ邮箱 | 桌面目录,mcp
 # 命中 1 条，显示 1 条（--limit 最多 20）
 ```
 
+连接器行的 tags 第一个是**来源**：`官方`（账号可见、可走网关通话）｜`桌面目录`（来自
+WorkBuddy 桌面客户端自带的公开静态包，共 317 条，其中约 254 条可自动接入）｜`镜像`（灾备，
+默认关闭）。看到 `不可自动接入` 说明该条是 stdio/CLI 型（会执行本机进程或 `npm i -g`），
+**不要**推荐安装它。
+
 结果里可能出现这三种**一行结论**，按它们行动，**不要**说成「市场里没有」：
-- `NEED_LOGIN` → 技能/连接器需要 WorkBuddy 账号：提示用户去插件设置区（或市场页右上角）扫码登录后再试；
-- `NO_MATCH ...官方连接器共 N 个...` → 确实没有匹配（官方连接器只有有限几个，换关键词）；
+- `NEED_LOGIN` → 技能（和官方连接器注册表）需要 WorkBuddy 账号：提示用户去插件设置区（或市场页右上角）扫码登录后再试；桌面目录不需要登录，可先用它检索。
+- `NO_MATCH 官方连接器 N 个 + 桌面端公开目录 M 个 …` → 两个来源都没有匹配（换关键词）；
 - `ERROR <原因>` → 如实转述（限流/网络/上游错误要区分开）。
 
 ### 2. 装前预检（inspect，只读、不落盘）
@@ -87,8 +94,10 @@ INSPECT skill/xlsx | Excel 表格处理
 用户同意后，调用 DSH 工具（不是 curl）：
 
 ```
-workbuddy_install { kind: "skill" | "connector", name: "<name>", source?: "official" | "mirror" }
+workbuddy_install { kind: "skill" | "connector", name: "<name>", source?: "official" | "mirror" | "desktop" }
 ```
+
+`source` 按检索结果的来源标签填：`官方` → `official`；`桌面目录` → `desktop`；省略时宿主按「官方优先、官方查无此条才回落桌面目录」处理。
 
 工具内部会：先重做一次只读预检 → 弹出 **DSH 原生审批**（把安全卡摘要展示给用户）→ 用户在审批里点了批准才真的安装。也就是说：**你调了工具 ≠ 已经安装**，要看工具返回。
 
@@ -100,7 +109,8 @@ workbuddy_install { kind: "skill" | "connector", name: "<name>", source?: "offic
 - `report.flags` 非空时列出安全扫描标记（如 spawns-process / mentions-credentials），提醒用户查看；
 - skill 自动符号链接到 `~/.dsh/skills/workbuddy-<name>`，**下一轮对话生效**；
 - connector 安装后**保持停用**（enabled=false）：需要在市场页开关处显式启用，才会真正挂上 MCP 传输；
-- 记录里会写下官方溯源（技能 `officialMeta.version`、连接器 `officialMeta.defHash`），供设置页「检查更新」比对。
+- connector 的通话前提要讲清，按端点自述分三种：① 带 `${VAR}` 凭据（如 `TUSHARE_TOKEN`）→ 用户自己在 DSH 凭据库配置，缺凭据时启用会如实报要配哪些 ref；② **MCP OAuth**（端点 401 且自述 `resource_metadata`，如 QQ邮箱）→ 点「连接」会弹出**扫码/登录授权页**，授权完成后自动连接（token 进 DSH 凭据库、可自动续期）；③ 网关型（`authType` 带 server-side/oauth，或官方连接器 OAuth 认这条）→ 弹出官方授权页，未授权时上游回 `17009`；
+- 记录里会写下溯源（技能 `officialMeta.version`、官方连接器 `officialMeta.defHash`、桌面目录连接器 `officialMeta.bundle.sha256`+`version`），供设置页「检查更新」比对。
 
 ### 5. 检查更新 / 卸载
 

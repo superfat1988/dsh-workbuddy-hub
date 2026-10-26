@@ -1,0 +1,102 @@
+/* 官方设计变量 · 暗色 · 裁剪版
+ * 只保留 official-picker.css 引用到的变量及其依赖（86 条）
+ */
+.wbh-port[data-ds-dark-theme], [data-ds-dark-theme] .wbh-port {
+  --cr-avatar-fallback-bg: var(--cr-internal-avatar-fallback-bg);
+  --cr-avatar-fallback-fg: var(--cr-internal-avatar-fallback-fg);
+  --cr-badge-bg: var(--cr-internal-badge-bg);
+  --cr-badge-text: var(--cr-internal-badge-text);
+  --cr-bg-elevated: var(--cr-internal-bg-elevated);
+  --cr-bg-hover: var(--wb-bg-hover);
+  --cr-bg-input-inset: var(--cr-internal-bg-input-inset);
+  --cr-bg-primary: var(--cr-internal-bg-primary);
+  --cr-bg-secondary: var(--cr-internal-bg-secondary);
+  --cr-border-default: var(--cr-internal-border-default);
+  --cr-border-elevated: var(--cr-internal-border-elevated);
+  --cr-brand-primary: var(--cr-internal-brand-primary);
+  --cr-chip-hover-bg: var(--cr-internal-chip-hover-bg);
+  --cr-color-on-accent: var(--cr-internal-color-on-accent);
+  --cr-font-family: var(--cr-internal-font-family);
+  --cr-icon-check-selected: var(--cr-brand-primary);
+  --cr-internal-avatar-fallback-bg: #3a3a3a;
+  --cr-internal-avatar-fallback-fg: #ffffff73;
+  --cr-internal-badge-bg: #ffffff14;
+  --cr-internal-badge-text: #ffffff80;
+  --cr-internal-bg-elevated: #242629;
+  --cr-internal-bg-input-inset: #2a2c31;
+  --cr-internal-bg-primary: #1a1b1e;
+  --cr-internal-bg-secondary: #141518;
+  --cr-internal-border-default: #2a2c31;
+  --cr-internal-border-elevated: #34373d;
+  --cr-internal-brand-primary: #3dd9b6;
+  --cr-internal-chip-hover-bg: #ffffff14;
+  --cr-internal-color-on-accent: #fff;
+  --cr-internal-font-family: "PingFang SC", -apple-system, "Helvetica Neue", Arial, "Microsoft Yahei", sans-serif;
+  --cr-internal-item-hover-bg: #ffffff14;
+  --cr-internal-item-selected-bg: #ffffff0d;
+  --cr-internal-popover-bg: #242629;
+  --cr-internal-popover-border: #34373d;
+  --cr-internal-popover-divider: #ffffff0f;
+  --cr-internal-shadow-panel-light: 0 4px 16px 0 #00000047, 0 1px 4px 0 #00000029;
+  --cr-internal-shadow-popover: 0 6px 24px 0 #0000003d, 0 4px 6px 0 #0000003d;
+  --cr-internal-status-error: #f78d8e;
+  --cr-internal-text-disabled: #ffffff40;
+  --cr-internal-text-link: #46a8f0;
+  --cr-internal-text-link-hover: #7ec5f0;
+  --cr-internal-text-secondary: #ffffffa6;
+  --cr-internal-text-tertiary: #ffffff73;
+  --cr-item-hover-bg: var(--cr-internal-item-hover-bg);
+  --cr-item-selected-bg: var(--cr-internal-item-selected-bg);
+  --cr-popover-bg: var(--cr-internal-popover-bg);
+  --cr-popover-border: var(--cr-internal-popover-border);
+  --cr-popover-divider: var(--cr-internal-popover-divider);
+  --cr-scrollbar-thumb: var(--wb-scrollbar-thumb);
+  --cr-scrollbar-thumb-hover: var(--wb-scrollbar-thumb-hover);
+  --cr-shadow-panel-light: var(--cr-internal-shadow-panel-light);
+  --cr-shadow-popover: var(--cr-internal-shadow-popover);
+  --cr-status-error: var(--cr-internal-status-error);
+  --cr-text-disabled: var(--cr-internal-text-disabled);
+  --cr-text-link: var(--cr-internal-text-link);
+  --cr-text-link-hover: var(--cr-internal-text-link-hover);
+  --cr-text-primary: var(--wb-color-text-primary);
+  --cr-text-secondary: var(--cr-internal-text-secondary);
+  --cr-text-tertiary: var(--cr-internal-text-tertiary);
+  --wb-bg-hover: color-mix(in srgb, var(--wb-palette-white-100) 6%, transparent);
+  --wb-bg-overlay: var(--wb-palette-black-60);
+  --wb-bg-popover: #242424;
+  --wb-bg-primary: var(--wb-palette-gray-3);
+  --wb-color-border-primary: #262626;
+  --wb-color-border-solid: #3d3d3d;
+  --wb-color-text-primary: #fff;
+  --wb-dropdown-bg-color: var(--wb-bg-primary);
+  --wb-motion-duration-fast: .15s;
+  --wb-motion-easing-decelerate: cubic-bezier(0, 0, .2, 1);
+  --wb-palette-black-60: #0009;
+  --wb-palette-gray-2: #292929;
+  --wb-palette-gray-3: #1f1f1f;
+  --wb-palette-white-100: #fff;
+  --wb-palette-white-20: #fff3;
+  --wb-palette-white-30: #ffffff4d;
+  --wb-popover-border-color: var(--wb-color-border-solid);
+  --wb-popover-expand-duration-in: var(--wb-motion-duration-fast);
+  --wb-popover-expand-easing-in: var(--wb-motion-easing-decelerate);
+  --wb-popover-shadow: var(--shadow-md-offsetx-2,0px) 6px 24px var(--shadow-md-spread-2,-4px) #0006, var(--shadow-md-offsetx-1,0px) 4px 6px var(--shadow-md-spread-1,-8px) #0003;
+  --wb-radius-xl: 12px;
+  --wb-scrollbar-thumb: var(--wb-palette-white-20);
+  --wb-scrollbar-thumb-hover: var(--wb-palette-white-30);
+  --wb-shadow-popover: 0 4px 16px var(--wb-bg-overlay);
+}
+
+/* 文本族兜底：裁剪闭包只覆盖 picker 显式引用的变量，字体色一旦缺条就会回落到
+ * official.css 的 :root（浅色值），暗色下变成黑字压深底。这里显式钉死。 */
+[data-ds-dark-theme] .wbh-port,
+.wbh-port[data-ds-dark-theme] {
+  --wb-text-strong: #ffffffe6;
+  --wb-text-medium: #ffffffa6;
+  --wb-text-weak: #ffffff80;
+  --wb-text-muted: #ffffff4d;
+  --wb-text-disable: #ffffff4d;
+  --cr-internal-text-primary: #ffffffe6;
+  --cr-internal-text-secondary: #ffffffa6;
+  --cr-internal-text-tertiary: #ffffff80;
+}

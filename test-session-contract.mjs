@@ -464,7 +464,8 @@ assert.equal(missingEntry.status, 404)
 assert.equal(missingEntry.json.error, 'not installed')
 
 // 真实 standard preset 的 YAML 也要能被原地改写（260 行、含 !!js 与注释）
-const REAL_STANDARD = '/home/kaitzh/deepseek-harness/packages/preset/agent-presets/presets/standard/agent.cordis.yml'
+const DSH_CHECKOUT = process.env.DSH_CHECKOUT || '/path/to/deepseek-harness'
+const REAL_STANDARD = `${DSH_CHECKOUT}/packages/preset/agent-presets/presets/standard/agent.cordis.yml`
 if (existsSync(REAL_STANDARD)) {
   const source = readFileSync(REAL_STANDARD, 'utf8')
   const patched = replacePersonaPrefix(source, '你是演示专家。\n第二行：正文换行必须保留。')

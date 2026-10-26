@@ -88,11 +88,19 @@ export default function MarketPage({ sessionId, workspaceId, runCommand }) {
   // task 由召唤模态框传入；阶段 1 只做挂载，任务文本暂不消费（保留签名兼容调用方）。
   const attach = useCallback(async (entry, task = '') => {
     const key = `${entry.kind}/${entry.name}`
+    // 桌面端公开目录里「不可自动接入」的连接器（stdio / CLI）：在界面这一层就拦下，
+    // 不发起安装请求（宿主侧同样 fail-closed，这里是第二道）。
+    if (entry.kind === 'connector' && entry.desktop && entry.desktop.supported === false) {
+      setNotice(`「${entry.displayName}」不可自动接入：${entry.desktop.unsupportedReason || '该连接器类型不受支持'}`)
+      return
+    }
     setBusy(key); setNotice('')
     // 官方逻辑：选中即刻在聊天框出现该项的 chip（按会话隔离）。
     addSelection(entry, sessionId)
     try {
-      if (!installed[key]) await hub.install(entry.kind, entry.name, entry.official ? 'official' : undefined)
+      // 安装来源按行判定：desktop（桌面公开目录）/ official（官方注册表）/ 未标则交给宿主决定
+      const installSource = entry.source === 'desktop' ? 'desktop' : (entry.official ? 'official' : undefined)
+      if (!installed[key]) await hub.install(entry.kind, entry.name, installSource)
       if (entry.kind === 'connector') {
         if (installed[key]?.enabled) {
           await hub.disableConnector(entry.name)

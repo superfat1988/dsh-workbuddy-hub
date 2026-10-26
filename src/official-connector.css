@@ -122,3 +122,14 @@
 :root.dark .connector-detail-example,:root.cb-dark .connector-detail-example,:root .dark .connector-detail-example,:root .cb-dark .connector-detail-example,.cbChat.dark .connector-detail-example { background:var(--wb-connector-detail-surface-bg);color:var(--wb-color-text-primary) }
 :root.dark .connector-detail-example:hover:not(:disabled),:root.cb-dark .connector-detail-example:hover:not(:disabled),:root .dark .connector-detail-example:hover:not(:disabled),:root .cb-dark .connector-detail-example:hover:not(:disabled),.cbChat.dark .connector-detail-example:hover:not(:disabled) { background:var(--wb-connector-detail-surface-bg);opacity:.85 }
 :root.dark .connector-detail-tools-wrapper,:root.cb-dark .connector-detail-tools-wrapper,:root .dark .connector-detail-tools-wrapper,:root .cb-dark .connector-detail-tools-wrapper,.cbChat.dark .connector-detail-tools-wrapper { background:var(--wb-connector-detail-surface-bg) }
+
+/* 桌面端公开目录（WorkBuddy 客户端自带市场）来源徽标：来源必须一眼可辨，
+   不能和官方注册表条目混为一谈。 */
+.connector-card-badge { flex:none;flex-shrink:0;padding:0 6px;height:16px;line-height:16px;border-radius:8px;font-size:10px;white-space:nowrap;background:var(--wb-bg-hover);color:var(--wb-color-text-secondary);border:1px solid var(--wb-border-default) }
+.connector-card-badge--warn { color:#b45309;border-color:#f59e0b55;background:#f59e0b1a }
+
+/* MCP OAuth 跨机兜底：粘贴回调链接完成授权 */
+.wbh-oauthPaste { display:flex; gap:8px; align-items:center; margin:8px 0; }
+.wbh-oauthPaste input { flex:1 1 auto; min-width:0; height:28px; padding:0 10px; border-radius:8px;
+  border:1px solid var(--wb-border-default); background:var(--wb-bg-card); color:var(--wb-color-text-primary); font-size:12px }
+.wbh-oauthPaste input::placeholder { color:var(--wb-color-text-secondary) }

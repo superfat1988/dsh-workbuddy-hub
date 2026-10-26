@@ -1,2 +1,5 @@
 node_modules/
 *.log
+
+# 隔离验收用的临时实例：store/sessions/证据/token/本机路径，一律不入库。
+accept/

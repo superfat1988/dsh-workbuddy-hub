@@ -90,9 +90,46 @@ import { homedir } from 'node:os'
   const usage = await run(['nonsense'])
   assert.equal(usage.code, 2, '用法错误用退出码 2')
 
-  // 连接器无命中时要给出「官方共 N 个」，避免模型以为市场是空的
-  const conn = await run(['connector', '地图'], { connectorRegistry: async () => [{ name: 'youzan-workbuddy', displayName: '有赞' }] })
-  assert.match(conn.lines[0], /NO_MATCH 官方连接器共 1 个/)
+  // 连接器无命中时要给出两个来源各自的规模，避免模型以为市场是空的。
+  // ⚠️ 必须显式给 --store：不给就会读**生产** storeRoot 的桌面目录索引，
+  // 一旦生产抓过目录（317 条），这个用例就会命中真实条目而不再是 NO_MATCH。
+  {
+    const { mkdtempSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const isolated = mkdtempSync(join(tmpdir(), 'wbh-hf-empty-'))
+    const conn = await run(['connector', '地图', '--store', isolated], { connectorRegistry: async () => [{ name: 'youzan-workbuddy', displayName: '有赞' }] })
+    assert.match(conn.lines[0], /NO_MATCH 官方连接器 1 个 \+ 桌面端公开目录 0 个/)
+    rmSync(isolated, { recursive: true, force: true })
+  }
+
+  // 双来源合并：桌面端公开目录（匿名静态包）里的条目也要能被检索到并标出来源；
+  // 同名时官方优先（不重复出两条）。
+  const desktopIndex = {
+    catalogEtag: 'e', catalogSha256: 's',
+    connectors: [
+      { name: 'demo-desktop', displayName: '桌面演示连接器', description: '来自桌面公开目录', serverName: 'demo-desktop', transport: 'streamable-http', supported: true, upstreamUrl: 'https://a.example.com/mcp', gatewayUrl: 'https://copilot.tencent.com/console/agent-gateway/demo-desktop/mcp', placeholders: [], authMode: '', skills: [], tokenFields: [], icon: '', version: '' },
+      { name: 'youzan-workbuddy', displayName: '桌面版有赞', description: '同名条目', serverName: 'youzan-workbuddy', transport: 'streamable-http', supported: true, upstreamUrl: 'https://b.example.com/mcp', gatewayUrl: '', placeholders: [], authMode: '', skills: [], tokenFields: [], icon: '', version: '' },
+    ],
+  }
+  const mergedBoth = await run(['connector', '演示'], {
+    connectorRegistry: async () => [{ name: 'youzan-workbuddy', displayName: '有赞' }],
+    desktopIndex: async () => desktopIndex,
+  })
+  assert.match(mergedBoth.lines[0], /^connector\/demo-desktop \| 桌面演示连接器/)
+  assert.match(mergedBoth.lines[0], /桌面目录/, '来源必须标出来（tags 含「桌面目录」）')
+  const dedup = await run(['connector', '有赞'], {
+    connectorRegistry: async () => [{ name: 'youzan-workbuddy', displayName: '有赞' }],
+    desktopIndex: async () => desktopIndex,
+  })
+  assert.equal(dedup.lines.filter(l => l.includes('youzan-workbuddy')).length, 1, '同名条目只出一条（官方优先）')
+  assert.match(dedup.lines[0], /官方/, '同名时保留官方来源')
+
+  // 官方不可用（未登录）但桌面目录有数据 → 仍然给出结果，不报 NEED_LOGIN
+  const deskOnly = await run(['connector', '演示'], {
+    connectorRegistry: async () => { throw new Error('connector registry requires login') },
+    desktopIndex: async () => desktopIndex,
+  })
+  assert.match(deskOnly.lines[0], /^connector\/demo-desktop/)
 
   // --json 只输出一行合法 JSON（便于脚本消费）
   const j = await run(['expert', '合同', '--json'], { listExperts: experts })
@@ -197,6 +234,31 @@ import { homedir } from 'node:os'
   })
   assert.equal(er.code, 1)
   assert.equal(er.lines[0], 'ERROR upstream exploded')
+
+  // 7-4) 桌面端公开目录里的连接器不在官方注册表：官方 NOT_FOUND 时用目录记录预检，
+  //      而不是让模型拿不到安全卡（否则只能盲装）。
+  const deskCard = {
+    kind: 'connector', name: 'demo-desktop', displayName: '桌面演示连接器',
+    files: 3, bytes: 4096, scriptCount: 1, riskFlags: ['scripts/x.py: spawns-process'],
+    external: { urls: ['https://a.example.com/mcp'], commandExecution: false, credentialHeaders: [] },
+    head: 'MCP 定义：transport=streamable-http，服务名=demo-desktop，鉴权=server-side，经官方网关中转',
+    note: '连接器落地后保持停用。',
+  }
+  const deskInspect = await run(['inspect', 'connector', 'demo-desktop', '--json'], {
+    inspect: {
+      inspectConnector: async () => { throw new Error('connector not in official registry: demo-desktop') },
+      inspectDesktopConnector: async () => deskCard,
+    },
+    desktopIndex: async () => ({ connectors: [{ name: 'demo-desktop', displayName: '桌面演示连接器', transport: 'streamable-http', supported: true, upstreamUrl: 'https://a.example.com/mcp', gatewayUrl: 'https://copilot.tencent.com/console/agent-gateway/demo-desktop/mcp', placeholders: [], skills: [], tokenFields: [], icon: '', version: '' }] }),
+  })
+  assert.equal(deskInspect.code, 0, `桌面目录预检应成功：${deskInspect.lines[0]}`)
+  assert.equal(JSON.parse(deskInspect.lines[0]).name, 'demo-desktop')
+  // 目录里也找不到时才回到官方错误语义（NOT_FOUND）
+  const deskMiss = await run(['inspect', 'connector', 'ghost-desktop'], {
+    inspect: { inspectConnector: async () => { throw new Error('connector not in official registry: ghost-desktop') } },
+    desktopIndex: async () => ({ connectors: [] }),
+  })
+  assert.equal(deskMiss.code, 3)
 
   const usage = await run(['inspect', 'expert'])
   assert.equal(usage.code, 2)

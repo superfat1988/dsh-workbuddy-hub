@@ -149,7 +149,69 @@ export function removeSelection(sessionId, kind, name) {
   const list = _selectedBySession.get(key) || []
   const before = list.length
   const next = list.filter(x => !(x.kind === kind && x.name === name))
+  // 用户明确撤掉 → 与它绑定的「挂载在途」标记一并清掉
+  _pendingMounts.get(key)?.delete(`${kind}/${name}`)
   if (next.length !== before) { _selectedBySession.set(key, next); _emitSelection() }
+}
+
+/* ------------------------------------------------------------------ *
+ * 挂载在途（pending mount）—— 修复「召唤后 chip 消失、专家像没挂上」的竞态。
+ *
+ * 背景（真机缺陷）：attach 先乐观 addSelection（chip 立刻出现），随后才
+ * POST /mount。而 hub.install 成功会触发 onCatalogChange → ComposerAdd.refresh()
+ * → GET /mounted（**这次快照早于 mount**）→ reconcileSelections 按「宿主赢」把
+ * 还没有挂载记录的 chip 当幽灵删掉。正常情况下紧接着的那次 refresh 会把它补回来
+ * （chip 闪一下），但只要两次 GET /mounted 的响应**乱序**（先发的后到），
+ * 最终状态就是：宿主明明挂上了，客户端一个 chip 都没有 —— 用户看到的就是
+ * 「点了召唤，专家没挂进这个对话」，而换个会话/刷新页面又会自动出现。
+ *
+ * 修法：addSelection 之后、mount 落定之前把这枚 key 标成「在途」；对账时宿主
+ * 快照里没有它也不算幽灵。mount 成功/失败都必须清除（失败时 attach 会撤销 chip）。
+ * ------------------------------------------------------------------ */
+const _pendingMounts = new Map()   // sessionId||'_unbound' -> Set('kind/name')
+
+export function markMountPending(sessionId, key) {
+  if (!key) return
+  const bucket = sessionId || '_unbound'
+  const set = _pendingMounts.get(bucket) || new Set()
+  set.add(String(key))
+  _pendingMounts.set(bucket, set)
+}
+export function clearMountPending(sessionId, key) {
+  const bucket = sessionId || '_unbound'
+  const set = _pendingMounts.get(bucket)
+  if (!set) return
+  set.delete(String(key))
+  if (set.size === 0) _pendingMounts.delete(bucket)
+}
+/** 排障/测试可见：某会话当前在途的挂载键。 */
+export function pendingMounts(sessionId) {
+  return [...(_pendingMounts.get(sessionId || '_unbound') || [])]
+}
+
+/* ------------------------------------------------------------------ *
+ * 对账序号（reconcile epoch）—— 丢掉**过期快照**。
+ *
+ * 同一会话可能同时在飞多次 GET /mounted（安装成功触发一次、mount 结束后再触发一次）。
+ * 后发的先到、先发的后到都会发生；旧快照一旦落地就会把新状态覆盖回去。
+ * 每次 refresh 开始时领一个单调递增的号，落地前比一次：只有 ≥ 已落地号才允许写。
+ * ------------------------------------------------------------------ */
+const _reconcileEpoch = new Map()   // sessionId||'_unbound' -> 最大已领号
+const _reconcileApplied = new Map() // sessionId||'_unbound' -> 最大已落地号
+export function beginReconcile(sessionId) {
+  const bucket = sessionId || '_unbound'
+  const next = (_reconcileEpoch.get(bucket) || 0) + 1
+  _reconcileEpoch.set(bucket, next)
+  return next
+}
+export function isCurrentReconcile(sessionId, token) {
+  const bucket = sessionId || '_unbound'
+  const latest = _reconcileEpoch.get(bucket) || 0
+  // 该会话还没人领过号（例如直连调用/老测试）→ 放行，不改变原有语义
+  if (latest === 0) return true
+  if (!Number.isFinite(token) || token < latest) return false
+  _reconcileApplied.set(bucket, Math.max(_reconcileApplied.get(bucket) || 0, token))
+  return true
 }
 
 /**
@@ -160,7 +222,9 @@ export function removeSelection(sessionId, kind, name) {
  * → 输入框下方已加载的 MCP / 专家一个都不渲染，而宿主其实还挂着。
  *
  * 对账规则：宿主赢。mounts 有、客户端没有的 → 补上（displayName/icon 取自 registry）；
- * 客户端有、宿主没有的（幽灵 chip）→ 丢掉。待生效专家在落位时会立刻 mount，不会被误删。
+ * 客户端有、宿主没有的（幽灵 chip）→ 丢掉。两个例外：
+ *   · **挂载在途**的条目不算幽灵（宿主快照可能早于这次挂载，见 markMountPending）；
+ *   · 待生效专家在落位时会立刻 mount，不会被误删。
  *
  * @param {string} sessionId
  * @param {string[]} mountedKeys 宿主返回的 'kind/name' 列表
@@ -169,6 +233,7 @@ export function removeSelection(sessionId, kind, name) {
 export function reconcileSelections(sessionId, mountedKeys, installed = {}) {
   const key = sessionId || '_unbound'
   const prev = _selectedBySession.get(key) || []
+  const pending = _pendingMounts.get(key)
   const next = []
   for (const entryKey of mountedKeys || []) {
     const raw = String(entryKey || '')
@@ -183,6 +248,17 @@ export function reconcileSelections(sessionId, mountedKeys, installed = {}) {
       displayName: rec.displayName || rec.name || name,
       icon: rec.icon || '',
     })
+  }
+  if (pending && pending.size > 0) {
+    const pendingExpert = prev.find(x => pending.has(x.key) && x.kind === 'expert')
+    // 专家单槽位：在途专家要把快照里的旧专家顶掉（与 addSelection 同语义）
+    if (pendingExpert) {
+      for (let i = next.length - 1; i >= 0; i -= 1) if (next[i].kind === 'expert') next.splice(i, 1)
+    }
+    for (const item of prev) {
+      if (!pending.has(item.key) || next.some(x => x.key === item.key)) continue
+      next.push(item)
+    }
   }
   const same = prev.length === next.length && prev.every((item, i) => item.key === next[i].key)
   if (same) return prev
@@ -339,6 +415,12 @@ const post = (path, payload) => api(path, {
   body: JSON.stringify(payload),
 })
 
+/* ---- 闲置能力提醒 ---- */
+export const idleList = () => api('/idle')
+export const idleShown = () => post('/idle/shown', {})
+export const idleDismissGlobal = () => post('/idle/dismiss-global', {})
+export const idleClose = items => post('/idle/close', { items })
+
 const REGISTRY = 'https://acc-1258344699.cos.accelerate.myqcloud.com/workbuddy/expert-marketplace'
 
 /** Normalise any catalogue row (official registry / market API / mirror) to one shape. */
@@ -372,13 +454,35 @@ export const hub = {
     const c = encodeURIComponent(category || '')
     if (kind === 'connector') {
       const r = await api(`/market-list?kind=connector&pageSize=${pageSize}&q=${q}`)
-      // 宿主在「已登录但官方接口失败」时用镜像目录兜底；镜像行不是官方条目，
-      // 必须如实标注（否则安装时会按官方来源去下载）。
-      const rows = (r.rows ?? []).map(x => ({ ...toEntry(x, 'connector'), official: r.source !== 'mirror', isConnected: x.isConnected, mcp: x.mcp, authType: x.authType }))
-      // 官方为空 + 有原因（未登录 / 官方不可用）→ 如实抛错，让界面显示原因而不是「暂无连接器」。
-      // mirrorFallback 打开时宿主会回镜像内容（source=mirror），这里不抛。
+      // 行级来源决定安装来源：official（官方注册表，登录态）/ desktop（桌面端公开静态
+      // 目录，匿名）/ mirror（灾备）。**必须按行判断**，不能再用整表的 r.source 一刀切，
+      // 否则桌面目录行会被误当官方条目去装。
+      const rows = (r.rows ?? []).map(x => {
+        const src = x.source ?? r.source ?? 'official'
+        return {
+          ...toEntry(x, 'connector'),
+          source: src,
+          official: src === 'official',
+          isConnected: x.isConnected,
+          mcp: x.mcp,
+          authType: x.authType,
+          desktop: x.desktop || null,
+        }
+      })
+      // 一条都没有 + 有原因（未登录 / 官方不可用 / 桌面目录也挂了）→ 如实抛错，
+      // 让界面显示原因而不是「暂无连接器」。
       if (rows.length === 0 && r.error) throw new Error(String(r.error))
-      return { rows, total: r.total ?? rows.length, hasMore: false, source: r.source }
+      return {
+        rows,
+        total: r.total ?? rows.length,
+        hasMore: false,
+        source: r.source,
+        officialTotal: r.officialTotal ?? null,
+        desktopTotal: r.desktopTotal ?? null,
+        // 与官方是同一连接器而被隐藏的桌面条目数（同 id 或同「展示名+描述」）
+        desktopDuplicates: r.desktopDuplicates ?? 0,
+        desktop: r.desktop || null,
+      }
     }
     // 专家以官方注册表为准：只有注册表条目带人设文件、可安装可召唤；
     // 市场 API 的专家只有列表数据（无 persona），装了也召唤不了，故只在其后兜底。
@@ -438,6 +542,9 @@ export const hub = {
   },
 
   installed: () => api('/installed').then(r => r.installed || {}),
+  /** 桌面端公开静态目录状态（条目数 / etag / 抓取时间 / 是否 stale）。 */
+  desktopCatalog: () => api('/desktop-catalog'),
+  refreshDesktopCatalog: force => post('/desktop-catalog/refresh', { force: force === true }),
   /**
    * 检查更新（只读路由；宿主侧对结果有 60s 短缓存）。
    * @param {{refresh?: boolean}} [opts] refresh=true → `?refresh=1` 强制重算
@@ -459,10 +566,17 @@ export const hub = {
   boundConnectors: () => api('/connectors/bound').then(r => r.items || []).catch(() => []),
   connectorAuthStart: name => post('/connectors/auth-start', { name }),
   connectorUnbind: name => post('/connectors/unbind', { name }),
-  connectorInstall: name => post('/connectors/install', { name }),
+  connectorInstall: (name, source) => post('/connectors/install', { name, source }),
   connectorNativeRow: name => api(`/connectors/native-row?name=${encodeURIComponent(name)}`),
   connectorTools: name => api(`/connectors/tools?name=${encodeURIComponent(name)}`),
   connectorOauthStatus: name => api(`/connectors/oauth-status?name=${encodeURIComponent(name)}`),
+  // MCP 标准 OAuth（QQ邮箱这类端点自述需要授权的连接器）：拉起授权页 → 轮询 → 自动连接
+  mcpOauthStart: name => post('/connectors/mcp-oauth/start', { name }),
+  mcpOauthStatus: name => api(`/connectors/mcp-oauth/status?name=${encodeURIComponent(name)}`),
+  mcpOauthRefresh: name => post('/connectors/mcp-oauth/refresh', { name }),
+  // 跨机/弹窗被拦时的兜底：把浏览器地址栏的回调链接整段粘回来完成授权
+  mcpOauthComplete: (name, url) => post('/connectors/mcp-oauth/complete', { name, url }),
+  mcpOauthCancel: name => post('/connectors/mcp-oauth/cancel', { name }),
   enableConnector: name => post('/connectors/enable', { name }).then(r => { _emitChange(); return r }),
   disableConnector: name => post('/connectors/disable', { name }).then(r => { _emitChange(); return r }),
 

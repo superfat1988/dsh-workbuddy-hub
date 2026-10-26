@@ -5,11 +5,61 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 个人研究用途：复用 WorkBuddy 市场的**数据**（目录、中文元数据、图标）与**交互语义**，
 不 vendor 其闭源前端代码。
 
+## 一键安装
+
+插件挂在 DSH 的某个 profile 上，一条命令装包：
+
+```bash
+dsh plugin --profile web add dsh-workbuddy-hub
+```
+
+还没发到 npm 时用 git：
+
+```bash
+dsh plugin --profile web add github:<owner>/dsh-workbuddy-hub
+```
+
+`dsh plugin` 只把包装进 profile 的 `node_modules`。**是否启用**由 profile 的
+`package.json` 里 `dsh.profile.plugins` 决定，确认数组里有 `"dsh-workbuddy-hub"`：
+
+```json
+{
+  "dependencies": { "dsh-workbuddy-hub": "link:/path/to/dsh-workbuddy-hub" },
+  "dsh": {
+    "profile": {
+      "plugins": ["dsh-workbuddy-hub"]
+    }
+  }
+}
+```
+
+然后照常启动：
+
+```bash
+dsh --profile web
+```
+
+首次启动后：
+
+1. 侧栏出现「专家·技能·连接器」入口
+2. 打开市场页，用 WorkBuddy 账号登录一次（凭证只落 `<storeRoot>/.meta/state/`，不出本机）
+3. 专家 / 技能 / 连接器即可安装到本地仓 `~/workbuddyskills`
+
+卸载：
+
+```bash
+dsh plugin --profile web remove dsh-workbuddy-hub
+```
+
+`~/workbuddyskills` 里已装的内容不会被删——那是数据，不是插件。
+
 ## 架构
 
 | 层 | 位置 | 说明 |
 |---|---|---|
 | 官方真源 | `expert_center.json`（专家注册表，公开） + `copilot.tencent.com/v2/operation-platform/market/*`（技能/连接器，需登录） | **唯一真源**：目录、元数据、包下载、更新判定全部以官方为准 |
+| MCP OAuth 2.1 | 连接器端点自述（401 + `WWW-Authenticate: resource_metadata`）→ 授权服务器元数据 → **动态客户端注册**（`/oauth/register`，公开客户端 + PKCE + loopback 回调）→ 授权码换 token | 连接器授权接入（QQ邮箱这类）：token 只进 DSH 凭据库，`mcp.json` 只写 `${WORKBUDDY_OAUTH_<NAME>_TOKEN>}` 引用；401/到期用 refresh_token 续期 |
+| 桌面端公开目录 | `static.workbuddy.cn/connectors-config-v2/connectors-config.zip` + `.../connector-agent-plugins/connector-plugins.zip`（WorkBuddy 客户端「自带市场」的同一份匿名静态包，来源与其 `.workbuddy/connectors/marketplace-meta` 记的 `sourceKey` 一致） | **连接器目录的第二来源**（`desktopCatalog`，默认开）：317 条（含中文名/描述/示例/图标/`mcp.json`/`skills`），官方注册表在本账号只给 29 条。**只做目录 + 落地**；通话仍按账号授权走官方网关 |
 | 镜像灾备 | `superfat1988/workbuddyskills` 的 `mirror` 分支 | **默认关闭**的灾备开关（`mirrorFallback`）；官方挂了才临时打开 |
 | 本地内容仓 | `~/workbuddyskills/` | `.meta/registry.json`、`.meta/mounts.json`、`.meta/icons/`、`skills/ experts/ connectors/` |
 | DSH 挂载 | `~/.dsh/skills/<prefix><name>` | 符号链接（DSH 扫描器原生跟随） |
@@ -35,6 +85,12 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 |---|---|---|
 | `mirrorRepo` / `mirrorBranch` | `superfat1988/workbuddyskills` / `mirror` | 镜像仓（灾备时才用） |
 | `mirrorFallback` | **`false`** | 镜像兜底开关。官方失败时是否用镜像内容兜底；默认关闭（官方是唯一真源），仅在官方出问题时临时打开救急 |
+| `desktopCatalog` | **`true`** | 桌面端公开静态目录开关（WorkBuddy 客户端自带市场那份包）。打开后连接器目录 = 官方注册表 ∪ 桌面目录（317 条），行级带 `source: official\|desktop`；关掉退回「只有官方目录」 |
+| — 图标 | 桌面目录的图标**只在包内**（`icons/<name>.<ext>`）：`GET /workbuddy-hub/icon?kind=connector&source=desktop&name=<n>` 由插件供图并缓存到 `storeRoot/.meta/icons/`（公网 `static.workbuddy.cn/connectors-config-v2/icons/…` 实测 404，早期版本编造过那条 URL，已修） | 断网也能显示；市场行与输入框 chip 都用它 |
+| `desktopCatalogTtlMs` | `21600000`（6h） | 桌面目录保鲜期；到期或 etag 变化才重新下载（两个包合计约 50MB，缓存到 `<storeRoot>/.meta/desktop/`） |
+| `oauthCallbackPort` | `8788` | MCP OAuth 的 loopback 回调端口（只绑 `127.0.0.1`，被占用时按 +1 顺延；传 `0` 由系统分配，隔离测试用） |
+| `oauthScopes` | 空（用授权服务器声明的全部 scope） | MCP OAuth 申请的作用域，空格分隔 |
+| `oauthCallbackHost` | `127.0.0.1` | 回调监听地址。授权页与 DSH **同机**时保持默认；从 **PC 浏览器**操作 GUI 时配成 NAS 的 LAN IP（如 `192.168.1.10`），扫码后的重定向就能直接回到插件（PKCE 保证只有本进程能拿 code 换 token）。不改也能用「粘贴回调链接」兜底 |
 | `storeRoot` | `~/workbuddyskills` | 本地内容仓 |
 | `skillPrefix` | `workbuddy-` | `~/.dsh/skills/` 下的挂载前缀 |
 | `keepalive` | `true` | 后台每 30 分钟巡检并主动刷新凭证 |
@@ -49,8 +105,15 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 | GET | `/catalog[?refresh=1]` | 镜像目录索引（6h 缓存）。**`mirrorFallback=false` 时返回 503 + 原因**，不再拉镜像 |
 | GET | `/search?q=&kind=experts\|skills\|connectors&limit=` | 镜像检索。同上，默认关闭时返回 503 + 原因 |
 | GET | `/installed` | 已装清单（连接器附带实时 `enabled`/`status`/`credentialRefs`） |
+| GET | `/market-list?kind=connector` | 连接器目录：**官方注册表 ∪ 桌面端公开目录**（官方同名优先），行级 `source`；响应另带 `officialTotal` / `desktopTotal` / `desktop{entries,etag,fetchedAt,stale}` |
+| POST | `/connectors/mcp-oauth/start {name}` | **MCP OAuth 授权**：探测端点是否自述需要 OAuth → 发现授权服务器 → 动态注册 → 返回授权 URL（用户扫码/登录）。非 MCP OAuth 端点如实返回 `code: "not-mcp-oauth"`（此时走官方连接器 OAuth） |
+| GET | `/connectors/mcp-oauth/status?name=` | 流程状态：`idle` / `pending` / `done` / `error`（界面据此自动收尾） |
+| POST | `/connectors/mcp-oauth/refresh {name}` | 用 refresh_token 续期并写回凭据库（`/connectors/enable` 到期前也会自动续一次） |
+| POST | `/connectors/mcp-oauth/cancel {name}` | 放弃进行中的授权（关掉 loopback 回调监听） |
+| GET | `/desktop-catalog` | 桌面端公开目录状态（条目数 / 可挂载数 / 网关·直连分布 / etag / 抓取时间 / stale / 错误与 flags） |
+| POST | `/desktop-catalog/refresh {force?}` | 刷新桌面目录（etag 未变则不重复下载；`force:true` 无条件重下） |
 | GET | `/updates[?refresh=1]` | **检查更新**（只读）：纯官方元数据比对 —— 技能比官方 `version`、专家比官方 `updatedAt`、连接器比官方 MCP 定义哈希；取不到官方数据一律 `unknown` + 原因，**绝不**判「已是最新」。结果缓存 60s，`refresh=1` 强制重算；**永远不用镜像** |
-| POST | `/install {kind,name}` | 按需安装（官方优先；技能/专家/连接器都记 `officialMeta` 溯源）。与 `workbuddy_install` 工具共用同一实现 `installEntry`；本路由是 Web UI 的安装通道（**不经过审批**——审批在工具链路里） |
+| POST | `/install {kind,name,source?}` | 按需安装（`source`: `official` 默认 / `desktop` 桌面公开目录 / 省略时官方优先、官方查无此条才回落桌面目录；技能/专家/连接器都记 `officialMeta` 溯源）。与 `workbuddy_install` 工具共用同一实现 `installEntry`；本路由是 Web UI 的安装通道（**不经过审批**——审批在工具链路里） |
 | POST | `/uninstall {kind,name}` | 卸载（与 `workbuddy_uninstall` 工具共用同一实现 `uninstallEntry`）：连接器先停用 MCP 传输 → 拆技能链接 → 删文件 → 更新注册表 → 摘掉各会话挂载 → 专家顺带释放 agent preset。本路由是 Web 设置页「移除」的通道（用户亲手点的，不需要审批） |
 | GET | `/mounted?sessionId=` | 本会话已挂载条目（只读，缺 sessionId 时按最近会话兜底并标 `sessionSource`） |
 | POST | `/mount` \| `/unmount {sessionId,kind,name}` | 会话级挂载（安装 ≠ 挂载）；**写操作必须显式传 `sessionId`，缺失返回 409**，绝不兜底猜会话 |
@@ -72,6 +135,7 @@ WorkBuddy 专家 / 技能 / 连接器市场 → DeepSeek Harness 的移植枢纽
 | 技能 | 官方 skill 记录的 `version` vs 安装时记的 `officialMeta.version` | `version` 不同 → `update`；相同 → `current`；记录缺 `officialMeta.version` → `unknown`（重装一次即可记录）；官方按 `skill_id` 查不到 → `unknown`（已下架） |
 | 专家 | 官方注册表原始条目的 `updatedAt` vs `officialMeta.updatedAt`（老记录退回 `installedAt`） | 必须用 `wb-experts.registry()` 的**原始条目**（`normalise()` 会把 `updatedAt` 丢掉）；远端更新 → `update`，相等/更旧 → `current`，缺任一时间戳或日期非法 → `unknown` |
 | 连接器 | 官方该行 `mcp` 定义的规范化 JSON sha256 vs `officialMeta.defHash` | 规范化只取 `gateway_url / transport / auth_mode / ide_server_name / upstream_url / sandbox_url` 六个字段（键序固定、缺失 == 空串）；哈希不同 → `update`；缺 `defHash` → `unknown` |
+| 连接器（桌面目录来源） | 当前桌面目录包的 `sha256` / 该连接器 `version` vs 安装时记的 `officialMeta.bundle.sha256` / `officialMeta.version` | 与官方无关（官方本来就没列它）：包哈希或版本变了 → `update`；一致 → `current`；缺记录或目录不可用 → `unknown` + 原因 |
 
 - **安装时记录官方溯源**：`record.officialMeta = { version, updatedAt }`（技能）、
   `{ updatedAt }`（专家）、`{ defHash }`（连接器）；老记录没有 `officialMeta` 时**不伪造**，
@@ -126,6 +190,18 @@ workbuddy_uninstall { kind: "expert"|"skill"|"connector", name }
 4. 卸载复用与 `POST /uninstall` 完全相同的 `uninstallEntry`（连接器先停用 MCP 传输，防止 mcp-client 行悬空 → 拆技能链接 → 删文件 → 更新注册表 → `pruneMounts` 摘挂载 → 专家释放 agent preset）；
 5. 每次调用写一行 `[wbh] uninstall …` 审计（kind/name/审批结果/时间）。
 
+## 连接器授权：两套机制（点「连接」时按端点自述分派）
+
+| 家族 | 怎么识别 | 交互 | 实现 |
+|---|---|---|---|
+| 用户凭据（`${VAR}`） | `mcp.json` 里声明了占位符（如 `TUSHARE_TOKEN`） | 提示要配哪些 ref（值进 DSH 凭据库） | 无需新增 |
+| **MCP OAuth 2.1** | 端点 401 且 `WWW-Authenticate: Bearer resource_metadata="…"` | **弹授权页：扫码/登录 → 回调后自动连接** | `wb-mcp-oauth.js`：发现 → 动态注册 → PKCE → loopback 回调 → 换 token → 凭据库 |
+| — 适用面（2026-10-07 全量实测） | 252 条可挂载连接器：**150 条上游自述 MCP OAuth**、67 条用户凭据、34 条网关型、1 条探测失败 | 上游自述 OAuth 的（含 tdx/腾讯文档/GitHub）**优先走上游 MCP OAuth**：token 绑到会认它的上游端点，不依赖 WorkBuddy 账号 | `scripts/` 扫描 + 验收场景 ⑩ |
+| WorkBuddy 连接器 OAuth | 上面都不是，且官方 `/v2/as/connector/oauth/<name>/start` 认这条（tdx/github 实测） | 弹官方授权页 → 完成后点「连接」 | 既有 `connectorAuthStart` |
+| 都不适用 | — | 如实报错（含完整握手探测的原因） | — |
+
+MCP OAuth 细节：回调**只绑 `127.0.0.1`**、单次有效、校验 `state`、TTL 10 分钟；`state` 不匹配的杂散回调只回「不匹配」页、**不终止**流程；动态注册结果（`client_id`）缓存在 `<storeRoot>/.meta/oauth/clients.json`（公开客户端无 secret），**token 从不落盘**。
+
 ## 装前预检：hub-find.mjs inspect（只读、不落盘）
 
 ```bash
@@ -134,7 +210,7 @@ node scripts/hub-find.mjs inspect <expert|skill|connector> <name> [--json]
 
 - **expert**：官方注册表原始条目 → 拉人设 md（文本）过 `scanFlags`；头像只记体积不拉内容；
 - **skill**：`skillDetails` 拿 `download_url` → zip 下载进**内存** → unzip → 列条目、文本文件过 `scanFlags`（二进制只记体积）；
-- **connector**：`connectorRegistry` 该行 → `scanMcpDefinitionFlags` 结构化扫 mcp 定义（外部 URL / 声明命令执行 / 凭据头 / 凭据查询参数）。
+- **connector**：`connectorRegistry` 该行 → `scanMcpDefinitionFlags` 结构化扫 mcp 定义（外部 URL / 声明命令执行 / 凭据头 / 凭据查询参数）；**桌面端公开目录**来源的连接器改为读目录记录，并把包内**实际会落盘的文件**（`skills/`、`scripts/`、`token-schema.json`）按技能预检同一套 `scanFlags` 口径一起算进体量与风险标记（官方查无此条时自动回落该路径）。
 
 输出紧凑安全卡（一行一条）：`INSPECT <kind>/<name> | <中文名>` / `体量` / `可执行脚本: 有(N 个)|无` /
 `风险标记: 无|<列表>` / `外网/命令/凭据` / `头部: <SKILL.md 或人设前 120 字>`。
@@ -215,7 +291,7 @@ npm run pack:check
 安装到 web profile（profile 已 link 本项目）：
 
 ```bash
-dsh plugin --profile web add /home/kaitzh/.openclaw/workspace/projects/dsh-workbuddy-hub
+dsh plugin --profile web add /home/USER/.openclaw/workspace/projects/dsh-workbuddy-hub
 systemctl --user restart dsh-web.service    # 由用户执行
 ```
 
@@ -283,6 +359,7 @@ UI 层：左栏入口存在 → 市场页标题 `专家 · 技能 · 连接器`�
 | 专家目录（约 430，随官方注册表变动；中英名/职称/简介/Tag/快捷提示词） | 官方 COS 注册表 `expert_center.json`（MIT，无需登录） | `hub.marketList('expert')` |
 | 专家头像 PNG / 人设 Markdown | 同一 COS 源直链 | 召唤用的人设与官方同源 |
 | 技能 / 连接器目录 | 官方市场 API / 官方连接器注册表（需登录） | 官方失败时不再静默回镜像；镜像只在 `mirrorFallback: true` 时兜底 |
+| 连接器目录（第二来源，317 条） | 桌面端公开静态包 `static.workbuddy.cn/connectors-config-v2/connectors-config.zip`（+ `connector-agent-plugins/connector-plugins.zip`） | 与 WorkBuddy 桌面客户端「自带市场」同一份匿名源；`desktopCatalog` 默认开。**通话不靠它**：网关型连接器仍走 `copilot.tencent.com/console/agent-gateway/<name>/…` + 账号 bearer，未授权时官方回 `17009`（可用 `/connectors/auth-start` 发起授权）、未注册回 `17008`；带 `${VAR}` 的上游由用户自备凭据直连 |
 | 官方登录（技能页数据、连接器目录、用量） | OAuth 设备授权：`POST /wb-auth/start` 给出官方 authUrl → 浏览器登录 → `POST /wb-auth/poll` 轮换取 `{access_token, refresh_token, expires_in, uid}`，存 `~/workbuddyskills/.meta/state/` | 协议与上游 workbuddy2api 的两个实现一致（[linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel) · [ardeyouxipianyi/workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub)；`copilot.tencent.com/v2/...`，Bearer + X-User-Id + CLI UA）；凭证不出本机 |
 
 插件不依赖 DeepSeek 浏览器 cookie；官方会话由设备授权获得、可刷新、可 `/wb-auth/logout` 注销。
@@ -293,6 +370,35 @@ UI 层：左栏入口存在 → 市场页标题 `专家 · 技能 · 连接器`�
 - **主动刷新**：后台每 **30 分钟**巡检一次，`access_token` 剩余寿命**不足 2 小时**就调用 refresh_token 刷新（阈值 7200s，规则来自上游 workbuddy2api 的 `wb_scheduler.py`）。配置 `keepalive: false` 可整体关闭巡检。
 - **失效判定**：刷新失败 / 官方错误码 12153（session dead）**连续 3 次**才判「登录已失效」（前两次只记 `lastError`，防误判；中途成功一次即清零计数）。判失效后界面显示「登录已失效，请重新扫码」，并停止使用该凭证。
 - **凭证落盘**：`~/workbuddyskills/.meta/state/workbuddy-auth.json` 与健康档 `workbuddy-auth-health.json` 均以 **0600** 写入（另有 `chmod` 兜底）；凭据值不回传浏览器、不进日志。
+
+## 闲置能力提醒（idle capability）
+
+对齐 WorkBuddy 5.9.2 的 `idle-capability` 卡片：长期没用的 skill / MCP 集中提示，可一键关闭。
+
+**数据源**：`~/.dsh/sessions/**/session.v*.jsonl.zstd`。用 `zstd -dc` 解压，只挑 `"type":"tool/call"` 的行；`name==='skill'` 取 `arguments.name`，`mcp__<server>__<tool>` 取第一段当 server。8 路并发，结果缓存 5 分钟。不另建使用账本 —— 会话记录就是真源。
+
+**判定** `computeCandidates()`（`wb-idle.js`）：
+
+| 条件 | 结果 |
+| --- | --- |
+| `state.lastShownDate === today` | `blockedBy='shown-today'` |
+| `globalDismissed && version >= 3` | `blockedBy='global-dismissed'` |
+| `activeDays < ceil(threshold/2)` | `blockedBy='too-new'` |
+| `idleDays >= threshold`（默认 14） | 进候选 |
+
+`idleDays` 取「今天 − 最后使用日」与「今天 − 安装日」的较小值 —— 装了两天的东西不该被判成闲置两周。
+
+**RPC**（前缀 `/workbuddy-hub`，均过 `requestRejection`）：`GET /idle`、`POST /idle/shown`、`POST /idle/dismiss`、`POST /idle/dismiss-global`、`POST /idle/close`。状态存 `<meta>/idle-state.json`。
+
+**关闭动作**：skill → `unlinkSkill()`（只摘软链，不删文件）；mcp → 置 `enabled=false` 并落盘。逐条独立结算，返回 `{succeeded[], failed[]}`。
+
+**与官方三处不同**（都是有意的）：
+
+1. 官方采了 `activeDays` 却不用，3 天活跃的账号照样弹；这里拿它当「新用户护栏」。
+2. 官方把 14 天写死在前端 JSX 与后端两处；这里只认 `data.threshold`。
+3. 官方的关闭失败只 `console.warn`；这里把失败项留在列表里可重试。
+
+**前端**：`src/IdleSlot.jsx` 挂 `conversation.composer.dock`（order 60），进页面 3 秒后拉取，有候选才渲染。样式全部来自官方 `idle-capability-*.css`，重写为 `.wbh-port .idle-capability-pill` 后代选择器 —— 所以卡片外层必须有一个 `.wbh-port` 容器，卡片自己再带 `.idle-capability-pill`，两者不能合并到同一元素上。
 
 ## 已知限制
 
